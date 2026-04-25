@@ -29,15 +29,16 @@ Tracked as a single checklist; tick off when both platforms match. Each item sho
 - [ ] **GAP-012** Both: persist last-selected basemap
 
 ### P3 — status bar
-- [ ] **GAP-020** Decide canonical metric set: `connection state`, `↓bytes`, `↑bytes`, `±accuracy`, `time`
-- [ ] **GAP-021** iOS: `↓0 ↑0` use plain text counters (Android style) OR Android adopts filled circles
-- [ ] **GAP-022** Time format: 24h tactical (Android) — iOS adopts
-- [ ] **GAP-023** Accuracy badge `±Xm` visible on both
+- [x] **GAP-020** Canonical metric set locked: `dot · server-name · ↓ · ↑ · ±accuracy · time · ☰`
+- [x] **GAP-021** iOS adopted text `↓` / `↑` arrows (cyan / orange), matching Android ATAKStatusBar
+- [x] **GAP-022** iOS time formatter switched to 24h `HH:mm`
+- [x] **GAP-023** Android `±Nm` accuracy badge wired through ATAKStatusBar (stubbed value pending GAP-030b)
 
 ### P4 — self-position display
-- [ ] **GAP-030** Both: PPLI info card showing `Callsign / MGRS / MSL / km/h / ±accuracy`
-- [ ] **GAP-031** Both: card position (bottom-right on iOS, decide for Android)
-- [ ] **GAP-032** Both: ATAK-style self-marker icon (not platform default pin)
+- [x] **GAP-030** PPLI card visible on both — iOS already had it; Android added `SelfPositionCard.kt`
+- [ ] **GAP-030b** Wire real telemetry on Android: FusedLocationProviderClient flow + UserPrefsStore callsign (currently stubbed)
+- [ ] **GAP-031** Card position: iOS floats at user location, Android docks bottom-right above bottom nav. Pick one canonical position and align.
+- [ ] **GAP-032** Android: replace MapLibre default location marker with ATAK-style self-marker icon (matches iOS red triangle)
 
 ### P5 — map controls
 - [ ] **GAP-040** Both: same overlay buttons in same positions
