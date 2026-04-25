@@ -288,6 +288,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 RadialAction("drop", Icons.Filled.Place, "Drop Marker"),
                 RadialAction("measure", Icons.Filled.Straighten, "Measure"),
                 RadialAction("nav", Icons.Filled.Navigation, "Navigate"),
+                RadialAction("layers", Icons.Filled.Layers, "Layers"),
                 RadialAction("copy", Icons.Filled.LocationOn, "Copy Coords"),
                 RadialAction("center", Icons.Filled.Explore, "Center"),
                 RadialAction("add", Icons.Filled.Add, "Add"),
@@ -298,6 +299,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 radialLatLng = null
                 when (action.id) {
                     "drop" -> if (ll != null) markerSheetLatLng = ll
+                    "layers" -> layersSheetOpen = true
                     else -> {
                         val coord = ll?.let { "%.5f, %.5f".format(it.latitude, it.longitude) } ?: ""
                         toast("${action.label}${if (coord.isNotEmpty()) " @ $coord" else ""}")
