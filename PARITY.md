@@ -41,7 +41,8 @@ Tracked as a single checklist; tick off when both platforms match. Each item sho
 - [x] **GAP-030c** Hide-from-Layers toggle on both. Long-press → Radial → Layers → Callsign Card switch. Mirrors operator complaints that the panel was covering map data.
 - [ ] **GAP-030b** Wire real telemetry on Android: FusedLocationProviderClient flow + UserPrefsStore callsign (currently stubbed)
 - [ ] **GAP-031** Card position: iOS floats at user location, Android docks bottom-right above bottom nav. Pick one canonical position and align.
-- [ ] **GAP-032** Android: replace MapLibre default location marker with ATAK-style self-marker icon (matches iOS red triangle)
+- [x] **GAP-032** Android: replaced MapLibre default blue pulse with tactical-accent ATAK bullseye drawable + bearing chevron — `ic_self_marker.xml` / `ic_self_marker_bearing.xml`. iOS still uses MKMapView default blue dot; matching iOS to this style is filed as GAP-032b.
+- [ ] **GAP-032b** iOS: customize MKUserLocation render to match Android's tactical bullseye self-marker
 
 ### P5 — map controls
 - [ ] **GAP-040** Both: same overlay buttons in same positions
