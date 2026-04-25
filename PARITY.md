@@ -23,8 +23,9 @@ Tracked as a single checklist; tick off when both platforms match. Each item sho
 - [x] **GAP-003** Both: identical tab order, labels, icons (SF Symbols ↔ Material icons mapped 1:1)
 
 ### P2 — map basemap
-- [x] **GAP-010 (interim)** iOS: default switched from `.satellite` to `.standard` (street map with labels) — closer to Android visually but still Apple Maps. Full MapLibre parity (MKMapView → MLNMapView swap) tracked as a follow-up.
-- [ ] **GAP-010 (final)** iOS: swap MKMapView for MLNMapView throughout so iOS uses MapLibre OSM-style natively, matching Android's basemap pixel-for-pixel
+- [x] **GAP-010 (interim)** iOS: default switched from `.satellite` to `.standard` (street map with labels)
+- [x] **GAP-010-android-dark** Android basemap upgraded to CartoDB Dark Matter — pure tactical look, both clients now dark by default
+- [ ] **GAP-010 (final)** iOS: optional swap MKMapView → MLNMapView to render the same MapLibre style natively. Lower priority now that both look tactical.
 - [ ] **GAP-011** Both: provide identical built-in basemap picker (OSM, OpenTopo, Satellite, Dark)
 - [ ] **GAP-012** Both: persist last-selected basemap
 
@@ -36,6 +37,7 @@ Tracked as a single checklist; tick off when both platforms match. Each item sho
 
 ### P4 — self-position display
 - [x] **GAP-030** PPLI card visible on both — iOS already had it; Android added `SelfPositionCard.kt`
+- [x] **GAP-030c** Hide-from-Layers toggle on both. Long-press → Radial → Layers → Callsign Card switch. Mirrors operator complaints that the panel was covering map data.
 - [ ] **GAP-030b** Wire real telemetry on Android: FusedLocationProviderClient flow + UserPrefsStore callsign (currently stubbed)
 - [ ] **GAP-031** Card position: iOS floats at user location, Android docks bottom-right above bottom nav. Pick one canonical position and align.
 - [ ] **GAP-032** Android: replace MapLibre default location marker with ATAK-style self-marker icon (matches iOS red triangle)
