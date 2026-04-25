@@ -30,10 +30,12 @@ fun LayersDialog(
     drawingsVisible: Boolean,
     aircraftVisible: Boolean,
     contactsVisible: Boolean,
+    callsignCardVisible: Boolean,
     onToggleGrid: (Boolean) -> Unit,
     onToggleDrawings: (Boolean) -> Unit,
     onToggleAircraft: (Boolean) -> Unit,
     onToggleContacts: (Boolean) -> Unit,
+    onToggleCallsignCard: (Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
@@ -52,6 +54,7 @@ fun LayersDialog(
                 LayerRow("Drawings", drawingsVisible, onToggleDrawings)
                 LayerRow("Aircraft (ADSB)", aircraftVisible, onToggleAircraft)
                 LayerRow("Lat/Lon grid", gridEnabled, onToggleGrid)
+                LayerRow("Callsign card", callsignCardVisible, onToggleCallsignCard)
             }
         },
         confirmButton = {

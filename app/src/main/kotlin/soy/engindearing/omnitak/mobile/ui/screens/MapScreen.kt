@@ -106,6 +106,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     var drawingsVisible by remember { mutableStateOf(true) }
     var aircraftVisible by remember { mutableStateOf(true) }
     var contactsVisible by remember { mutableStateOf(true) }
+    // Default visible — operators can hide it via the layers dialog when it
+    // covers something they need to see (mirrors the iOS toggle).
+    var callsignCardVisible by remember { mutableStateOf(true) }
     var layersSheetOpen by remember { mutableStateOf(false) }
     var teamsPanelOpen by remember { mutableStateOf(false) }
     var followMeActive by remember { mutableStateOf(false) }
@@ -189,16 +192,19 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
 
         // GAP-030 PPLI self-position card — bottom-right, mirrors iOS layout.
         // Stub values; live data plumbing tracked as GAP-030b.
-        SelfPositionCard(
-            callsign = "OMNI-1",
-            coordinateLabel = "11T  MN  37479  1222423",
-            altitudeMetersMSL = 0.0,
-            speedKmh = 0.0,
-            accuracyMeters = 5,
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = 12.dp, bottom = 96.dp),
-        )
+        // Operators can hide it via long-press → Layers → Callsign card.
+        if (callsignCardVisible) {
+            SelfPositionCard(
+                callsign = "OMNI-1",
+                coordinateLabel = "11T  MN  37479  1222423",
+                altitudeMetersMSL = 0.0,
+                speedKmh = 0.0,
+                accuracyMeters = 5,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 12.dp, bottom = 96.dp),
+            )
+        }
 
         ToolsDrawer(
             tools = listOf(
@@ -419,10 +425,12 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 drawingsVisible = drawingsVisible,
                 aircraftVisible = aircraftVisible,
                 contactsVisible = contactsVisible,
+                callsignCardVisible = callsignCardVisible,
                 onToggleGrid = { gridEnabled = it },
                 onToggleDrawings = { drawingsVisible = it },
                 onToggleAircraft = { aircraftVisible = it },
                 onToggleContacts = { contactsVisible = it },
+                onToggleCallsignCard = { callsignCardVisible = it },
                 onDismiss = { layersSheetOpen = false },
             )
         }

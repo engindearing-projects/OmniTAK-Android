@@ -44,7 +44,7 @@ import soy.engindearing.omnitak.mobile.data.Drawing
 fun TacticalMap(
     initialCenter: LatLng = LatLng(47.6588, -117.4260),  // Spokane, WA
     initialZoom: Double = 11.0,
-    styleJson: String = OSM_RASTER_STYLE,
+    styleJson: String = TACTICAL_DARK_STYLE,
     onMapLongPress: ((LatLng, Offset) -> Unit)? = null,
     onContactTap: ((CoTEvent) -> Unit)? = null,
     onMapSingleTap: ((LatLng) -> Boolean)? = null,
@@ -322,26 +322,35 @@ private fun safeEnableLocation(map: org.maplibre.android.maps.MapLibreMap) {
 private const val TAP_HIT_RADIUS_PX = 72f
 
 /**
- * Contact source + layers are declared inline in the style JSON. On
- * the API 36 emulator, `style.addSource` / `style.addLayer` called from
- * the `setStyle(builder, onStyleLoaded)` callback occasionally renders
- * nothing despite the calls reporting success and the source/layer
- * appearing in the style — a MapLibre-Android GL quirk we haven't
- * root-caused. Declaring everything in the style JSON avoids that
- * path entirely; `ContactLayer.update` pushes fresh feature data to
- * the existing source via `setGeoJson`.
+ * Tactical dark basemap powered by CartoDB Dark Matter raster tiles
+ * (https://carto.com/help/building-maps/basemap-list/). Free, no API
+ * key, well-attributed, and gives a high-contrast tactical surface
+ * that lets operational overlays (contacts, drawings, grid, aircraft)
+ * pop without competing with brightly-styled OSM cartography.
+ *
+ * Operational layers and their GeoJSON sources live inline in the
+ * style JSON. On the API 36 emulator, `style.addSource` /
+ * `style.addLayer` called from the `setStyle(builder, onStyleLoaded)`
+ * callback occasionally renders nothing despite the calls reporting
+ * success and the source/layer appearing in the style — a
+ * MapLibre-Android GL quirk we haven't root-caused. Declaring
+ * everything in the style JSON avoids that path entirely;
+ * `ContactLayer.update` pushes fresh feature data to the existing
+ * source via `setGeoJson`.
  */
-const val OSM_RASTER_STYLE = """
+const val TACTICAL_DARK_STYLE = """
 {
   "version": 8,
-  "name": "OmniTAK OSM",
+  "name": "OmniTAK Tactical Dark",
   "sources": {
-    "osm": {
+    "basemap": {
       "type": "raster",
-      "tiles": ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+      "tiles": [
+        "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
+      ],
       "tileSize": 256,
-      "maxzoom": 19,
-      "attribution": "© OpenStreetMap contributors"
+      "maxzoom": 20,
+      "attribution": "© OpenStreetMap contributors © CARTO"
     },
     "contacts-src": {
       "type": "geojson",
@@ -365,7 +374,7 @@ const val OSM_RASTER_STYLE = """
     }
   },
   "layers": [
-    {"id": "osm-tiles", "type": "raster", "source": "osm"},
+    {"id": "basemap-tiles", "type": "raster", "source": "basemap"},
     {
       "id": "grid-line",
       "type": "line",
