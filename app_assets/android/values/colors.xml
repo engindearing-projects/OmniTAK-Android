@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- OmniTAK Brand Colors - Neon Green Theme -->
+    <color name="omnitak_primary">#16A34A</color>          <!-- Deep Green - Primary -->
+    <color name="omnitak_primary_dark">#0A1628</color>     <!-- Dark Navy Background -->
+    <color name="omnitak_accent">#4ADE80</color>           <!-- Neon Green Accent (matches logo) -->
+
+    <!-- Background Colors -->
+    <color name="splash_bg">#0A1628</color>                <!-- Launch screen - dark navy -->
+    <color name="background_primary">#0A1628</color>       <!-- Dark navy background -->
+    <color name="background_secondary">#162033</color>     <!-- Lighter navy background -->
+
+    <!-- Map Colors -->
+    <color name="map_overlay">#80000000</color>            <!-- Semi-transparent black -->
+    <color name="friendly_blue">#2196F3</color>            <!-- Friendly forces -->
+    <color name="hostile_red">#F44336</color>              <!-- Hostile forces -->
+    <color name="neutral_yellow">#FFC107</color>           <!-- Neutral forces -->
+    <color name="unknown_purple">#9C27B0</color>           <!-- Unknown forces -->
+
+    <!-- Text Colors -->
+    <color name="text_primary">#FFFFFF</color>
+    <color name="text_secondary">#B0B0B0</color>
+
+    <!-- Status Colors -->
+    <color name="status_connected">#4ADE80</color>
+    <color name="status_connecting">#FFC107</color>
+    <color name="status_disconnected">#F44336</color>
+</resources>

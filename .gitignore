@@ -1,0 +1,42 @@
+# Gradle
+.gradle/
+build/
+app/build/
+local.properties
+.kotlin/
+
+# Signing secrets — NEVER commit
+keystore.properties
+*.jks
+*.keystore
+*.bks
+
+# Other secrets / certs — NEVER commit
+*.p12
+*.pem
+*.key
+*.cer
+*.crt
+*.pfx
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS junk
+.DS_Store
+._*
+
+# Kotlin / Android
+*.hprof
+captures/
+
+# Build outputs
+*.apk
+*.aab
+*.ap_
+*.dex

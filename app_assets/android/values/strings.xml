@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">OmniTAK</string>
+    <string name="app_description">Tactical Awareness Kit Mobile Client</string>
+
+    <!-- Map -->
+    <string name="map_loading">Loading map…</string>
+    <string name="map_error">Failed to load map</string>
+
+    <!-- Connection -->
+    <string name="connection_status">Connection Status</string>
+    <string name="connected">Connected</string>
+    <string name="connecting">Connecting…</string>
+    <string name="disconnected">Disconnected</string>
+
+    <!-- Servers -->
+    <string name="servers">Servers</string>
+    <string name="add_server">Add Server</string>
+    <string name="edit_server">Edit Server</string>
+    <string name="delete_server">Delete Server</string>
+
+    <!-- Settings -->
+    <string name="settings">Settings</string>
+    <string name="map_settings">Map Settings</string>
+    <string name="network_settings">Network Settings</string>
+
+    <!-- Permissions -->
+    <string name="permission_location_required">Location permission required for map tracking</string>
+    <string name="permission_storage_required">Storage permission required for offline maps</string>
+</resources>
