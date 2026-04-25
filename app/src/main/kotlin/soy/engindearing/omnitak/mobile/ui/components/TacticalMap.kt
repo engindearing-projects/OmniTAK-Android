@@ -52,6 +52,8 @@ fun TacticalMap(
     onMapSingleTap: ((LatLng) -> Boolean)? = null,
     locationEnabled: Boolean = false,
     recenterTrigger: Any? = null,
+    zoomInTrigger: Int = 0,
+    zoomOutTrigger: Int = 0,
     contacts: Collection<CoTEvent> = emptyList(),
     measurementPoints: List<LatLng> = emptyList(),
     drawings: List<Drawing> = emptyList(),
@@ -162,6 +164,25 @@ fun TacticalMap(
                     map.locationComponent.cameraMode = CameraMode.TRACKING
                     map.locationComponent.zoomWhileTracking(15.0)
                 }
+            }
+        }
+        onDispose { }
+    }
+
+    // Programmatic zoom — the +/− FABs in MapScreen tick these counters
+    // on tap, and we animate one zoom step per tick.
+    DisposableEffect(mapView, zoomInTrigger) {
+        if (zoomInTrigger > 0) {
+            mapView.getMapAsync { map ->
+                map.animateCamera(CameraUpdateFactory.zoomIn(), 250)
+            }
+        }
+        onDispose { }
+    }
+    DisposableEffect(mapView, zoomOutTrigger) {
+        if (zoomOutTrigger > 0) {
+            mapView.getMapAsync { map ->
+                map.animateCamera(CameraUpdateFactory.zoomOut(), 250)
             }
         }
         onDispose { }

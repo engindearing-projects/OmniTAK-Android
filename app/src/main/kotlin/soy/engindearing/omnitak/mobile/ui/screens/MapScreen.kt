@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -97,6 +98,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     var markerSheetLatLng by remember { mutableStateOf<LatLng?>(null) }
     var editingMarker by remember { mutableStateOf<CoTEvent?>(null) }
     var recenterTick by remember { mutableStateOf(0) }
+    var zoomInTick by remember { mutableStateOf(0) }
+    var zoomOutTick by remember { mutableStateOf(0) }
     var measurementActive by remember { mutableStateOf(false) }
     var measurementPoints by remember { mutableStateOf<List<LatLng>>(emptyList()) }
     var drawingKind by remember { mutableStateOf<DrawingKind?>(null) }
@@ -158,6 +161,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             },
             locationEnabled = locationGranted,
             recenterTrigger = recenterTick,
+            zoomInTrigger = zoomInTick,
+            zoomOutTrigger = zoomOutTick,
             contacts = if (contactsVisible) contacts.values else emptyList(),
             measurementPoints = measurementPoints,
             drawings = if (drawingsVisible) {
@@ -261,23 +266,33 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             modifier = Modifier.align(Alignment.BottomEnd),
         )
 
-        // Center-on-me FAB — tracks the location component's last fix
-        // and recenters the camera. Separate from the tools drawer so
-        // it stays reachable without opening the drawer.
-        androidx.compose.foundation.layout.Box(
+        // Map control stack — zoom in / zoom out / center-on-me — at the
+        // BottomStart corner so it stays reachable one-handed without
+        // opening the tools drawer. Mirrors the iOS map controls layout.
+        androidx.compose.foundation.layout.Column(
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(16.dp)
-                .size(48.dp)
-                .clip(CircleShape)
-                .background(TacticalBackground.copy(alpha = 0.9f))
-                .clickable(enabled = locationGranted) { recenterTick++ },
-            contentAlignment = Alignment.Center,
+                .padding(start = 16.dp, bottom = 110.dp),
+            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
         ) {
-            Icon(
-                Icons.Filled.MyLocation,
+            MapControlFab(
+                icon = Icons.Filled.Add,
+                contentDescription = "Zoom in",
+                tint = TacticalAccent,
+                onClick = { zoomInTick++ },
+            )
+            MapControlFab(
+                icon = Icons.Filled.Remove,
+                contentDescription = "Zoom out",
+                tint = TacticalAccent,
+                onClick = { zoomOutTick++ },
+            )
+            MapControlFab(
+                icon = Icons.Filled.MyLocation,
                 contentDescription = "Center on me",
                 tint = if (locationGranted) TacticalAccent else androidx.compose.ui.graphics.Color.Gray,
+                enabled = locationGranted,
+                onClick = { recenterTick++ },
             )
         }
 
@@ -594,3 +609,28 @@ private fun MeasurementOverlay(
 
 private fun timeLabel(): String =
     SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+
+/**
+ * Standard tactical map control button — translucent dark disc with a
+ * tactical-accent glyph. Used for zoom +/− and center-on-me; sized to
+ * the same 48dp pip so the column reads as a single control stack.
+ */
+@Composable
+private fun MapControlFab(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    tint: androidx.compose.ui.graphics.Color,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+) {
+    androidx.compose.foundation.layout.Box(
+        modifier = Modifier
+            .size(48.dp)
+            .clip(CircleShape)
+            .background(TacticalBackground.copy(alpha = 0.9f))
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = contentDescription, tint = tint)
+    }
+}
