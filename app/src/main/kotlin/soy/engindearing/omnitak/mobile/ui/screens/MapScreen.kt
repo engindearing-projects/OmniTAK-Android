@@ -60,6 +60,7 @@ import soy.engindearing.omnitak.mobile.ui.components.LayersDialog
 import soy.engindearing.omnitak.mobile.ui.components.MarkerEditSheet
 import soy.engindearing.omnitak.mobile.ui.components.RadialAction
 import soy.engindearing.omnitak.mobile.ui.components.RadialMenu
+import soy.engindearing.omnitak.mobile.ui.components.SelfPositionCard
 import soy.engindearing.omnitak.mobile.ui.components.TacticalMap
 import soy.engindearing.omnitak.mobile.ui.components.ToolEntry
 import soy.engindearing.omnitak.mobile.ui.components.ToolsDrawer
@@ -178,12 +179,26 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 isConnected = connState is ConnectionState.Connected,
                 messagesReceived = 0,
                 messagesSent = 0,
-                gpsAccuracyMeters = null,
+                // GAP-023: stub until FusedLocationProviderClient is wired (GAP-030b)
+                gpsAccuracyMeters = 5,
                 timeLabel = nowLabel,
                 onServerTap = { /* Slice 6: open server picker */ },
                 onMenuTap = { /* Slice 6: open tools drawer */ },
             )
         }
+
+        // GAP-030 PPLI self-position card — bottom-right, mirrors iOS layout.
+        // Stub values; live data plumbing tracked as GAP-030b.
+        SelfPositionCard(
+            callsign = "OMNI-1",
+            coordinateLabel = "11T  MN  37479  1222423",
+            altitudeMetersMSL = 0.0,
+            speedKmh = 0.0,
+            accuracyMeters = 5,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 12.dp, bottom = 96.dp),
+        )
 
         ToolsDrawer(
             tools = listOf(
