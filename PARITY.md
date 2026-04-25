@@ -42,12 +42,12 @@ Tracked as a single checklist; tick off when both platforms match. Each item sho
 - [ ] **GAP-030b** Wire real telemetry on Android: FusedLocationProviderClient flow + UserPrefsStore callsign (currently stubbed)
 - [ ] **GAP-031** Card position: iOS floats at user location, Android docks bottom-right above bottom nav. Pick one canonical position and align.
 - [x] **GAP-032** Android: replaced MapLibre default blue pulse with tactical-accent ATAK bullseye drawable + bearing chevron — `ic_self_marker.xml` / `ic_self_marker_bearing.xml`. iOS still uses MKMapView default blue dot; matching iOS to this style is filed as GAP-032b.
-- [ ] **GAP-032b** iOS: customize MKUserLocation render to match Android's tactical bullseye self-marker
+- [x] **GAP-032b** iOS: primary MapViewController delegate now returns a configured MKAnnotationView with `SelfPositionMarkerImage.bullseye` for MKUserLocation. Same hex / proportions as Android `ic_self_marker.xml`. Other map delegates (Map3D, RadialMenuMapOverlay, MeasurementService) still default — adopt later.
 
 ### P5 — map controls
 - [ ] **GAP-040** Both: same overlay buttons in same positions
-- [ ] **GAP-041** Both: scale bar visible by default
-- [ ] **GAP-042** Both: zoom +/− buttons (currently iOS has, Android missing)
+- [ ] **GAP-041** Both: scale bar visible by default. iOS already has one; Android needs camera-change listener + meters/pixel calc — deferred.
+- [x] **GAP-042** Android: stacked zoom +/− FABs added at BottomStart, paired with locator. `MapControlFab` helper. TacticalMap accepts `zoomInTrigger` / `zoomOutTrigger` Int counters.
 - [ ] **GAP-043** Both: locator FAB returns to user position
 
 ### P6 — long-press radial menu
@@ -56,10 +56,10 @@ Tracked as a single checklist; tick off when both platforms match. Each item sho
 - [ ] **GAP-052** Both: same set of radial actions, same icons, same color tokens
 
 ### P7 — design tokens
-- [ ] **GAP-060** Define shared color palette doc — primary, secondary, success, warning, danger, surface variants
-- [ ] **GAP-061** iOS: extract to `Color+Tactical.swift`
-- [ ] **GAP-062** Android: extract to `ui/theme/Color.kt` (refactor existing)
-- [ ] **GAP-063** Typography scale shared across both
+- [x] **GAP-060** Shared design-tokens spec lives at [DESIGN_TOKENS.md](DESIGN_TOKENS.md) — color palette (surface / brand / affiliation / status / nav-tab tints / text), typography scale, spacing scale, shape radii, elevation tiers. Identical file in both repos.
+- [ ] **GAP-061** iOS: extract to `Color+Tactical.swift` referencing DESIGN_TOKENS.md hexes
+- [ ] **GAP-062** Android: expand `ui/theme/Color.kt` to cover every DESIGN_TOKENS token
+- [ ] **GAP-063** Typography scale extracted into shared types referenced by both
 
 ### P8 — onboarding
 - [ ] **GAP-070** iOS has FirstTimeOnboarding flow — Android has none, decide if we add it
