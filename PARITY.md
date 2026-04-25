@@ -18,12 +18,13 @@ These are the architectural calls made up front. Don't reopen them in PRs withou
 Tracked as a single checklist; tick off when both platforms match. Each item should land as **paired commits** — one PR per repo, referencing the same gap ID.
 
 ### P1 — primary navigation
-- [ ] **GAP-001** iOS: replace hamburger drawer with bottom tab bar (Map / Chat / Servers / Mesh / Settings)
+- [x] **GAP-001** iOS: replace hamburger drawer with bottom tab bar (Map / Chat / Servers / Mesh / Settings) — done in `RootTabView.swift`
 - [x] **GAP-002** Android: bottom tab bar already in place — keep it
-- [ ] **GAP-003** Both: identical tab order, labels, icons (Material Symbols family ↔ SF Symbols equivalents)
+- [x] **GAP-003** Both: identical tab order, labels, icons (SF Symbols ↔ Material icons mapped 1:1)
 
 ### P2 — map basemap
-- [ ] **GAP-010** iOS: default to MapLibre OSM-style (currently shows Apple Maps satellite)
+- [x] **GAP-010 (interim)** iOS: default switched from `.satellite` to `.standard` (street map with labels) — closer to Android visually but still Apple Maps. Full MapLibre parity (MKMapView → MLNMapView swap) tracked as a follow-up.
+- [ ] **GAP-010 (final)** iOS: swap MKMapView for MLNMapView throughout so iOS uses MapLibre OSM-style natively, matching Android's basemap pixel-for-pixel
 - [ ] **GAP-011** Both: provide identical built-in basemap picker (OSM, OpenTopo, Satellite, Dark)
 - [ ] **GAP-012** Both: persist last-selected basemap
 
