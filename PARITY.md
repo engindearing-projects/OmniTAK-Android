@@ -21,6 +21,7 @@ Tracked as a single checklist; tick off when both platforms match. Each item sho
 - [x] **GAP-001** iOS: replace hamburger drawer with bottom tab bar (Map / Chat / Servers / Mesh / Settings) — done in `RootTabView.swift`
 - [x] **GAP-002** Android: bottom tab bar already in place — keep it
 - [x] **GAP-003** Both: identical tab order, labels, icons (SF Symbols ↔ Material icons mapped 1:1)
+- [x] **GAP-004** Android: replace flat NavigationBar with floating Liquid Glass capsule matching iOS 26 aesthetic — `LiquidGlassNavBar.kt`. Per-tab brand colors, tinted halo on selection, drop shadow, translucent surface.
 
 ### P2 — map basemap
 - [x] **GAP-010 (interim)** iOS: default switched from `.satellite` to `.standard` (street map with labels)
