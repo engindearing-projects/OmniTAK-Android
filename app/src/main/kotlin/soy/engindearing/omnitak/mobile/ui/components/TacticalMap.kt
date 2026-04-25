@@ -18,8 +18,10 @@ import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.location.LocationComponentActivationOptions
+import org.maplibre.android.location.LocationComponentOptions
 import org.maplibre.android.location.modes.CameraMode
 import org.maplibre.android.location.modes.RenderMode
+import soy.engindearing.omnitak.mobile.R
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import soy.engindearing.omnitak.mobile.data.Aircraft
@@ -294,8 +296,23 @@ private fun activateLocation(
     style: Style,
     context: android.content.Context,
 ) {
+    // ATAK-style self-position marker — tactical-accent disc + bearing
+    // chevron when heading is known. Replaces MapLibre's default blue
+    // pulse dot so the operator's own pip reads as part of the same
+    // tactical iconography as friendly markers.
+    val markerOptions = LocationComponentOptions.builder(context)
+        .foregroundDrawable(R.drawable.ic_self_marker)
+        .bearingDrawable(R.drawable.ic_self_marker_bearing)
+        .pulseEnabled(true)
+        .pulseColor(0xFF4ADE80.toInt())
+        .pulseSingleDuration(2200f)
+        .accuracyColor(0xFF4ADE80.toInt())
+        .accuracyAlpha(0.18f)
+        .build()
+
     val options = LocationComponentActivationOptions.builder(context, style)
         .useDefaultLocationEngine(true)
+        .locationComponentOptions(markerOptions)
         .build()
     map.locationComponent.activateLocationComponent(options)
     safeEnableLocation(map)

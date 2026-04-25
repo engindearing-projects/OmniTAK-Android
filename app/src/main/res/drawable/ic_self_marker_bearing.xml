@@ -1,0 +1,32 @@
+<!-- ATAK-style self-position marker WITH heading: same disc as -->
+<!-- ic_self_marker.xml plus a chevron projecting up from the top. -->
+<!-- MapLibre rotates the whole drawable to match device bearing, so -->
+<!-- the chevron always points where the operator is facing. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="40dp"
+    android:height="40dp"
+    android:viewportWidth="40"
+    android:viewportHeight="40">
+
+    <!-- Bearing chevron (pointed wedge) above the disc -->
+    <path
+        android:fillColor="#4ADE80"
+        android:strokeColor="#0A1628"
+        android:strokeWidth="1"
+        android:pathData="M20,4 L26,14 L14,14 Z" />
+
+    <!-- Outer ring -->
+    <path
+        android:fillColor="#0A1628"
+        android:pathData="M20,8 A12,12 0 1,0 20,32 A12,12 0 1,0 20,8 Z" />
+
+    <!-- Tactical-accent fill -->
+    <path
+        android:fillColor="#4ADE80"
+        android:pathData="M20,10 A10,10 0 1,0 20,30 A10,10 0 1,0 20,10 Z" />
+
+    <!-- Inner dark dot -->
+    <path
+        android:fillColor="#0A1628"
+        android:pathData="M20,16 A4,4 0 1,0 20,24 A4,4 0 1,0 20,16 Z" />
+</vector>

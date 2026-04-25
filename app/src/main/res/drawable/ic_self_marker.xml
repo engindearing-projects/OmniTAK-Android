@@ -1,0 +1,24 @@
+<!-- ATAK-style self-position marker: filled tactical-accent disc with a -->
+<!-- darker outline. Shown when location is known but heading isn't. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="32dp"
+    android:height="32dp"
+    android:viewportWidth="32"
+    android:viewportHeight="32">
+
+    <!-- Outer ring (subtle dark border so the marker reads on light or -->
+    <!-- dark basemaps) -->
+    <path
+        android:fillColor="#0A1628"
+        android:pathData="M16,2 A14,14 0 1,0 16,30 A14,14 0 1,0 16,2 Z" />
+
+    <!-- Tactical-accent fill (matches Compose TacticalAccent #4ADE80) -->
+    <path
+        android:fillColor="#4ADE80"
+        android:pathData="M16,4 A12,12 0 1,0 16,28 A12,12 0 1,0 16,4 Z" />
+
+    <!-- Inner darker dot for that ATAK bullseye look -->
+    <path
+        android:fillColor="#0A1628"
+        android:pathData="M16,11 A5,5 0 1,0 16,21 A5,5 0 1,0 16,11 Z" />
+</vector>
