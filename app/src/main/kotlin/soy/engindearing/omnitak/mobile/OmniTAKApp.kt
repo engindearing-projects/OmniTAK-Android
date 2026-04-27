@@ -16,7 +16,7 @@ class OmniTAKApp : Application() {
     val contactStore: ContactStore by lazy { ContactStore() }
     val drawingStore: DrawingStore by lazy { DrawingStore() }
     val chatStore: ChatStore by lazy { ChatStore() }
-    val meshtastic: MeshtasticManager by lazy { MeshtasticManager() }
+    val meshtastic: MeshtasticManager by lazy { MeshtasticManager(this) }
     val userPrefsStore: UserPrefsStore by lazy { UserPrefsStore(this) }
     val serverManager: ServerManager by lazy {
         ServerManager(TAKServerStore(this), contactStore, chatStore)
