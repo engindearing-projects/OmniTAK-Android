@@ -52,6 +52,9 @@ import soy.engindearing.omnitak.mobile.ui.theme.TacticalSurface
 fun MeshtasticScreen() {
     val app = LocalContext.current.applicationContext as OmniTAKApp
     val mesh = app.meshtastic
+    // Touching this lazy property kicks the bridge into active
+    // collection so any nodes ingested below light up on the map.
+    remember { app.meshtasticCoTBridge }
     val connectionState by mesh.state.collectAsState()
     val bytes by mesh.bytesReceived.collectAsState()
     val nodes by mesh.nodes.collectAsState()
