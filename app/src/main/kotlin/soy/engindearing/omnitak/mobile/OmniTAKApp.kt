@@ -16,7 +16,14 @@ class OmniTAKApp : Application() {
     val contactStore: ContactStore by lazy { ContactStore() }
     val drawingStore: DrawingStore by lazy { DrawingStore() }
     val chatStore: ChatStore by lazy { ChatStore() }
-    val meshtastic: MeshtasticManager by lazy { MeshtasticManager() }
+    val meshtastic: MeshtasticManager by lazy {
+        MeshtasticManager().also { mgr ->
+            // Phase 4: portnum-72 ATAK-plugin payloads decode straight
+            // into CoT events; route them into the same ingest sink the
+            // node-table bridge uses so they surface as map contacts.
+            mgr.cotSink = { event -> contactStore.ingest(event) }
+        }
+    }
     val userPrefsStore: UserPrefsStore by lazy { UserPrefsStore(this) }
     val serverManager: ServerManager by lazy {
         ServerManager(TAKServerStore(this), contactStore, chatStore)

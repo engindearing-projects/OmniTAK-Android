@@ -97,6 +97,17 @@ class MeshtasticTcpClient {
         }.onFailure { Log.w(TAG, "sendFrame failed: ${it.message}") }.getOrDefault(false)
     }
 
+    /**
+     * Suspend-friendly variant of [sendFrame]. Hops to [Dispatchers.IO]
+     * before touching the socket so callers can dispatch from any
+     * coroutine without worrying about blocking the main thread on the
+     * write. Returns true if the framed payload was written + flushed,
+     * false on disconnect / write error.
+     */
+    suspend fun sendBytes(bytes: ByteArray): Boolean = withContext(Dispatchers.IO) {
+        sendFrame(bytes)
+    }
+
     private suspend fun readLoop(sock: Socket) {
         val input = sock.getInputStream()
         val buffer = ByteArray(4096)
