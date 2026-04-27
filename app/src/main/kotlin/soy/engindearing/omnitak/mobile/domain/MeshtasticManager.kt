@@ -11,6 +11,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import soy.engindearing.omnitak.mobile.data.AtakPluginParser
+import soy.engindearing.omnitak.mobile.data.AtakPluginSerializer
+import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.FromRadioFrame
 import soy.engindearing.omnitak.mobile.data.MeshConnectionType
 import soy.engindearing.omnitak.mobile.data.MeshNode
@@ -23,15 +26,26 @@ import soy.engindearing.omnitak.mobile.data.MeshtasticTcpClient
  * transports and exposes node-table + connection state to screens via
  * StateFlow.
  *
- * Both transports feed the same [MeshtasticProtoParser] pipeline — a
- * BLE drain read is byte-for-byte equivalent to a TCP framed payload,
- * so the consumer doesn't care which transport the frame arrived on.
+ * Phase 1 wired the protobuf decoder — every framed payload from
+ * [MeshtasticTcpClient.frames] (TCP) or [MeshtasticBleClient.frames]
+ * (BLE) is dispatched through [MeshtasticProtoParser.parseFromRadio],
+ * and recognised NodeInfo frames flow into [_nodes]. POSITION_APP
+ * packets fold into the existing entry without dropping unrelated
+ * metadata. A BLE drain read is byte-for-byte equivalent to a TCP
+ * framed payload so the consumer doesn't care which transport
+ * delivered it.
  *
- * The active transport at any time is tracked via [activeTransport];
- * UI uses that to flip between the TCP and BLE link-status panels.
+ * Phase 2 added the BLE transport. The active transport at any time
+ * is tracked via [activeTransport]; UI uses that to flip between the
+ * TCP and BLE link-status panels. Since BLE needs a [Context] to
+ * construct, the manager is created lazily with one — the App owns
+ * this and just hands it through.
  *
- * Since BLE needs a [Context] to construct, the manager is created
- * lazily with one — the App owns this and just hands it through.
+ * Phase 4 wires the ATAK-plugin parser: portnum-72 packets are decoded
+ * into [CoTEvent] via [AtakPluginParser] and pushed into [cotSink], the
+ * same sink [MeshtasticCoTBridge] already feeds. [sendCoTOverMesh]
+ * provides the matching TX path over the active TCP transport — BLE
+ * TX hooks in as a follow-up.
  */
 class MeshtasticManager(private val context: Context? = null) {
 
@@ -76,6 +90,11 @@ class MeshtasticManager(private val context: Context? = null) {
         val ctx = context ?: return null
         return MeshtasticBleClient(ctx).also { bleClient = it }
     }
+
+    /** Sink for CoT events parsed off the mesh — wired up by
+     *  [OmniTAKApp] to [ContactStore.ingest] so portnum-72 ATAK-plugin
+     *  payloads flow into the same map pipeline as TCP-server CoT. */
+    @Volatile var cotSink: ((CoTEvent) -> Unit)? = null
 
     fun connectTcp(host: String, port: Int = 4403) {
         // Tearing down a BLE session before opening the TCP one is
@@ -201,13 +220,45 @@ class MeshtasticManager(private val context: Context? = null) {
                     )
                 }
             }
-            PORTNUM_ATAK_PLUGIN -> {
-                Log.i(
-                    TAG,
-                    "ATAK plugin payload received from ${packet.from}, ${packet.payload.size}B (parsing in Phase 4)",
-                )
+            PORTNUM_ATAK_PLUGIN, PORTNUM_ATAK_FORWARDER -> {
+                val event = AtakPluginParser.parse(packet.payload)
+                if (event != null) {
+                    runCatching { cotSink?.invoke(event) }
+                        .onFailure { Log.w(TAG, "cotSink failed for ATAK plugin event: ${it.message}") }
+                    Log.i(
+                        TAG,
+                        "RX ATAK plugin from ${packet.from.toString(16)} -> CoT ${event.uid} ($PORTNUM_ATAK_PLUGIN bytes=${packet.payload.size})",
+                    )
+                } else {
+                    Log.w(
+                        TAG,
+                        "RX ATAK plugin from ${packet.from.toString(16)} unparseable, ${packet.payload.size}B",
+                    )
+                }
             }
             else -> Log.v(TAG, "MeshPacket portnum=${packet.portnum} from=${packet.from} payload=${packet.payload.size}B")
+        }
+    }
+
+    /**
+     * Send a CoT event over the active Meshtastic transport as a
+     * portnum-72 ATAK-plugin payload. Returns true when the framed
+     * ToRadio bytes are dispatched to the radio, false when no
+     * transport is connected or the write fails.
+     *
+     * BLE TX is Phase 2's job — once that lands the dispatch can branch
+     * on the active transport. For now we only support TCP TX, which
+     * matches how iOS shipped its first portnum-72 TX path.
+     */
+    suspend fun sendCoTOverMesh(event: CoTEvent, channelIndex: UInt = 0u): Boolean {
+        val payload = AtakPluginSerializer.serialize(event)
+        val toRadio = AtakPluginSerializer.buildToRadio(
+            payloadBytes = payload,
+            channelIndex = channelIndex,
+        )
+        return when (state.value) {
+            is ConnectionState.Connected -> tcpClient.sendBytes(toRadio)
+            else -> false
         }
     }
 
@@ -215,5 +266,8 @@ class MeshtasticManager(private val context: Context? = null) {
         private const val TAG = "MeshtasticManager"
         private const val PORTNUM_POSITION_APP = 3
         private const val PORTNUM_ATAK_PLUGIN = 72
+        // Some ATAK plugin builds send via portnum 257 (ATAK_FORWARDER)
+        // — accept both so OmniTAK can interop with both clients.
+        private const val PORTNUM_ATAK_FORWARDER = 257
     }
 }
