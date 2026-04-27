@@ -115,4 +115,7 @@ dependencies {
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+
+    // Local JVM unit tests — protobuf parser, CoT converter, etc.
+    testImplementation("junit:junit:4.13.2")
 }

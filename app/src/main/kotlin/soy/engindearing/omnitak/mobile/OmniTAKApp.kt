@@ -6,6 +6,7 @@ import soy.engindearing.omnitak.mobile.data.UserPrefsStore
 import soy.engindearing.omnitak.mobile.domain.ChatStore
 import soy.engindearing.omnitak.mobile.domain.ContactStore
 import soy.engindearing.omnitak.mobile.domain.DrawingStore
+import soy.engindearing.omnitak.mobile.domain.MeshtasticCoTBridge
 import soy.engindearing.omnitak.mobile.domain.MeshtasticManager
 import soy.engindearing.omnitak.mobile.domain.ServerManager
 
@@ -19,5 +20,17 @@ class OmniTAKApp : Application() {
     val userPrefsStore: UserPrefsStore by lazy { UserPrefsStore(this) }
     val serverManager: ServerManager by lazy {
         ServerManager(TAKServerStore(this), contactStore, chatStore)
+    }
+
+    /** Bridges Meshtastic node updates into the active server's CoT
+     *  pipeline by feeding [ContactStore.ingest] (which is what every
+     *  other CoT source already lands in). Started lazily on first
+     *  access so we don't pay for it until the user opens the
+     *  Meshtastic screen or connects to a radio. */
+    val meshtasticCoTBridge: MeshtasticCoTBridge by lazy {
+        MeshtasticCoTBridge(
+            mesh = meshtastic,
+            cotSink = { event -> contactStore.ingest(event) },
+        ).also { it.start() }
     }
 }
