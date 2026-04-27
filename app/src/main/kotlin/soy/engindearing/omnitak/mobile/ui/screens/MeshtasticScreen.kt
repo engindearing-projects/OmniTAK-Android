@@ -15,10 +15,17 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -59,21 +66,89 @@ import soy.engindearing.omnitak.mobile.ui.theme.TacticalSurface
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MeshtasticScreen() {
+fun MeshtasticScreen(onOpenTopology: () -> Unit = {}) {
     val app = LocalContext.current.applicationContext as OmniTAKApp
     val mesh = app.meshtastic
     // Touching this lazy property kicks the bridge into active
     // collection so any nodes ingested below light up on the map.
     remember { app.meshtasticCoTBridge }
     val nodes by mesh.nodes.collectAsState()
+    val connectionState by mesh.state.collectAsState()
+    val bleState = mesh.bleState()?.collectAsState()?.value
+    val anyConnected = connectionState is ConnectionState.Connected ||
+        bleState is ConnectionState.Connected
+    val userPrefs by app.userPrefsStore.prefs.collectAsState(
+        initial = soy.engindearing.omnitak.mobile.data.UserPrefs(),
+    )
+    val coScope = rememberCoroutineScope()
 
     var selectedTab by remember { mutableStateOf(0) }
+    var menuOpen by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = TacticalBackground,
         topBar = {
             TopAppBar(
                 title = { Text("Meshtastic", color = MaterialTheme.colorScheme.onBackground) },
+                actions = {
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(
+                            Icons.Filled.MoreVert,
+                            contentDescription = "Menu",
+                            tint = TacticalAccent,
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = menuOpen,
+                        onDismissRequest = { menuOpen = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("View Topology") },
+                            onClick = {
+                                menuOpen = false
+                                onOpenTopology()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        "Auto-publish to TAK",
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    if (userPrefs.autoPublishMeshToTak) {
+                                        Icon(
+                                            Icons.Filled.Check,
+                                            contentDescription = "Enabled",
+                                            tint = TacticalAccent,
+                                        )
+                                    }
+                                }
+                            },
+                            onClick = {
+                                val next = !userPrefs.autoPublishMeshToTak
+                                coScope.launch {
+                                    app.userPrefsStore.setAutoPublishMeshToTak(next)
+                                }
+                                // Apply immediately — the prefs flow
+                                // collector in OmniTAKApp will catch up
+                                // shortly, but a direct write keeps the
+                                // UX responsive when the toggle is
+                                // tapped repeatedly.
+                                app.meshtasticCoTBridge.enabled = next
+                                menuOpen = false
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Disconnect") },
+                            enabled = anyConnected,
+                            onClick = {
+                                menuOpen = false
+                                mesh.disconnect()
+                            },
+                        )
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = TacticalBackground,
                     titleContentColor = MaterialTheme.colorScheme.onBackground,

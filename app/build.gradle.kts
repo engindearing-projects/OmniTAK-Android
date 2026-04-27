@@ -124,4 +124,7 @@ dependencies {
 
     // Local JVM unit tests — protobuf parser, CoT converter, etc.
     testImplementation("junit:junit:4.13.2")
+    // runTest / StandardTestDispatcher for coroutine-driven tests
+    // (e.g. MeshtasticCoTBridge enabled toggle).
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
 }

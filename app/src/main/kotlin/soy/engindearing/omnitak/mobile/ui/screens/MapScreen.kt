@@ -76,6 +76,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     val active by app.serverManager.activeServer.collectAsState()
     val connState by app.serverManager.connectionState.collectAsState()
     val contacts by app.contactStore.contacts.collectAsState()
+    // Layers toggle: mesh-origin contacts are persisted because the
+    // operator's last choice should survive a process restart. Default
+    // visible — matches iOS.
+    val userPrefs by app.userPrefsStore.prefs.collectAsState(initial = soy.engindearing.omnitak.mobile.data.UserPrefs())
+    val meshNodesVisible = userPrefs.meshNodesLayerVisible
 
     val headerLabel = when (val s = connState) {
         is ConnectionState.Connected -> s.serverName
@@ -163,7 +168,15 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             recenterTrigger = recenterTick,
             zoomInTrigger = zoomInTick,
             zoomOutTrigger = zoomOutTick,
-            contacts = if (contactsVisible) contacts.values else emptyList(),
+            contacts = if (contactsVisible) {
+                if (meshNodesVisible) contacts.values
+                // Hide mesh-origin contacts — they all share the
+                // `MESHTASTIC-` UID prefix produced by
+                // `MeshtasticCoTConverter.takUid`.
+                else contacts.values.filterNot { it.uid.startsWith("MESHTASTIC-") }
+            } else {
+                emptyList()
+            },
             measurementPoints = measurementPoints,
             drawings = if (drawingsVisible) {
                 drawings + buildInProgressDrawing(drawingKind, drawingPoints)
@@ -443,11 +456,15 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 aircraftVisible = aircraftVisible,
                 contactsVisible = contactsVisible,
                 callsignCardVisible = callsignCardVisible,
+                meshNodesVisible = meshNodesVisible,
                 onToggleGrid = { gridEnabled = it },
                 onToggleDrawings = { drawingsVisible = it },
                 onToggleAircraft = { aircraftVisible = it },
                 onToggleContacts = { contactsVisible = it },
                 onToggleCallsignCard = { callsignCardVisible = it },
+                onToggleMeshNodes = { v ->
+                    scope.launch { app.userPrefsStore.setMeshNodesLayerVisible(v) }
+                },
                 onDismiss = { layersSheetOpen = false },
             )
         }
