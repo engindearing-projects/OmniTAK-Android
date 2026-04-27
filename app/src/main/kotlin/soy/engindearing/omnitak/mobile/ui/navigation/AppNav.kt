@@ -24,6 +24,7 @@ import soy.engindearing.omnitak.mobile.ui.screens.AboutScreen
 import soy.engindearing.omnitak.mobile.ui.screens.AddServerScreen
 import soy.engindearing.omnitak.mobile.ui.screens.ChatScreen
 import soy.engindearing.omnitak.mobile.ui.screens.MapScreen
+import soy.engindearing.omnitak.mobile.ui.screens.MeshTopologyScreen
 import soy.engindearing.omnitak.mobile.ui.screens.MeshtasticScreen
 import soy.engindearing.omnitak.mobile.ui.screens.ServersScreen
 import soy.engindearing.omnitak.mobile.ui.screens.SettingsScreen
@@ -82,7 +83,14 @@ fun AppNav() {
                 AddServerScreen(onDone = { nav.popBackStack() })
             }
             composable("chat") { ChatScreen() }
-            composable("mesh") { MeshtasticScreen() }
+            composable("mesh") {
+                MeshtasticScreen(
+                    onOpenTopology = { nav.navigate("mesh_topology") },
+                )
+            }
+            composable("mesh_topology") {
+                MeshTopologyScreen(onBack = { nav.popBackStack() })
+            }
             composable("settings") { SettingsScreen() }
             composable("about") { AboutScreen() }
         }

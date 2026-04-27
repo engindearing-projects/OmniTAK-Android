@@ -1,6 +1,12 @@
 package soy.engindearing.omnitak.mobile
 
 import android.app.Application
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.data.TAKServerStore
 import soy.engindearing.omnitak.mobile.data.UserPrefsStore
 import soy.engindearing.omnitak.mobile.domain.ChatStore
@@ -13,6 +19,7 @@ import soy.engindearing.omnitak.mobile.domain.ServerManager
 class OmniTAKApp : Application() {
     // Application-scoped singletons. Screens reach these via
     // LocalContext.current.applicationContext as OmniTAKApp.
+    private val appScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     val contactStore: ContactStore by lazy { ContactStore() }
     val drawingStore: DrawingStore by lazy { DrawingStore() }
     val chatStore: ChatStore by lazy { ChatStore() }
@@ -33,11 +40,26 @@ class OmniTAKApp : Application() {
      *  pipeline by feeding [ContactStore.ingest] (which is what every
      *  other CoT source already lands in). Started lazily on first
      *  access so we don't pay for it until the user opens the
-     *  Meshtastic screen or connects to a radio. */
+     *  Meshtastic screen or connects to a radio.
+     *
+     *  Phase 3: respects the persisted `autoPublishMeshToTak` toggle —
+     *  the bridge stays "started" but its `enabled` flag is observed
+     *  off the prefs store so flipping the menu item from any screen
+     *  immediately stops/resumes pushes to `cotSink`. */
     val meshtasticCoTBridge: MeshtasticCoTBridge by lazy {
         MeshtasticCoTBridge(
             mesh = meshtastic,
             cotSink = { event -> contactStore.ingest(event) },
-        ).also { it.start() }
+        ).also { bridge ->
+            bridge.start()
+            // Mirror the persisted prefs into the bridge so the
+            // operator's last choice survives a process restart.
+            appScope.launch {
+                userPrefsStore.prefs
+                    .map { it.autoPublishMeshToTak }
+                    .distinctUntilChanged()
+                    .collect { bridge.enabled = it }
+            }
+        }
     }
 }
