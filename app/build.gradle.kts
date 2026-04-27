@@ -113,6 +113,12 @@ dependencies {
     // MapLibre Android (open-source fork of Mapbox) — parallel to iOS
     implementation("org.maplibre.gl:android-sdk:11.8.0")
 
+    // Nordic Semiconductor BLE library — used by MeshtasticBleClient.
+    // Wraps the platform GATT API in a queueable, callback-driven manager
+    // with built-in MTU negotiation, bond handling, and reconnection.
+    implementation("no.nordicsemi.android:ble:2.8.0")
+    implementation("no.nordicsemi.android:ble-ktx:2.8.0")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 
