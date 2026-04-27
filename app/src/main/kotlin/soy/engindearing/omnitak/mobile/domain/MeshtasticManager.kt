@@ -10,7 +10,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import java.io.ByteArrayOutputStream
 import soy.engindearing.omnitak.mobile.data.AtakPluginParser
 import soy.engindearing.omnitak.mobile.data.AtakPluginSerializer
 import soy.engindearing.omnitak.mobile.data.CoTEvent
@@ -105,6 +107,13 @@ class MeshtasticManager(private val context: Context? = null) {
         frameCollector = scope.launch {
             tcpClient.frames.collect { frame -> dispatchFrame(frame) }
         }
+        // Once the TCP link comes up, kick the radio with want_config_id
+        // so it streams its node DB. Without this the radio sits silent.
+        scope.launch {
+            tcpClient.state.first { it is ConnectionState.Connected }
+            tcpClient.sendBytes(buildWantConfig())
+            Log.i(TAG, "TX want_config_id (TCP)")
+        }
         tcpClient.connect(host, port)
     }
 
@@ -126,7 +135,35 @@ class MeshtasticManager(private val context: Context? = null) {
         frameCollector = scope.launch {
             client.frames.collect { frame -> dispatchFrame(frame) }
         }
-        return client.connectToAddress(deviceAddress)
+        val ok = client.connectToAddress(deviceAddress)
+        if (ok) {
+            // Critical Meshtastic handshake: ask the radio to dump its
+            // config + node database. Without this the radio doesn't
+            // push any state and the node list stays empty.
+            client.sendToRadio(buildWantConfig())
+            Log.i(TAG, "TX want_config_id (BLE)")
+        }
+        return ok
+    }
+
+    /**
+     * Build a ToRadio { want_config_id } protobuf payload. Tag 0x18 is
+     * field 3, wire type 0 (varint). The radio responds by streaming
+     * NodeInfo / Channel / Config / ModuleConfig frames terminated by
+     * a ConfigComplete with this same id. Matches iOS's buildWantConfig.
+     */
+    private fun buildWantConfig(): ByteArray {
+        val configId = (1..Int.MAX_VALUE).random().toULong()
+        return ByteArrayOutputStream().apply {
+            write(0x18) // field 3, wire type 0
+            // varint encode configId
+            var v = configId
+            while (v >= 0x80u) {
+                write(((v and 0x7Fu) or 0x80u).toInt())
+                v = v shr 7
+            }
+            write(v.toInt())
+        }.toByteArray()
     }
 
     /**
