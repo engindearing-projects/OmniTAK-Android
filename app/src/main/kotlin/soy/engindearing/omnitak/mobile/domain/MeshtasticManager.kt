@@ -246,9 +246,10 @@ class MeshtasticManager(private val context: Context? = null) {
      * ToRadio bytes are dispatched to the radio, false when no
      * transport is connected or the write fails.
      *
-     * BLE TX is Phase 2's job — once that lands the dispatch can branch
-     * on the active transport. For now we only support TCP TX, which
-     * matches how iOS shipped its first portnum-72 TX path.
+     * Dispatches by [activeTransport]: TCP writes go through the
+     * 0x94C3-framing path on [MeshtasticTcpClient.sendBytes]; BLE
+     * writes go through the toRadio characteristic on
+     * [MeshtasticBleClient.sendToRadio] (chunked at the negotiated MTU).
      */
     suspend fun sendCoTOverMesh(event: CoTEvent, channelIndex: UInt = 0u): Boolean {
         val payload = AtakPluginSerializer.serialize(event)
@@ -256,9 +257,10 @@ class MeshtasticManager(private val context: Context? = null) {
             payloadBytes = payload,
             channelIndex = channelIndex,
         )
-        return when (state.value) {
-            is ConnectionState.Connected -> tcpClient.sendBytes(toRadio)
-            else -> false
+        return when (_activeTransport.value) {
+            MeshConnectionType.TCP -> tcpClient.sendBytes(toRadio)
+            MeshConnectionType.BLUETOOTH -> bleClient?.sendToRadio(toRadio) ?: false
+            null -> false
         }
     }
 
