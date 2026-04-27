@@ -81,9 +81,12 @@ object AtakPluginSerializer {
             // 6: id (fixed32)
             appendTag(this, field = 6, wire = 5)
             appendFixed32(this, resolvedId)
-            // 9: want_ack (bool varint) — Meshtastic mesh.proto field 9.
+            // 10: want_ack (bool varint) — per canonical Meshtastic
+            // mesh.proto. (Field 9 is hop_limit, NOT want_ack.) iOS uses
+            // field 10 also; using 9 here would silently confuse hop_limit
+            // and want_ack across the iOS↔Android wire.
             if (wantAck) {
-                appendVarintField(this, field = 9, value = 1UL)
+                appendVarintField(this, field = 10, value = 1UL)
             }
         }.toByteArray()
 
