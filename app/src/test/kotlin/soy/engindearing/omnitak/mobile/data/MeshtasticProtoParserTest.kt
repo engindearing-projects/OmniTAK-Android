@@ -116,9 +116,9 @@ class MeshtasticProtoParserTest {
             writeTagVarint(this, field = 11, value = 2UL)
         }.toByteArray()
 
-        // FromRadio with field 6 = NodeInfo.
+        // FromRadio.node_info is canonical field 4 in mesh.proto.
         val fromRadio = ByteArrayOutputStream().apply {
-            writeTagBytes(this, field = 6, value = nodeInfo)
+            writeTagBytes(this, field = 4, value = nodeInfo)
         }.toByteArray()
 
         val parsed = MeshtasticProtoParser.parseFromRadio(fromRadio)
@@ -140,8 +140,9 @@ class MeshtasticProtoParserTest {
         val myInfo = ByteArrayOutputStream().apply {
             writeTagVarint(this, field = 1, value = 0xCAFEBABEUL)
         }.toByteArray()
+        // FromRadio.my_info is canonical field 3 in mesh.proto.
         val fromRadio = ByteArrayOutputStream().apply {
-            writeTagBytes(this, field = 5, value = myInfo)
+            writeTagBytes(this, field = 3, value = myInfo)
         }.toByteArray()
         val parsed = MeshtasticProtoParser.parseFromRadio(fromRadio)
         assertTrue(parsed is FromRadioFrame.MyInfo)

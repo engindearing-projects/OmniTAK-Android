@@ -12,11 +12,18 @@ package soy.engindearing.omnitak.mobile.data
  *   https://protobuf.dev/programming-guides/encoding/
  *   https://github.com/meshtastic/protobufs
  *
- * FromRadio top-level fields we care about:
+ * FromRadio top-level fields (canonical Meshtastic mesh.proto):
  *   2  packet            — MeshPacket (length-delimited)
- *   5  my_info           — MyNodeInfo (length-delimited)
- *   6  node_info         — NodeInfo (length-delimited)
+ *   3  my_info           — MyNodeInfo (length-delimited)
+ *   4  node_info         — NodeInfo (length-delimited)
+ *   5  config            — Config oneof (length-delimited) — radio dumps these after want_config_id
  *   7  config_complete_id (varint)
+ *  10  channel           — Channel (length-delimited) — primary + secondary channel info
+ *
+ * Earlier revisions of this parser had my_info/node_info at fields 5/6
+ * (a holdover from an outdated iOS impl). That meant real radio NodeInfo
+ * frames at field 4 got skipped silently — Bytes RX ticked up but the
+ * Nodes table stayed empty. Fixed in GAP-109 read-back debugging.
  */
 object MeshtasticProtoParser {
 
@@ -43,17 +50,30 @@ object MeshtasticProtoParser {
                     val packet = parseMeshPacket(sub.first) ?: return FromRadioFrame.Unknown
                     return FromRadioFrame.Packet(packet)
                 }
-                5 -> { // MyNodeInfo
+                3 -> { // MyNodeInfo (canonical field 3)
                     if (wire != 2) { idx = skipField(bytes, idx, wire); continue }
                     val sub = readLengthDelimited(bytes, idx) ?: return null
                     val nodeNum = parseMyNodeInfo(sub.first)
                     return FromRadioFrame.MyInfo(nodeNum)
                 }
-                6 -> { // NodeInfo
+                4 -> { // NodeInfo (canonical field 4)
                     if (wire != 2) { idx = skipField(bytes, idx, wire); continue }
                     val sub = readLengthDelimited(bytes, idx) ?: return null
                     val node = parseNodeInfo(sub.first) ?: return FromRadioFrame.Unknown
                     return FromRadioFrame.NodeInfoFrame(node)
+                }
+                5 -> { // Config (canonical field 5) — DeviceConfig / PositionConfig / LoRaConfig
+                    if (wire != 2) { idx = skipField(bytes, idx, wire); continue }
+                    val sub = readLengthDelimited(bytes, idx) ?: return null
+                    val response = AdminMessageParser.parseConfigPublic(sub.first)
+                        ?: return FromRadioFrame.Unknown
+                    return FromRadioFrame.ConfigFrame(response)
+                }
+                10 -> { // Channel (canonical field 10) — primary + secondary channels
+                    if (wire != 2) { idx = skipField(bytes, idx, wire); continue }
+                    val sub = readLengthDelimited(bytes, idx) ?: return null
+                    val ch = AdminMessageParser.parseChannelPublic(sub.first)
+                    return FromRadioFrame.ChannelFrame(ch)
                 }
                 7 -> { // config_complete_id
                     if (wire != 0) { idx = skipField(bytes, idx, wire); continue }
@@ -500,6 +520,12 @@ sealed interface FromRadioFrame {
     data class Packet(val packet: MeshPacketDecoded) : FromRadioFrame
     data class MyInfo(val nodeNum: UInt) : FromRadioFrame
     data class NodeInfoFrame(val node: MeshNode) : FromRadioFrame
+    /** GAP-109 — Config submessage at FromRadio.field=5. Wraps the same
+     *  AdminResponse types so the downstream sink can treat radio-pushed
+     *  config and admin-response config identically. */
+    data class ConfigFrame(val response: AdminResponse) : FromRadioFrame
+    /** GAP-109 — Channel submessage at FromRadio.field=10. */
+    data class ChannelFrame(val response: AdminResponse.Channel) : FromRadioFrame
     data class ConfigComplete(val id: UInt) : FromRadioFrame
     data object Unknown : FromRadioFrame
 }

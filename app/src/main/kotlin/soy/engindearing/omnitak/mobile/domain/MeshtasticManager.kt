@@ -214,6 +214,16 @@ class MeshtasticManager(private val context: Context? = null) {
                 Log.i(TAG, "my_node_num=${parsed.nodeNum}")
             }
             is FromRadioFrame.ConfigComplete -> Log.i(TAG, "config complete id=${parsed.id}")
+            is FromRadioFrame.ConfigFrame -> {
+                Log.i(TAG, "RX FromRadio.config (post-want_config_id dump): ${parsed.response}")
+                runCatching { adminResponseSink?.invoke(parsed.response) }
+                    .onFailure { Log.w(TAG, "adminResponseSink (config) failed: ${it.message}") }
+            }
+            is FromRadioFrame.ChannelFrame -> {
+                Log.i(TAG, "RX FromRadio.channel: ${parsed.response}")
+                runCatching { adminResponseSink?.invoke(parsed.response) }
+                    .onFailure { Log.w(TAG, "adminResponseSink (channel) failed: ${it.message}") }
+            }
             is FromRadioFrame.Unknown -> Log.v(TAG, "unrecognised FromRadio frame (${frame.size}B)")
             null -> Log.w(TAG, "frame parse returned null (${frame.size}B)")
         }

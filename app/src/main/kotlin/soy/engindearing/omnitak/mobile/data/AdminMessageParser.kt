@@ -61,6 +61,17 @@ object AdminMessageParser {
         return null
     }
 
+    /** Public — Config submessage arrives at FromRadio.field=5 (canonical
+     *  Meshtastic mesh.proto). Same byte layout as inside an
+     *  `AdminMessage.get_config_response`. Reused by [MeshtasticProtoParser]
+     *  to decode the post-want_config_id config dump. */
+    fun parseConfigPublic(bytes: ByteArray): AdminResponse? = parseConfig(bytes)
+
+    /** Public — Channel submessage arrives at FromRadio.field=10
+     *  (canonical Meshtastic mesh.proto). Same byte layout as inside
+     *  `AdminMessage.get_channel_response`. */
+    fun parseChannelPublic(bytes: ByteArray): AdminResponse.Channel = parseChannel(bytes)
+
     /** Config oneof:
      *   1 device (DeviceConfig), 2 position (PositionConfig),
      *   3 power, 4 network, 5 display, 6 lora (LoRaConfig), 7 bluetooth */
