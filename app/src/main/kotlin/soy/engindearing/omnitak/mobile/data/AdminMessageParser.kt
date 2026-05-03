@@ -23,7 +23,12 @@ sealed interface AdminResponse {
     data class DeviceConfig(val role: MeshRole?) : AdminResponse
     data class PositionConfig(val broadcastSecs: Int) : AdminResponse
     data class LoraConfig(val preset: MeshChannelPreset?) : AdminResponse
-    data class Channel(val index: Int, val name: String, val isPrimary: Boolean) : AdminResponse
+    data class Channel(val index: Int, val name: String, val role: Int) : AdminResponse {
+        /** firmware Channel.Role enum: DISABLED=0, PRIMARY=1, SECONDARY=2. */
+        val isPrimary: Boolean get() = role == 1
+        val isSecondary: Boolean get() = role == 2
+        val isDisabled: Boolean get() = role == 0
+    }
 }
 
 object AdminMessageParser {
@@ -195,7 +200,7 @@ object AdminMessageParser {
                 else -> idx = skipField(bytes, idx, wire)
             }
         }
-        return AdminResponse.Channel(index = index, name = name, isPrimary = role == 1)
+        return AdminResponse.Channel(index = index, name = name, role = role)
     }
 
     /** ChannelSettings.name = field 3 (string). */

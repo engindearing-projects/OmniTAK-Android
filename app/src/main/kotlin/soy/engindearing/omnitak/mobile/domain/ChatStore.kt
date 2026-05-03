@@ -49,6 +49,26 @@ class ChatStore {
         ))
     }
 
+    /**
+     * GAP-123 — create the conversation if missing, OR rename it if the
+     * existing title is still the placeholder we seeded before the radio
+     * told us its real channel name. Used when admin-port channel reads
+     * fold back into the chat list (e.g. "Mesh: Primary" → "Mesh: OmniTAK").
+     */
+    fun upsertOrRenameConversation(id: String, title: String, isGroup: Boolean = true) {
+        val current = _conversations.value[id]
+        if (current == null) {
+            _conversations.value = _conversations.value + (id to ChatConversation(
+                id = id,
+                title = title,
+                isGroup = isGroup,
+            ))
+            return
+        }
+        if (current.title == title) return
+        _conversations.value = _conversations.value + (id to current.copy(title = title))
+    }
+
     fun ingest(message: ChatMessage) {
         val existing = _messagesByConversation.value[message.conversationId].orEmpty()
         if (existing.any { it.id == message.id }) return

@@ -440,13 +440,19 @@ class MeshtasticManager(private val context: Context? = null) {
      */
     suspend fun requestDeviceConfig(): Int {
         val transport = _activeTransport.value ?: return 0
+        // GAP-123 — ask for all 8 channel slots (Meshtastic firmware caps
+        // at 8). Disabled slots come back with role=0 and are filtered
+        // out at the chat seeding layer; non-disabled ones become chat
+        // conversations with the operator's actual channel names.
+        val channelRequests = (0 until 8).map { idx ->
+            AdminMessageSerializer.buildGetChannelRequest(idx)
+        }
         val requests = listOf(
             AdminMessageSerializer.buildGetOwnerRequest(),
             AdminMessageSerializer.buildGetConfigRequest(GET_CONFIG_DEVICE),
             AdminMessageSerializer.buildGetConfigRequest(GET_CONFIG_POSITION),
             AdminMessageSerializer.buildGetConfigRequest(GET_CONFIG_LORA),
-            AdminMessageSerializer.buildGetChannelRequest(0),
-        )
+        ) + channelRequests
         var sent = 0
         for (bytes in requests) {
             val ok = when (transport) {
