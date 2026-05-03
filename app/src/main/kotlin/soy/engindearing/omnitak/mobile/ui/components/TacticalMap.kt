@@ -618,12 +618,23 @@ val TACTICAL_STYLE_DARK_MATTER = buildTacticalStyle(
 )
 
 /**
- * Map a [MapProvider] preference to its style JSON. Default falls back to
- * the dark tactical style — keeps the existing behaviour if a new enum
- * case is introduced without a wired style.
+ * Map a [MapProvider] preference to its style JSON. For WMTS_CUSTOM,
+ * the operator-supplied XYZ URL is wrapped in a fresh tactical style.
+ * Falls back to OSM if WMTS_CUSTOM is selected with an empty/invalid URL.
  */
-fun styleJsonForProvider(provider: MapProvider): String = when (provider) {
+fun styleJsonForProvider(
+    provider: MapProvider,
+    customTileUrl: String = "",
+): String = when (provider) {
     MapProvider.OSM_RASTER -> TACTICAL_STYLE_OSM
     MapProvider.TOPO_HINT -> TACTICAL_STYLE_TOPO
     MapProvider.SATELLITE_HINT -> TACTICAL_STYLE_SATELLITE
+    MapProvider.WMTS_CUSTOM -> {
+        val url = customTileUrl.trim()
+        if (url.startsWith("http") && url.contains("{z}") && url.contains("{x}") && url.contains("{y}")) {
+            buildTacticalStyle("OmniTAK Custom WMTS", url, "Custom tile source")
+        } else {
+            TACTICAL_STYLE_OSM
+        }
+    }
 }

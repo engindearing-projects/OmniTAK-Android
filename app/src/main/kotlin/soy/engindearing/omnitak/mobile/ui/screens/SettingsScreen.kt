@@ -126,6 +126,7 @@ fun SettingsScreen() {
                     CoordFormat.LATLON_DECIMAL to "Lat/Lon",
                     CoordFormat.LATLON_DMS to "DMS",
                     CoordFormat.MGRS to "MGRS",
+                    CoordFormat.UTM to "UTM",
                 ),
                 selected = prefs.coordFormat,
                 onSelect = { v -> mutate { it.copy(coordFormat = v) } },
@@ -137,15 +138,40 @@ fun SettingsScreen() {
                     MapProvider.OSM_RASTER to "OSM",
                     MapProvider.SATELLITE_HINT to "Satellite",
                     MapProvider.TOPO_HINT to "Topo",
+                    MapProvider.WMTS_CUSTOM to "Custom",
                 ),
                 selected = prefs.mapProvider,
                 onSelect = { v -> mutate { it.copy(mapProvider = v) } },
             )
             Text(
-                "OSM (street), Topo (OpenTopoMap), Satellite (Esri imagery). Pick changes apply immediately. Offline tile cache lands in a later release.",
+                "OSM (street), Topo (OpenTopoMap), Satellite (Esri imagery), or a custom WMTS / XYZ tile URL. Picks apply immediately. Offline tile cache lands in a later release.",
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                 style = MaterialTheme.typography.bodySmall,
             )
+
+            // GAP-107 — show the custom URL field only when Custom is picked.
+            if (prefs.mapProvider == MapProvider.WMTS_CUSTOM) {
+                var urlDraft by remember(prefs.customTileUrl) {
+                    mutableStateOf(prefs.customTileUrl)
+                }
+                OutlinedTextField(
+                    value = urlDraft,
+                    onValueChange = { v ->
+                        urlDraft = v
+                        mutate { it.copy(customTileUrl = v) }
+                    },
+                    label = { Text("Tile URL") },
+                    placeholder = { Text("https://host/{z}/{x}/{y}.png") },
+                    singleLine = true,
+                    colors = settingsFieldColors(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "Must be an XYZ-style URL with {z}, {x}, {y} placeholders. WMTS endpoints from agency / private servers usually expose this. Falls back to OSM if invalid.",
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
 
             Spacer(Modifier.height(8.dp))
         }

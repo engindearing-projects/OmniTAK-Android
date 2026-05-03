@@ -39,10 +39,25 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:theme="@style/Theme.OmniTAK.Launch">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- GAP-105 rest — data-package import. Three on-ramps:
+                 1. atak://… deep links (matches ATAK's own scheme so
+                    QR codes generated for ATAK can also onboard OmniTAK).
+                 2. omnitak://… deep links (our own future-proof scheme).
+                 3. https://*/?omnitak=server… HTTPS App Links (lets a
+                    plain web URL deep-link in once verified, no scheme
+                    prompt). -->
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="atak" />
+                <data android:scheme="omnitak" />
             </intent-filter>
         </activity>
     </application>

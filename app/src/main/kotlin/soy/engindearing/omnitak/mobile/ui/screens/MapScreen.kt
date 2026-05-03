@@ -150,8 +150,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     ) {
         TacticalMap(
             modifier = Modifier.fillMaxSize(),
-            // GAP-101 — react to the basemap selection from Settings.
-            styleJson = styleJsonForProvider(userPrefs.mapProvider),
+            // GAP-101 / GAP-107 — react to the basemap selection from Settings.
+            // WMTS_CUSTOM uses the operator-pasted XYZ tile URL.
+            styleJson = styleJsonForProvider(userPrefs.mapProvider, userPrefs.customTileUrl),
             onMapLongPress = { latLng, offset ->
                 if (measurementActive) return@TacticalMap
                 radialLatLng = latLng

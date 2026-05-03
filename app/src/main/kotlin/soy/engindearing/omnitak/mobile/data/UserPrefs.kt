@@ -11,8 +11,8 @@ import kotlinx.coroutines.flow.map
 private val Context.userPrefsDataStore by preferencesDataStore(name = "user_prefs")
 
 enum class DistanceUnit { METRIC, IMPERIAL }
-enum class CoordFormat { LATLON_DECIMAL, LATLON_DMS, MGRS }
-enum class MapProvider { OSM_RASTER, SATELLITE_HINT, TOPO_HINT }
+enum class CoordFormat { LATLON_DECIMAL, LATLON_DMS, MGRS, UTM }
+enum class MapProvider { OSM_RASTER, SATELLITE_HINT, TOPO_HINT, WMTS_CUSTOM }
 
 /**
  * Operator preferences — callsign, units, coord format, tile choice.
@@ -35,6 +35,9 @@ data class UserPrefs(
     val distanceUnit: DistanceUnit = DistanceUnit.METRIC,
     val coordFormat: CoordFormat = CoordFormat.LATLON_DECIMAL,
     val mapProvider: MapProvider = MapProvider.OSM_RASTER,
+    // GAP-107 — XYZ tile URL template the operator pasted in. Used when
+    // mapProvider == WMTS_CUSTOM. Format: https://host/{z}/{x}/{y}.png
+    val customTileUrl: String = "",
     val autoPublishMeshToTak: Boolean = true,
     val meshNodesLayerVisible: Boolean = true,
     // GAP-110 — persisted UI toggles. Each one mirrors a switch the operator
@@ -55,6 +58,7 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_DIST = stringPreferencesKey("distance_unit")
     private val KEY_COORD = stringPreferencesKey("coord_format")
     private val KEY_MAP = stringPreferencesKey("map_provider")
+    private val KEY_CUSTOM_TILE_URL = stringPreferencesKey("custom_tile_url")
     private val KEY_AUTO_PUBLISH_MESH = booleanPreferencesKey("auto_publish_mesh_to_tak")
     private val KEY_MESH_LAYER_VISIBLE = booleanPreferencesKey("mesh_nodes_layer_visible")
     // GAP-110 keys
@@ -75,6 +79,7 @@ class UserPrefsStore(private val context: Context) {
             p[KEY_DIST] = next.distanceUnit.name
             p[KEY_COORD] = next.coordFormat.name
             p[KEY_MAP] = next.mapProvider.name
+            p[KEY_CUSTOM_TILE_URL] = next.customTileUrl
             p[KEY_AUTO_PUBLISH_MESH] = next.autoPublishMeshToTak
             p[KEY_MESH_LAYER_VISIBLE] = next.meshNodesLayerVisible
             p[KEY_CALLSIGN_CARD] = next.callsignCardVisible
@@ -106,6 +111,7 @@ class UserPrefsStore(private val context: Context) {
             ?: CoordFormat.LATLON_DECIMAL,
         mapProvider = p[KEY_MAP]?.let { runCatching { MapProvider.valueOf(it) }.getOrNull() }
             ?: MapProvider.OSM_RASTER,
+        customTileUrl = p[KEY_CUSTOM_TILE_URL] ?: "",
         autoPublishMeshToTak = p[KEY_AUTO_PUBLISH_MESH] ?: true,
         meshNodesLayerVisible = p[KEY_MESH_LAYER_VISIBLE] ?: true,
         callsignCardVisible = p[KEY_CALLSIGN_CARD] ?: true,
