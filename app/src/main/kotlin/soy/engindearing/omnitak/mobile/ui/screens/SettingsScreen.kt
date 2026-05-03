@@ -3,6 +3,7 @@ package soy.engindearing.omnitak.mobile.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -11,11 +12,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -97,18 +103,11 @@ fun SettingsScreen() {
                 colors = settingsFieldColors(),
                 modifier = Modifier.fillMaxWidth(),
             )
-            var teamDraft by remember(prefs.team) { mutableStateOf(prefs.team) }
-            OutlinedTextField(
-                value = teamDraft,
-                onValueChange = { v ->
-                    val up = v.uppercase()
-                    teamDraft = up
-                    mutate { it.copy(team = up) }
-                },
-                label = { Text("Team") },
-                singleLine = true,
-                colors = settingsFieldColors(),
-                modifier = Modifier.fillMaxWidth(),
+            // GAP-104 — ATAK standard team color dropdown. Free-text broke
+            // CoT compatibility; ATAK clients only render the canonical colors.
+            TeamColorDropdown(
+                value = prefs.team,
+                onSelect = { v -> mutate { it.copy(team = v) } },
             )
 
             SectionHeader("Units")
@@ -215,3 +214,90 @@ private fun settingsFieldColors() = TextFieldDefaults.colors(
     unfocusedLabelColor = TacticalAccent.copy(alpha = 0.6f),
     cursorColor = TacticalAccent,
 )
+
+/**
+ * Standard ATAK CoT team colors. The exact UPPERCASE strings are what
+ * ATAK clients expect in `<__group name="..." role="..."/>` — anything
+ * else gets rendered as the default cyan team. Hex values are tuned for
+ * readability against the OmniTAK dark surface.
+ */
+private val ATAK_TEAM_COLORS: List<Pair<String, Color>> = listOf(
+    "WHITE" to Color(0xFFFFFFFF),
+    "YELLOW" to Color(0xFFFFEB3B),
+    "ORANGE" to Color(0xFFFF9800),
+    "MAGENTA" to Color(0xFFE91E63),
+    "RED" to Color(0xFFF44336),
+    "MAROON" to Color(0xFF8B0000),
+    "PURPLE" to Color(0xFF9C27B0),
+    "DARK BLUE" to Color(0xFF1A237E),
+    "BLUE" to Color(0xFF2196F3),
+    "CYAN" to Color(0xFF00BCD4),
+    "TEAL" to Color(0xFF009688),
+    "GREEN" to Color(0xFF4CAF50),
+    "DARK GREEN" to Color(0xFF1B5E20),
+    "BROWN" to Color(0xFF6D4C41),
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TeamColorDropdown(value: String, onSelect: (String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    val current = ATAK_TEAM_COLORS.firstOrNull { it.first.equals(value, ignoreCase = true) }
+        ?: ("CYAN" to Color(0xFF00BCD4))
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded },
+    ) {
+        OutlinedTextField(
+            value = current.first,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Team") },
+            leadingIcon = {
+                Box(
+                    modifier = Modifier
+                        .size(20.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(current.second),
+                )
+            },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            colors = settingsFieldColors(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(),
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.background(TacticalSurface),
+        ) {
+            ATAK_TEAM_COLORS.forEach { (label, swatch) ->
+                DropdownMenuItem(
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(18.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(swatch),
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                label,
+                                color = MaterialTheme.colorScheme.onBackground,
+                                fontWeight = if (label == current.first) FontWeight.SemiBold else FontWeight.Normal,
+                            )
+                        }
+                    },
+                    onClick = {
+                        onSelect(label)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+

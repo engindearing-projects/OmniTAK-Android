@@ -206,8 +206,12 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 // GAP-023: stub until FusedLocationProviderClient is wired (GAP-030b)
                 gpsAccuracyMeters = 5,
                 timeLabel = nowLabel,
-                onServerTap = { /* Slice 6: open server picker */ },
-                onMenuTap = { /* Slice 6: open tools drawer */ },
+                // GAP-102 — wire the previously dead status-bar taps to
+                // their natural destinations. Server icon goes to the
+                // Servers tab (also helps GAP-105 — server auth lives
+                // there). Hamburger goes to Settings.
+                onServerTap = { onOpenTab("servers") },
+                onMenuTap = { onOpenTab("settings") },
             )
         }
 

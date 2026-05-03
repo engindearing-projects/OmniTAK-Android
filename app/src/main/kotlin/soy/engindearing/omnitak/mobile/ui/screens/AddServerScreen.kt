@@ -36,6 +36,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import soy.engindearing.omnitak.mobile.OmniTAKApp
 import soy.engindearing.omnitak.mobile.data.ConnectionProtocol
@@ -53,6 +54,9 @@ fun AddServerScreen(onDone: () -> Unit) {
     var host by remember { mutableStateOf("") }
     var portText by remember { mutableStateOf("8089") }
     var useTLS by remember { mutableStateOf(true) }
+    // GAP-105 — basic-auth credentials. Either both fields filled or both blank.
+    var username by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
 
     val port = portText.toIntOrNull()
     val canSave = name.isNotBlank() && host.isNotBlank() && port != null && port in 1..65535
@@ -136,6 +140,40 @@ fun AddServerScreen(onDone: () -> Unit) {
                 )
             }
 
+            Spacer(Modifier.height(4.dp))
+
+            Text(
+                "Server credentials (optional)",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            Text(
+                "Required for OpenTAKserver and most CoT servers with auth.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+            )
+
+            OutlinedTextField(
+                value = username,
+                onValueChange = { username = it.trim() },
+                label = { Text("Username") },
+                placeholder = { Text("operator") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                colors = tacticalOutlineColors(),
+            )
+
+            OutlinedTextField(
+                value = password,
+                onValueChange = { password = it },
+                label = { Text("Password") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                modifier = Modifier.fillMaxWidth(),
+                colors = tacticalOutlineColors(),
+            )
+
             Spacer(Modifier.height(8.dp))
 
             Button(
@@ -148,6 +186,8 @@ fun AddServerScreen(onDone: () -> Unit) {
                             port = port!!,
                             protocol = if (useTLS) ConnectionProtocol.TLS.wire else ConnectionProtocol.TCP.wire,
                             useTLS = useTLS,
+                            username = username.takeIf { it.isNotBlank() },
+                            password = password.takeIf { it.isNotEmpty() },
                         ),
                     )
                     onDone()
