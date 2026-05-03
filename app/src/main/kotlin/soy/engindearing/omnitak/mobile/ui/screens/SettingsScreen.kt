@@ -26,7 +26,10 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -79,17 +82,29 @@ fun SettingsScreen() {
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             SectionHeader("Identity")
+            // GAP-103 — local state insulates the field from DataStore round-trip
+            // latency, otherwise every keystroke re-emits prefs.callsign and the
+            // cursor jumps. The remember-key resyncs when prefs change externally.
+            var callsignDraft by remember(prefs.callsign) { mutableStateOf(prefs.callsign) }
             OutlinedTextField(
-                value = prefs.callsign,
-                onValueChange = { v -> mutate { it.copy(callsign = v) } },
+                value = callsignDraft,
+                onValueChange = { v ->
+                    callsignDraft = v
+                    mutate { it.copy(callsign = v) }
+                },
                 label = { Text("Callsign") },
                 singleLine = true,
                 colors = settingsFieldColors(),
                 modifier = Modifier.fillMaxWidth(),
             )
+            var teamDraft by remember(prefs.team) { mutableStateOf(prefs.team) }
             OutlinedTextField(
-                value = prefs.team,
-                onValueChange = { v -> mutate { it.copy(team = v.uppercase()) } },
+                value = teamDraft,
+                onValueChange = { v ->
+                    val up = v.uppercase()
+                    teamDraft = up
+                    mutate { it.copy(team = up) }
+                },
                 label = { Text("Team") },
                 singleLine = true,
                 colors = settingsFieldColors(),
@@ -128,7 +143,7 @@ fun SettingsScreen() {
                 onSelect = { v -> mutate { it.copy(mapProvider = v) } },
             )
             Text(
-                "Only OSM is wired today. Satellite and Topo ship when we have an approved tile source with an offline cache path.",
+                "OSM (street), Topo (OpenTopoMap), Satellite (Esri imagery). Pick changes apply immediately. Offline tile cache lands in a later release.",
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                 style = MaterialTheme.typography.bodySmall,
             )

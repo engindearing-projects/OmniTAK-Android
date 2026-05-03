@@ -27,6 +27,7 @@ import org.maplibre.android.maps.Style
 import soy.engindearing.omnitak.mobile.data.Aircraft
 import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.Drawing
+import soy.engindearing.omnitak.mobile.data.MapProvider
 
 /**
  * MapLibre-backed map surface. Forwards Android lifecycle events to the
@@ -46,7 +47,7 @@ import soy.engindearing.omnitak.mobile.data.Drawing
 fun TacticalMap(
     initialCenter: LatLng = LatLng(47.6588, -117.4260),  // Spokane, WA
     initialZoom: Double = 11.0,
-    styleJson: String = TACTICAL_DARK_STYLE,
+    styleJson: String = TACTICAL_STYLE_DARK_MATTER,
     onMapLongPress: ((LatLng, Offset) -> Unit)? = null,
     onContactTap: ((CoTEvent) -> Unit)? = null,
     onMapSingleTap: ((LatLng) -> Boolean)? = null,
@@ -193,6 +194,27 @@ fun TacticalMap(
     DisposableEffect(mapView, contacts) {
         mapView.getMapAsync { map ->
             if (map.style != null) ContactLayer.update(map, contacts)
+        }
+        onDispose { }
+    }
+
+    // GAP-101 — react to basemap selection from Settings. Re-applies the
+    // entire style JSON so the operational layers (which live inline in the
+    // style JSON to dodge the MapLibre-Android addLayer GL quirk) keep
+    // rendering. Layer GeoJSON is re-pushed once the new style finishes loading.
+    DisposableEffect(mapView, styleJson) {
+        mapView.getMapAsync { map ->
+            // Skip the first emission — the initial setStyle is handled by the
+            // getMapAsync block during MapView construction (line ~88).
+            if (map.style != null && map.style?.json != styleJson) {
+                map.setStyle(Style.Builder().fromJson(styleJson)) { _ ->
+                    ContactLayer.update(map, currentContacts)
+                    MeasurementLayer.update(map, currentMeasurementPoints)
+                    DrawingLayer.update(map, currentDrawings)
+                    currentGridCenter?.let { GridLayer.update(map, it) }
+                    AircraftLayer.update(map, currentAircraft)
+                }
+            }
         }
         onDispose { }
     }
@@ -376,20 +398,40 @@ private const val TAP_HIT_RADIUS_PX = 72f
  * `ContactLayer.update` pushes fresh feature data to the existing
  * source via `setGeoJson`.
  */
-const val TACTICAL_DARK_STYLE = """
+/**
+ * Build a tactical-overlay style JSON wrapped around any XYZ raster
+ * basemap. The operational layers (contacts, measurements, drawings,
+ * grid, aircraft) live inline so MapLibre-Android renders them on the
+ * first style load — a workaround for the addLayer GL quirk noted on
+ * the original const below.
+ *
+ * GAP-101 — extracted from the original TACTICAL_DARK_STYLE so the
+ * basemap raster source can be swapped per [MapProvider] preference
+ * without losing the overlays.
+ */
+internal fun buildTacticalStyle(name: String, basemapTiles: String, attribution: String): String =
+    TACTICAL_STYLE_HEAD
+        .replace("@@NAME@@", name)
+        .replace("@@TILES@@", basemapTiles)
+        .replace("@@ATTRIBUTION@@", attribution) + TACTICAL_STYLE_OVERLAYS
+
+private const val TACTICAL_STYLE_HEAD = """
 {
   "version": 8,
-  "name": "OmniTAK Tactical Dark",
+  "name": "@@NAME@@",
   "sources": {
     "basemap": {
       "type": "raster",
       "tiles": [
-        "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
+        "@@TILES@@"
       ],
       "tileSize": 256,
       "maxzoom": 20,
-      "attribution": "© OpenStreetMap contributors © CARTO"
-    },
+      "attribution": "@@ATTRIBUTION@@"
+    }
+"""
+
+private const val TACTICAL_STYLE_OVERLAYS = """,
     "contacts-src": {
       "type": "geojson",
       "data": {"type": "FeatureCollection", "features": []}
@@ -547,3 +589,41 @@ const val TACTICAL_DARK_STYLE = """
   ]
 }
 """
+
+// Per-provider tactical styles. All wrap the same operational overlays
+// around different XYZ raster basemaps. License notes:
+//  - OSM: Standard Tile Layer; usage policy applies, fine for low-volume
+//  - Topo: OpenTopoMap CC-BY-SA, fine for non-commercial
+//  - Satellite: ESRI World Imagery, fine for non-commercial
+//  - Dark: CARTO Dark Matter, free with attribution
+val TACTICAL_STYLE_OSM = buildTacticalStyle(
+    "OmniTAK OSM",
+    "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    "© OpenStreetMap contributors",
+)
+val TACTICAL_STYLE_TOPO = buildTacticalStyle(
+    "OmniTAK Topo",
+    "https://a.tile.opentopomap.org/{z}/{x}/{y}.png",
+    "© OpenTopoMap (CC-BY-SA), © OpenStreetMap contributors",
+)
+val TACTICAL_STYLE_SATELLITE = buildTacticalStyle(
+    "OmniTAK Satellite",
+    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    "Imagery © Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+)
+val TACTICAL_STYLE_DARK_MATTER = buildTacticalStyle(
+    "OmniTAK Tactical Dark",
+    "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
+    "© OpenStreetMap contributors © CARTO",
+)
+
+/**
+ * Map a [MapProvider] preference to its style JSON. Default falls back to
+ * the dark tactical style — keeps the existing behaviour if a new enum
+ * case is introduced without a wired style.
+ */
+fun styleJsonForProvider(provider: MapProvider): String = when (provider) {
+    MapProvider.OSM_RASTER -> TACTICAL_STYLE_OSM
+    MapProvider.TOPO_HINT -> TACTICAL_STYLE_TOPO
+    MapProvider.SATELLITE_HINT -> TACTICAL_STYLE_SATELLITE
+}

@@ -80,6 +80,22 @@ Features Android has that iOS may benefit from. Same triage.
 
 - [ ] **GAP-090** None known yet — to be filled in as discovered
 
+### P11 — Android closed-test feedback (P-E, May 2026)
+Real practitioner feedback from Android closed test. Some are bugs to fix, some are features to add. iOS may have the same issues — audit during port.
+
+- [~] **GAP-100** Callsign on main screen stuck at hardcoded `"OMNI-1"` — `MapScreen.kt` was passing a literal string instead of `userPrefs.callsign`. **Code shipped — awaiting SxS verification on emulator before final tick.**
+- [~] **GAP-101** Map tile picker (Settings) didn't switch the basemap — `TacticalMap` defaulted to CARTO Dark and `MapScreen` never overrode it. Now wires `MapProvider` enum to a per-provider style JSON (OSM standard / OpenTopoMap / Esri World Imagery / CARTO Dark) and re-applies via `DisposableEffect(styleJson)`. Settings copy updated. **Code shipped — awaiting SxS.**
+- [ ] **GAP-102** Top-left + top-right hamburger menus on main screen don't open anything. Wire to drawer/menu handlers.
+- [~] **GAP-103** Settings text fields jumpy — DataStore round-trip on every keystroke. Local `mutableStateOf` draft now insulates the field from re-emission; remember-key re-syncs on external changes. Fixed for Callsign and Team. **Code shipped — awaiting SxS.**
+- [ ] **GAP-104** Team field is free-text — should be ATAK standard color dropdown (Cyan / Yellow / Magenta / Red / Green / Orange / Brown / Purple / Black / White) for CoT compatibility. Same change on iOS.
+- [ ] **GAP-105** No menu entry for server auth — operators can't enter credentials or scan a server-config QR. Add Settings → Server with username / password / endpoint URL fields, plus a QR-scan path that imports an ATAK data package zip.
+- [ ] **GAP-106** Add UTM to coordinate format toggle (currently Lat/Lon Decimal, DMS, MGRS). Same change on iOS.
+- [ ] **GAP-107** Custom WMTS basemap source — let operators paste a WMTS endpoint as an additional basemap option. Practitioners use private/agency WMTS tiles.
+
+### P12 — Roadmap (bigger asks)
+- [ ] **GAP-108** Server-pushed app config / data package settings. Operator pushes settings (PLI intervals, default basemap, server URL, callsign rules) to clients via OpenTAKserver, config file, or `.zip` data package. Real differentiator vs ATAK / iTAK / TAKaware. Source of complaint: 80-node airsoft event needing centralised PLI intervals.
+- [ ] **GAP-109** Meshtastic device settings UI — full control of connected node config (radio settings, channels, PLI cadence, role). Reference: github.com/cubeos-app/meshsat-android, github.com/torlando-tech/columba.
+
 ## How to work a parity gap
 
 1. Pick an unchecked GAP that's not blocked by a higher-priority one
