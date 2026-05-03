@@ -49,7 +49,7 @@ import soy.engindearing.omnitak.mobile.ui.theme.TacticalSurface
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MeshtasticScreen() {
+fun MeshtasticScreen(onOpenDeviceSettings: () -> Unit = {}) {
     val app = LocalContext.current.applicationContext as OmniTAKApp
     val mesh = app.meshtastic
     val connectionState by mesh.state.collectAsState()
@@ -135,6 +135,19 @@ fun MeshtasticScreen() {
                     ) { Text("Disconnect") }
                 }
             }
+
+            HorizontalDivider(color = TacticalSurface)
+
+            SectionHeader("Device")
+            Text(
+                "Configure the connected radio's owner identity, role, PLI cadence, and primary channel.",
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            OutlinedButton(
+                onClick = onOpenDeviceSettings,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Device settings") }
 
             HorizontalDivider(color = TacticalSurface)
 

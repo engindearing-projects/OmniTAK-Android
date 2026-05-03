@@ -1,6 +1,7 @@
 package soy.engindearing.omnitak.mobile
 
 import android.app.Application
+import soy.engindearing.omnitak.mobile.data.MeshDeviceConfigStore
 import soy.engindearing.omnitak.mobile.data.TAKServerStore
 import soy.engindearing.omnitak.mobile.data.UserPrefsStore
 import soy.engindearing.omnitak.mobile.domain.ChatStore
@@ -16,6 +17,7 @@ class OmniTAKApp : Application() {
     val drawingStore: DrawingStore by lazy { DrawingStore() }
     val chatStore: ChatStore by lazy { ChatStore() }
     val meshtastic: MeshtasticManager by lazy { MeshtasticManager() }
+    val meshDeviceConfigStore: MeshDeviceConfigStore by lazy { MeshDeviceConfigStore(this) }
     val userPrefsStore: UserPrefsStore by lazy { UserPrefsStore(this) }
     val serverManager: ServerManager by lazy {
         ServerManager(TAKServerStore(this), contactStore, chatStore)

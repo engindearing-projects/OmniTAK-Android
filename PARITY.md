@@ -80,6 +80,11 @@ Features Android has that iOS may benefit from. Same triage.
 
 - [ ] **GAP-090** None known yet — to be filled in as discovered
 
+### P11 — Meshtastic device control
+Operator-driven asks from the field — the 80-node airsoft event in particular needed full radio configuration without leaving OmniTAK. Reference clients: [meshsat-android](https://github.com/cubeos-app/meshsat-android), [columba](https://github.com/torlando-tech/columba).
+
+- [~] **GAP-109** Meshtastic device settings UI — full control of connected node config (radio settings, channels, PLI cadence, role). **Code shipped — awaiting SxS.** Android: `MeshDeviceSettingsScreen.kt` reachable via "Device settings" on the Mesh tab — covers long/short name, role (CLIENT / CLIENT_MUTE / ROUTER / ROUTER_CLIENT / REPEATER / TRACKER / TAK / etc.), PLI broadcast interval (with 15/30/60/120/300 s quick-pick), and primary channel name + LoRa preset (LONG_FAST / LONG_SLOW / etc.). Backed by `MeshDeviceConfigStore` (DataStore). **Write-to-device + read-back from device are gated** — both depend on the Meshtastic admin protobuf (`AdminMessage` / `set_owner` / `set_config`) which still needs the `.proto` set wired into the Gradle build. Screen surfaces a clear "push to device — coming soon" banner. iOS parity work has not started.
+
 ## How to work a parity gap
 
 1. Pick an unchecked GAP that's not blocked by a higher-priority one
