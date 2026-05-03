@@ -253,7 +253,27 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
                 },
             )
 
-            ComingSoonNote()
+            // GAP-109a — push-to-device. Calls MeshtasticManager.pushDeviceConfig
+            // which serialises 5 AdminMessages (set_owner, set_role, PLI, channel
+            // name, LoRa preset) and dispatches them over the active transport.
+            PushToDeviceRow(
+                connected = deviceConnected,
+                onPush = {
+                    val toPush = draft
+                    scope.launch {
+                        // Persist the draft first so the UI doesn't drift if
+                        // the radio drops mid-write.
+                        store.update { toPush }
+                        dirty = false
+                        val sent = mesh.pushDeviceConfig(toPush)
+                        savedToast = when (sent) {
+                            5 -> "Pushed all 5 settings to radio"
+                            0 -> "Push failed — check radio connection"
+                            else -> "Pushed $sent of 5 — radio dropped mid-write"
+                        }
+                    }
+                },
+            )
 
             savedToast?.let { msg ->
                 Text(
@@ -293,7 +313,10 @@ private fun DeviceSyncBanner(connectionLabel: String, deviceConnected: Boolean) 
                 style = MaterialTheme.typography.bodyMedium,
             )
             Text(
-                "Edits below save to a local draft. Push-to-device lands when admin protobuf ships.",
+                if (deviceConnected)
+                    "Edits save to a local draft. Push to device when ready."
+                else
+                    "Edits save to a local draft. Connect a radio on the Mesh tab to push.",
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
                 style = MaterialTheme.typography.labelSmall,
             )
@@ -313,6 +336,36 @@ private fun MeshSection(text: String) {
     )
 }
 
+/**
+ * GAP-109a — primary action when a radio is connected: push the
+ * draft config to the device via portnum-6 AdminMessage. When no
+ * radio is connected, fall back to the [ComingSoonNote] copy so the
+ * operator knows what's missing.
+ */
+@Composable
+private fun PushToDeviceRow(connected: Boolean, onPush: () -> Unit) {
+    if (!connected) {
+        ComingSoonNote()
+        return
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(46.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(TacticalAccent)
+            .clickable(onClick = onPush),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            "Push to device",
+            color = TacticalBackground,
+            fontWeight = FontWeight.SemiBold,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+}
+
 @Composable
 private fun ComingSoonNote() {
     Row(
@@ -324,14 +377,14 @@ private fun ComingSoonNote() {
     ) {
         Column {
             Text(
-                "Push to device — coming soon",
+                "Connect a radio to push",
                 color = TacticalAccent,
                 fontWeight = FontWeight.SemiBold,
                 style = MaterialTheme.typography.bodyMedium,
             )
             Text(
-                "Writing config back to a connected radio uses the Meshtastic admin protobuf (AdminMessage / set_owner / set_config). " +
-                    "Wiring those into the OmniTAK build is the next slice — until then, this screen is a draft buffer that syncs once the path opens up.",
+                "Edits live as a local draft until you connect a Meshtastic node. Once you do, this turns into a 'Push to device' button that writes the draft via the admin port (5 messages: owner, role, PLI cadence, channel name, modem preset). " +
+                    "Acks come back as routing frames — surfacing them in the UI is filed as GAP-109b.",
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 4.dp),

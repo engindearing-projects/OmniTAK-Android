@@ -13,7 +13,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
+import soy.engindearing.omnitak.mobile.data.AdminMessageSerializer
 import soy.engindearing.omnitak.mobile.data.AtakPluginParser
+import soy.engindearing.omnitak.mobile.data.MeshDeviceConfig
 import soy.engindearing.omnitak.mobile.data.AtakPluginSerializer
 import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.FromRadioFrame
@@ -299,6 +301,42 @@ class MeshtasticManager(private val context: Context? = null) {
             MeshConnectionType.BLUETOOTH -> bleClient?.sendToRadio(toRadio) ?: false
             null -> false
         }
+    }
+
+    /**
+     * GAP-109a — push the operator's draft device config to the connected
+     * radio via portnum-6 (ADMIN_APP) AdminMessage payloads.
+     *
+     * Splits the config across four admin messages because the firmware
+     * groups settings into separate protobuf submessages. Sends them
+     * sequentially over the active transport; each one is a fully-framed
+     * `ToRadio`, so a single missed write doesn't corrupt the others.
+     *
+     * Returns the count of messages successfully dispatched (0..4). The
+     * caller can surface this to the operator — e.g. "3 of 4 settings
+     * pushed; retry?". Doesn't wait for AdminMessage acks: those come
+     * back as `FromRadio.routing` frames and would need protobuf decode
+     * we haven't built yet (filed under GAP-109b).
+     */
+    suspend fun pushDeviceConfig(config: MeshDeviceConfig): Int {
+        val transport = _activeTransport.value ?: return 0
+
+        val messages = listOf(
+            AdminMessageSerializer.buildSetOwner(config.longName, config.shortName),
+            AdminMessageSerializer.buildSetDeviceRole(config.role),
+            AdminMessageSerializer.buildSetPositionBroadcastSecs(config.positionBroadcastSecs),
+            AdminMessageSerializer.buildSetChannel0Name(config.channelName),
+            AdminMessageSerializer.buildSetLoraPreset(config.channelPreset),
+        )
+        var sent = 0
+        for (bytes in messages) {
+            val ok = when (transport) {
+                MeshConnectionType.TCP -> tcpClient.sendBytes(bytes)
+                MeshConnectionType.BLUETOOTH -> bleClient?.sendToRadio(bytes) ?: false
+            }
+            if (ok) sent += 1 else break // bail on first failure so we don't wedge mid-write
+        }
+        return sent
     }
 
     companion object {
