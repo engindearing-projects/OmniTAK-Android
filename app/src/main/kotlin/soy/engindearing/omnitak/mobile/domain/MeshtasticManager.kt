@@ -17,7 +17,13 @@ import soy.engindearing.omnitak.mobile.data.AdminMessageParser
 import soy.engindearing.omnitak.mobile.data.AdminMessageSerializer
 import soy.engindearing.omnitak.mobile.data.AdminResponse
 import soy.engindearing.omnitak.mobile.data.AtakPluginParser
+import soy.engindearing.omnitak.mobile.data.ChatMessage
+import soy.engindearing.omnitak.mobile.data.ChatStatus
 import soy.engindearing.omnitak.mobile.data.MeshDeviceConfig
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import soy.engindearing.omnitak.mobile.data.AtakPluginSerializer
 import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.FromRadioFrame
@@ -300,9 +306,121 @@ class MeshtasticManager(private val context: Context? = null) {
                     Log.v(TAG, "RX admin packet from=${packet.from} payload=${packet.payload.size}B (unrecognised)")
                 }
             }
+            PORTNUM_TEXT_MESSAGE_APP -> {
+                // GAP-122 — Meshtastic text message. Payload is plain UTF-8.
+                // We surface it as a ChatMessage in conversation "MESH-CHn"
+                // where n is the channel index it arrived on. The Chat tab
+                // picks these up via the chatSink wired in OmniTAKApp.
+                val text = runCatching { String(packet.payload, Charsets.UTF_8) }.getOrNull()
+                if (text.isNullOrEmpty()) return
+                val nodeId = packet.from.toLong() and 0xFFFFFFFFL
+                val node = _nodes.value[nodeId]
+                val callsign = node?.longName?.takeIf { it.isNotBlank() }
+                    ?: node?.shortName?.takeIf { it.isNotBlank() }
+                    ?: "Node ${"%08x".format(nodeId.toInt())}"
+                val now = System.currentTimeMillis()
+                val nowIso = chatTimeFormatter.format(Date(now))
+                val conversationId = meshConversationId(packet.channel.toInt())
+                val msg = ChatMessage(
+                    conversationId = conversationId,
+                    senderUid = "MESHTASTIC-${"%08X".format(nodeId.toInt())}",
+                    senderCallsign = callsign,
+                    text = text,
+                    timeIso = nowIso,
+                    status = ChatStatus.RECEIVED,
+                    isFromSelf = false,
+                )
+                Log.i(TAG, "RX mesh text from $callsign on ch${packet.channel}: $text")
+                runCatching { chatSink?.invoke(msg) }
+                    .onFailure { Log.w(TAG, "chatSink failed: ${it.message}") }
+            }
             else -> Log.v(TAG, "MeshPacket portnum=${packet.portnum} from=${packet.from} payload=${packet.payload.size}B")
         }
     }
+
+    /**
+     * GAP-122 — listener for decoded Meshtastic text messages. Wired in
+     * [OmniTAKApp] to [ChatStore.ingest] so the Chat tab surfaces them
+     * in a "Mesh: channel N" conversation.
+     */
+    @Volatile var chatSink: ((ChatMessage) -> Unit)? = null
+
+    /**
+     * GAP-122 — send a text message over the Meshtastic transport on
+     * the requested channel. Builds a ToRadio with portnum=1
+     * (TEXT_MESSAGE_APP) and dispatches via the active TCP / BLE.
+     * Returns true on successful wire-layer dispatch.
+     */
+    suspend fun sendMeshChat(text: String, channelIndex: Int = 0): Boolean {
+        if (text.isEmpty()) return false
+        val transport = _activeTransport.value ?: return false
+        val payload = text.toByteArray(Charsets.UTF_8)
+        val toRadio = soy.engindearing.omnitak.mobile.data.AtakPluginSerializer.buildToRadio(
+            payloadBytes = ByteArray(0), // we override portnum manually below — see note
+            channelIndex = channelIndex.toUInt(),
+        )
+        // We can't reuse AtakPluginSerializer directly (it hardcodes portnum
+        // to 72). Use the dedicated helper below instead.
+        val frame = buildTextMessageToRadio(payload, channelIndex.toUInt())
+        return when (transport) {
+            MeshConnectionType.TCP -> tcpClient.sendBytes(frame)
+            MeshConnectionType.BLUETOOTH -> bleClient?.sendToRadio(frame) ?: false
+        }
+    }
+
+    /** Build a ToRadio { MeshPacket { Data { portnum=1, payload } } } frame. */
+    private fun buildTextMessageToRadio(text: ByteArray, channelIndex: UInt): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        // Data { 1=portnum varint=1, 2=payload bytes=text }
+        val data = java.io.ByteArrayOutputStream().apply {
+            // tag (1<<3)|0 = 0x08, varint 1
+            write(0x08); write(0x01)
+            // tag (2<<3)|2 = 0x12, length-delim
+            write(0x12)
+            writeVarintTo(this, text.size.toULong())
+            write(text)
+        }.toByteArray()
+        // MeshPacket { 2=to fixed32, 3=channel varint (if non-zero), 4=decoded data, 6=id fixed32, 10=want_ack varint=0 }
+        val pkt = java.io.ByteArrayOutputStream().apply {
+            // to: fixed32 broadcast
+            write(0x15)
+            write(byteArrayOf(0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte()))
+            // channel
+            if (channelIndex != 0u) {
+                write(0x18); writeVarintTo(this, channelIndex.toULong())
+            }
+            // decoded data submessage
+            write(0x22)
+            writeVarintTo(this, data.size.toULong())
+            write(data)
+            // id: random non-zero fixed32
+            val id = (1..Int.MAX_VALUE).random()
+            write(0x35)
+            write(byteArrayOf(
+                (id and 0xFF).toByte(),
+                ((id shr 8) and 0xFF).toByte(),
+                ((id shr 16) and 0xFF).toByte(),
+                ((id shr 24) and 0xFF).toByte(),
+            ))
+        }.toByteArray()
+        // ToRadio { 1=packet length-delim }
+        out.write(0x0A)
+        writeVarintTo(out, pkt.size.toULong())
+        out.write(pkt)
+        return out.toByteArray()
+    }
+
+    private fun writeVarintTo(out: java.io.OutputStream, value: ULong) {
+        var v = value
+        while (v >= 0x80uL) {
+            out.write(((v and 0x7FuL).toInt()) or 0x80)
+            v = v shr 7
+        }
+        out.write(v.toInt() and 0x7F)
+    }
+
+    /** Conversation id used by [ChatStore] to bucket incoming mesh text by channel. */
+    fun meshConversationId(channelIndex: Int): String = "MESH-CH$channelIndex"
 
     /**
      * GAP-109 read-back — listener for decoded AdminMessage responses.
@@ -402,12 +520,18 @@ class MeshtasticManager(private val context: Context? = null) {
 
     companion object {
         private const val TAG = "MeshtasticManager"
+        private const val PORTNUM_TEXT_MESSAGE_APP = 1
         private const val PORTNUM_POSITION_APP = 3
         private const val PORTNUM_ADMIN_APP = 6
         // ConfigType enum values (admin.proto)
         private const val GET_CONFIG_DEVICE = 0
         private const val GET_CONFIG_POSITION = 1
         private const val GET_CONFIG_LORA = 5
+
+        private val chatTimeFormatter = SimpleDateFormat(
+            "yyyy-MM-dd'T'HH:mm:ss'Z'",
+            Locale.US,
+        ).apply { timeZone = TimeZone.getTimeZone("UTC") }
         private const val PORTNUM_ATAK_PLUGIN = 72
         // Some ATAK plugin builds send via portnum 257 (ATAK_FORWARDER)
         // — accept both so OmniTAK can interop with both clients.

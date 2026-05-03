@@ -34,6 +34,21 @@ class ChatStore {
     private val _messagesByConversation = MutableStateFlow<Map<String, List<ChatMessage>>>(emptyMap())
     val messagesByConversation: StateFlow<Map<String, List<ChatMessage>>> = _messagesByConversation.asStateFlow()
 
+    /**
+     * GAP-122 — let domain code (eg. MeshtasticManager → ChatStore wire-up
+     * in OmniTAKApp) seed a conversation header up-front, before any
+     * message arrives. Used so the Chat tab shows "Mesh: Primary" as a
+     * channel even when no traffic has come through yet.
+     */
+    fun upsertConversationIfMissing(id: String, title: String, isGroup: Boolean = true) {
+        if (_conversations.value.containsKey(id)) return
+        _conversations.value = _conversations.value + (id to ChatConversation(
+            id = id,
+            title = title,
+            isGroup = isGroup,
+        ))
+    }
+
     fun ingest(message: ChatMessage) {
         val existing = _messagesByConversation.value[message.conversationId].orEmpty()
         if (existing.any { it.id == message.id }) return

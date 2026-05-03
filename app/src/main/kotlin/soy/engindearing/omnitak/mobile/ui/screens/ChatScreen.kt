@@ -77,6 +77,7 @@ fun ChatScreen() {
     val conversations by app.chatStore.conversations.collectAsState()
     val messagesByConvo by app.chatStore.messagesByConversation.collectAsState()
     val prefs by app.userPrefsStore.prefs.collectAsState(initial = UserPrefs())
+    val chatScope = rememberCoroutineScope()
 
     var selectedConversation by remember { mutableStateOf<String?>(null) }
 
@@ -101,7 +102,7 @@ fun ChatScreen() {
             selfUid = selfUidFor(prefs),
             selfCallsign = prefs.callsign,
             onBack = { selectedConversation = null },
-            onSend = { text -> sendChat(app, convo, prefs, text) },
+            onSend = { text -> sendChat(app, convo, prefs, text, chatScope) },
         )
     }
 }
@@ -377,8 +378,38 @@ private fun sendChat(
     convo: ChatConversation,
     prefs: UserPrefs,
     text: String,
+    scope: kotlinx.coroutines.CoroutineScope,
 ) {
     val senderUid = selfUidFor(prefs)
+    val now = DateTimeFormatter.ISO_INSTANT.format(Instant.now())
+
+    // GAP-122 — Mesh conversations route through MeshtasticManager
+    // (portnum 1) instead of the TAK server's CoT GeoChat path.
+    if (convo.id.startsWith("MESH-CH")) {
+        val channelIndex = convo.id.removePrefix("MESH-CH").toIntOrNull() ?: 0
+        val msgId = UUID.randomUUID().toString()
+        val outgoing = ChatMessage(
+            id = msgId,
+            conversationId = convo.id,
+            senderUid = senderUid,
+            senderCallsign = prefs.callsign,
+            text = text,
+            timeIso = now,
+            status = ChatStatus.SENDING,
+            isFromSelf = true,
+        )
+        app.chatStore.markOutgoing(outgoing)
+        scope.launch {
+            val sent = app.meshtastic.sendMeshChat(text, channelIndex)
+            app.chatStore.updateMessageStatus(
+                conversationId = convo.id,
+                messageId = msgId,
+                status = if (sent) ChatStatus.SENT else ChatStatus.FAILED,
+            )
+        }
+        return
+    }
+
     val recipient = convo.participants.firstOrNull { it.uid != senderUid }
     val isGroup = convo.isGroup
 
@@ -391,7 +422,6 @@ private fun sendChat(
         recipientCallsign = recipient?.callsign,
         messageId = UUID.randomUUID().toString(),
     )
-    val now = DateTimeFormatter.ISO_INSTANT.format(Instant.now())
     val message = ChatMessage(
         id = generated.messageId,
         conversationId = convo.id,

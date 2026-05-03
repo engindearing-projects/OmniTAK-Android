@@ -23,7 +23,16 @@ class OmniTAKApp : Application() {
     private val appScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     val contactStore: ContactStore by lazy { ContactStore() }
     val drawingStore: DrawingStore by lazy { DrawingStore() }
-    val chatStore: ChatStore by lazy { ChatStore() }
+    val chatStore: ChatStore by lazy {
+        ChatStore().also { store ->
+            // GAP-122 — Mesh primary channel always visible so users can
+            // open it before any text traffic has arrived.
+            store.upsertConversationIfMissing(
+                id = "MESH-CH0",
+                title = "Mesh: Primary",
+            )
+        }
+    }
     val meshtastic: MeshtasticManager by lazy {
         MeshtasticManager(this).also { mgr ->
             // Phase 4: portnum-72 ATAK-plugin payloads decode straight
@@ -35,6 +44,19 @@ class OmniTAKApp : Application() {
             // coroutine. Screen collects from the store and re-renders.
             mgr.adminResponseSink = { response ->
                 appScope.launch { meshDeviceConfigStore.applyAdminResponse(response) }
+            }
+            // GAP-122 — ingest mesh text messages into the same ChatStore
+            // the TAK GeoChat path uses, so the Chat tab shows mesh chat
+            // alongside server chat. Conversation id is "MESH-CHn" per the
+            // channel the message arrived on.
+            mgr.chatSink = { msg ->
+                chatStore.upsertConversationIfMissing(
+                    id = msg.conversationId,
+                    title = msg.conversationId.removePrefix("MESH-CH").let { ch ->
+                        if (ch == "0") "Mesh: Primary" else "Mesh: Channel $ch"
+                    },
+                )
+                chatStore.ingest(msg)
             }
         }
     }

@@ -1,6 +1,7 @@
 package soy.engindearing.omnitak.mobile.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -441,18 +442,30 @@ private fun NodeList(nodes: List<MeshNode>) {
     // LazyColumn measures with infinite height and crashes the moment
     // there's at least one item to render. Mesh node lists max out at
     // a few dozen even on huge events, so virtualization isn't needed.
+    var detailNode by remember { mutableStateOf<MeshNode?>(null) }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        nodes.forEach { n -> NodeRow(n) }
+        nodes.forEach { n ->
+            NodeRow(node = n, onClick = { detailNode = n })
+        }
+    }
+    detailNode?.let { selected ->
+        // GAP-121 — surface the full record (works for position-less
+        // nodes too) on tap.
+        soy.engindearing.omnitak.mobile.ui.components.MeshNodeDetailSheet(
+            node = selected,
+            onDismiss = { detailNode = null },
+        )
     }
 }
 
 @Composable
-private fun NodeRow(node: MeshNode) {
+private fun NodeRow(node: MeshNode, onClick: () -> Unit = {}) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
             .background(TacticalSurface)
+            .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
