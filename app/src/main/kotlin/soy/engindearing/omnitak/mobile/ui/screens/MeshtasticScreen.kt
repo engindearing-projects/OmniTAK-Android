@@ -436,10 +436,13 @@ private fun KeyValueRow(label: String, value: String) {
 
 @Composable
 private fun NodeList(nodes: List<MeshNode>) {
-    LazyColumn(
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        items(nodes, key = { it.id }) { n -> NodeRow(n) }
+    // Plain Column instead of LazyColumn — the parent Mesh screen is
+    // already inside `Column(Modifier.verticalScroll(...))` so a nested
+    // LazyColumn measures with infinite height and crashes the moment
+    // there's at least one item to render. Mesh node lists max out at
+    // a few dozen even on huge events, so virtualization isn't needed.
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        nodes.forEach { n -> NodeRow(n) }
     }
 }
 
