@@ -72,14 +72,23 @@ import java.util.UUID
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatScreen() {
+fun ChatScreen(initialConversationId: String? = null) {
     val app = LocalContext.current.applicationContext as OmniTAKApp
     val conversations by app.chatStore.conversations.collectAsState()
     val messagesByConvo by app.chatStore.messagesByConversation.collectAsState()
     val prefs by app.userPrefsStore.prefs.collectAsState(initial = UserPrefs())
     val chatScope = rememberCoroutineScope()
 
-    var selectedConversation by remember { mutableStateOf<String?>(null) }
+    // GAP-124 — when arriving with an initial convo id (eg. from the
+    // node-detail sheet's "Message" button), open that conversation
+    // straight away instead of dropping the user on the conversation list.
+    var selectedConversation by remember(initialConversationId) {
+        mutableStateOf(initialConversationId)
+    }
+    LaunchedEffect(selectedConversation) {
+        val id = selectedConversation ?: return@LaunchedEffect
+        app.chatStore.markRead(id)
+    }
 
     if (selectedConversation == null) {
         ConversationListView(
@@ -383,10 +392,18 @@ private fun sendChat(
     val senderUid = selfUidFor(prefs)
     val now = DateTimeFormatter.ISO_INSTANT.format(Instant.now())
 
-    // GAP-122 — Mesh conversations route through MeshtasticManager
-    // (portnum 1) instead of the TAK server's CoT GeoChat path.
-    if (convo.id.startsWith("MESH-CH")) {
-        val channelIndex = convo.id.removePrefix("MESH-CH").toIntOrNull() ?: 0
+    // GAP-122 / GAP-124 — Mesh conversations route through
+    // MeshtasticManager (portnum 1) instead of the TAK server's CoT
+    // GeoChat path. Channel chat → broadcast on a channel index;
+    // DM → directed packet to the peer's nodenum (parsed back from the
+    // 8-hex-char suffix on the convo id).
+    if (convo.id.startsWith("MESH-CH") || convo.id.startsWith("MESH-DM-")) {
+        val channelIndex = if (convo.id.startsWith("MESH-CH")) {
+            convo.id.removePrefix("MESH-CH").toIntOrNull() ?: 0
+        } else 0
+        val toNodeId: UInt? = if (convo.id.startsWith("MESH-DM-")) {
+            convo.id.removePrefix("MESH-DM-").toLongOrNull(16)?.toUInt()
+        } else null
         val msgId = UUID.randomUUID().toString()
         val outgoing = ChatMessage(
             id = msgId,
@@ -400,7 +417,7 @@ private fun sendChat(
         )
         app.chatStore.markOutgoing(outgoing)
         scope.launch {
-            val sent = app.meshtastic.sendMeshChat(text, channelIndex)
+            val sent = app.meshtastic.sendMeshChat(text, channelIndex, toNodeId)
             app.chatStore.updateMessageStatus(
                 conversationId = convo.id,
                 messageId = msgId,

@@ -60,14 +60,26 @@ class OmniTAKApp : Application() {
             }
             // GAP-122 — ingest mesh text messages into the same ChatStore
             // the TAK GeoChat path uses, so the Chat tab shows mesh chat
-            // alongside server chat. Conversation id is "MESH-CHn" per the
-            // channel the message arrived on.
+            // alongside server chat.
+            //
+            // GAP-124 — DM bucket "MESH-DM-{otherNodeIdHex}" titled with
+            // the sender's callsign; broadcast bucket "MESH-CHn" titled
+            // with the channel name (or placeholder when the radio
+            // hasn't read back yet).
             mgr.chatSink = { msg ->
+                val title = when {
+                    msg.conversationId.startsWith("MESH-DM-") -> "DM: ${msg.senderCallsign}"
+                    msg.conversationId == "MESH-CH0" -> "Mesh: Primary"
+                    msg.conversationId.startsWith("MESH-CH") -> {
+                        val ch = msg.conversationId.removePrefix("MESH-CH")
+                        "Mesh: Channel $ch"
+                    }
+                    else -> msg.senderCallsign
+                }
                 chatStore.upsertConversationIfMissing(
                     id = msg.conversationId,
-                    title = msg.conversationId.removePrefix("MESH-CH").let { ch ->
-                        if (ch == "0") "Mesh: Primary" else "Mesh: Channel $ch"
-                    },
+                    title = title,
+                    isGroup = !msg.conversationId.startsWith("MESH-DM-"),
                 )
                 chatStore.ingest(msg)
             }

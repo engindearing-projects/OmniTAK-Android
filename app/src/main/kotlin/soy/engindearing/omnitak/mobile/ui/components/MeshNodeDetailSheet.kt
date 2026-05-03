@@ -13,11 +13,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,6 +48,7 @@ import java.util.TimeZone
 fun MeshNodeDetailSheet(
     node: MeshNode,
     onDismiss: () -> Unit,
+    onMessage: (() -> Unit)? = null,
 ) {
     val sheet = rememberModalBottomSheetState()
     ModalBottomSheet(
@@ -114,6 +118,22 @@ fun MeshNodeDetailSheet(
             node.hopDistance?.let { DetailRow("Hops away", "$it") }
             node.batteryLevel?.let { DetailRow("Battery", "$it%") }
             DetailRow("Last heard", formatLastHeard(node.lastHeardEpoch))
+
+            // GAP-124 — only show "Message" when a callback is wired
+            // (Mesh tab does; map-marker tap may not yet).
+            if (onMessage != null) {
+                Spacer(Modifier.height(6.dp))
+                Button(
+                    onClick = onMessage,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = TacticalAccent,
+                        contentColor = Color.Black,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Message", fontWeight = FontWeight.SemiBold)
+                }
+            }
         }
     }
 }

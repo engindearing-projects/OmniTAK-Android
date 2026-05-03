@@ -84,10 +84,31 @@ fun AppNav() {
                 AddServerScreen(onDone = { nav.popBackStack() })
             }
             composable("chat") { ChatScreen() }
+            composable(
+                route = "chat?convoId={convoId}",
+                arguments = listOf(
+                    androidx.navigation.navArgument("convoId") {
+                        type = androidx.navigation.NavType.StringType
+                        nullable = true
+                        defaultValue = null
+                    },
+                ),
+            ) { backStackEntry ->
+                ChatScreen(initialConversationId = backStackEntry.arguments?.getString("convoId"))
+            }
             composable("mesh") {
                 MeshtasticScreen(
                     onOpenTopology = { nav.navigate("mesh_topology") },
                     onOpenDeviceSettings = { nav.navigate("mesh/device-settings") },
+                    onOpenChat = { convoId ->
+                        // GAP-124 — jump straight into the chat tab with
+                        // the requested conversation pre-selected.
+                        nav.navigate("chat?convoId=$convoId") {
+                            popUpTo(nav.graph.startDestinationId) { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    },
                 )
             }
             composable("mesh_topology") {

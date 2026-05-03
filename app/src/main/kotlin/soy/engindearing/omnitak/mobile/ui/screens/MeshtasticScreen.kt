@@ -70,6 +70,7 @@ import soy.engindearing.omnitak.mobile.ui.theme.TacticalSurface
 fun MeshtasticScreen(
     onOpenTopology: () -> Unit = {},
     onOpenDeviceSettings: () -> Unit = {},
+    onOpenChat: (String) -> Unit = {},
 ) {
     val app = LocalContext.current.applicationContext as OmniTAKApp
     val mesh = app.meshtastic
@@ -190,8 +191,18 @@ fun MeshtasticScreen(
                 )
             }
             when (selectedTab) {
-                0 -> TcpPane(mesh, nodes.values.sortedByDescending { it.lastHeardEpoch }, nodes.size)
-                else -> BlePane(mesh, nodes.values.sortedByDescending { it.lastHeardEpoch }, nodes.size)
+                0 -> TcpPane(
+                    mesh,
+                    nodes.values.sortedByDescending { it.lastHeardEpoch },
+                    nodes.size,
+                    onOpenChat = onOpenChat,
+                )
+                else -> BlePane(
+                    mesh,
+                    nodes.values.sortedByDescending { it.lastHeardEpoch },
+                    nodes.size,
+                    onOpenChat = onOpenChat,
+                )
             }
         }
     }
@@ -203,6 +214,7 @@ private fun TcpPane(
     mesh: MeshtasticManager,
     sortedNodes: List<MeshNode>,
     nodeCount: Int,
+    onOpenChat: (String) -> Unit = {},
 ) {
     val connectionState by mesh.state.collectAsState()
     val bytes by mesh.bytesReceived.collectAsState()
@@ -291,7 +303,7 @@ private fun TcpPane(
                 style = MaterialTheme.typography.bodySmall,
             )
         } else {
-            NodeList(sortedNodes)
+            NodeList(sortedNodes, onOpenChat = onOpenChat)
         }
         Spacer(Modifier.height(16.dp))
     }
@@ -302,6 +314,7 @@ private fun BlePane(
     mesh: MeshtasticManager,
     sortedNodes: List<MeshNode>,
     nodeCount: Int,
+    onOpenChat: (String) -> Unit = {},
 ) {
     // Make sure the BLE client exists so we can observe its state.
     LaunchedEffect(Unit) { mesh.ensureBleReady() }
@@ -396,7 +409,7 @@ private fun BlePane(
                 style = MaterialTheme.typography.bodySmall,
             )
         } else {
-            NodeList(sortedNodes)
+            NodeList(sortedNodes, onOpenChat = onOpenChat)
         }
         Spacer(Modifier.height(16.dp))
     }
@@ -436,12 +449,13 @@ private fun KeyValueRow(label: String, value: String) {
 }
 
 @Composable
-private fun NodeList(nodes: List<MeshNode>) {
+private fun NodeList(nodes: List<MeshNode>, onOpenChat: (String) -> Unit = {}) {
     // Plain Column instead of LazyColumn — the parent Mesh screen is
     // already inside `Column(Modifier.verticalScroll(...))` so a nested
     // LazyColumn measures with infinite height and crashes the moment
     // there's at least one item to render. Mesh node lists max out at
     // a few dozen even on huge events, so virtualization isn't needed.
+    val app = LocalContext.current.applicationContext as OmniTAKApp
     var detailNode by remember { mutableStateOf<MeshNode?>(null) }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         nodes.forEach { n ->
@@ -451,9 +465,23 @@ private fun NodeList(nodes: List<MeshNode>) {
     detailNode?.let { selected ->
         // GAP-121 — surface the full record (works for position-less
         // nodes too) on tap.
+        // GAP-124 — "Message" action seeds a DM conversation with the
+        // node's longName as title, then jumps to the chat tab focused
+        // on that conversation.
         soy.engindearing.omnitak.mobile.ui.components.MeshNodeDetailSheet(
             node = selected,
             onDismiss = { detailNode = null },
+            onMessage = {
+                val convoId = app.meshtastic.meshDmConversationId(selected.id)
+                val title = "DM: ${selected.longName.ifBlank { selected.shortName.ifBlank { selected.idHex } }}"
+                app.chatStore.upsertConversationIfMissing(
+                    id = convoId,
+                    title = title,
+                    isGroup = false,
+                )
+                detailNode = null
+                onOpenChat(convoId)
+            },
         )
     }
 }
