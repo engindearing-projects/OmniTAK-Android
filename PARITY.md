@@ -91,6 +91,8 @@ Real practitioner feedback from Android closed test. Some are bugs to fix, some 
 - [~] **GAP-105** Server auth menu — partial: server-icon tap on the status bar now opens the Servers tab (was dead, see GAP-102), and the Add Server form now has username + password fields. Still missing: QR-scan path for ATAK data package import. **Code shipped — awaiting SxS.**
 - [ ] **GAP-106** Add UTM to coordinate format toggle (currently Lat/Lon Decimal, DMS, MGRS). Same change on iOS.
 - [ ] **GAP-107** Custom WMTS basemap source — let operators paste a WMTS endpoint as an additional basemap option. Practitioners use private/agency WMTS tiles.
+- [~] **GAP-110** Several main-screen toggles (Layers panel — callsign card, grid, drawings, aircraft, contacts visibility — and Follow Me) didn't survive a relaunch because they lived in `var ... by remember { mutableStateOf(...) }` instead of DataStore. Six new boolean fields on `UserPrefs`; reads alias from `userPrefs`, writes go through `mutatePref { it.copy(...) }`. **Code shipped — awaiting SxS.**
+- [x] **GAP-111** Dead-route audit — every clickable in the UI tree was checked for empty lambdas / TODO callbacks. Clean after GAP-102 wired the only two offenders. No further changes.
 
 ### P12 — Roadmap (bigger asks)
 - [ ] **GAP-108** Server-pushed app config / data package settings. Operator pushes settings (PLI intervals, default basemap, server URL, callsign rules) to clients via OpenTAKserver, config file, or `.zip` data package. Real differentiator vs ATAK / iTAK / TAKaware. Source of complaint: 80-node airsoft event needing centralised PLI intervals.

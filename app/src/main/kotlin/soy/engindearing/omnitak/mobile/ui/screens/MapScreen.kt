@@ -82,6 +82,19 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     // visible — matches iOS.
     val userPrefs by app.userPrefsStore.prefs.collectAsState(initial = soy.engindearing.omnitak.mobile.data.UserPrefs())
     val meshNodesVisible = userPrefs.meshNodesLayerVisible
+    // GAP-110 — persisted UI toggles. These survive relaunch instead of
+    // resetting to defaults each time the user opens the app. Aliases so
+    // existing read sites stay terse.
+    val gridEnabled = userPrefs.gridEnabled
+    val drawingsVisible = userPrefs.drawingsVisible
+    val aircraftVisible = userPrefs.aircraftVisible
+    val contactsVisible = userPrefs.contactsVisible
+    val callsignCardVisible = userPrefs.callsignCardVisible
+    val followMeActive = userPrefs.followMeActive
+    val prefScope = rememberCoroutineScope()
+    fun mutatePref(block: (soy.engindearing.omnitak.mobile.data.UserPrefs) -> soy.engindearing.omnitak.mobile.data.UserPrefs) {
+        prefScope.launch { app.userPrefsStore.update(block) }
+    }
 
     val headerLabel = when (val s = connState) {
         is ConnectionState.Connected -> s.serverName
@@ -111,16 +124,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     var drawingKind by remember { mutableStateOf<DrawingKind?>(null) }
     var drawingPoints by remember { mutableStateOf<List<LatLng>>(emptyList()) }
     var drawingPickerOpen by remember { mutableStateOf(false) }
-    var gridEnabled by remember { mutableStateOf(false) }
-    var drawingsVisible by remember { mutableStateOf(true) }
-    var aircraftVisible by remember { mutableStateOf(true) }
-    var contactsVisible by remember { mutableStateOf(true) }
-    // Default visible — operators can hide it via the layers dialog when it
-    // covers something they need to see (mirrors the iOS toggle).
-    var callsignCardVisible by remember { mutableStateOf(true) }
+    // GAP-110 — gridEnabled, drawingsVisible, aircraftVisible, contactsVisible,
+    // callsignCardVisible, followMeActive are now read from userPrefs (above)
+    // so they survive relaunch.
     var layersSheetOpen by remember { mutableStateOf(false) }
     var teamsPanelOpen by remember { mutableStateOf(false) }
-    var followMeActive by remember { mutableStateOf(false) }
     var panTarget by remember { mutableStateOf<LatLng?>(null) }
     var panTargetTick by remember { mutableStateOf(0) }
     val adsbService = remember { soy.engindearing.omnitak.mobile.data.AdsbService() }
@@ -278,8 +286,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         if (!locationGranted) {
                             toast("Follow-me needs location permission")
                         } else {
-                            followMeActive = !followMeActive
-                            toast(if (followMeActive) "Follow me ON" else "Follow me OFF")
+                            val next = !followMeActive
+                            mutatePref { it.copy(followMeActive = next) }
+                            toast(if (next) "Follow me ON" else "Follow me OFF")
                         }
                     }
                 }
@@ -465,11 +474,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 contactsVisible = contactsVisible,
                 callsignCardVisible = callsignCardVisible,
                 meshNodesVisible = meshNodesVisible,
-                onToggleGrid = { gridEnabled = it },
-                onToggleDrawings = { drawingsVisible = it },
-                onToggleAircraft = { aircraftVisible = it },
-                onToggleContacts = { contactsVisible = it },
-                onToggleCallsignCard = { callsignCardVisible = it },
+                onToggleGrid = { v -> mutatePref { it.copy(gridEnabled = v) } },
+                onToggleDrawings = { v -> mutatePref { it.copy(drawingsVisible = v) } },
+                onToggleAircraft = { v -> mutatePref { it.copy(aircraftVisible = v) } },
+                onToggleContacts = { v -> mutatePref { it.copy(contactsVisible = v) } },
+                onToggleCallsignCard = { v -> mutatePref { it.copy(callsignCardVisible = v) } },
                 onToggleMeshNodes = { v ->
                     scope.launch { app.userPrefsStore.setMeshNodesLayerVisible(v) }
                 },
@@ -483,7 +492,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 onSelect = { c ->
                     panTarget = LatLng(c.lat, c.lon)
                     panTargetTick += 1
-                    if (followMeActive) followMeActive = false
+                    if (followMeActive) mutatePref { it.copy(followMeActive = false) }
                     teamsPanelOpen = false
                     toast("Panning to ${c.callsign ?: c.uid}")
                 },

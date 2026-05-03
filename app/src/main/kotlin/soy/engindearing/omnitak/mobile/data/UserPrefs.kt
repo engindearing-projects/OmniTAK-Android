@@ -37,6 +37,16 @@ data class UserPrefs(
     val mapProvider: MapProvider = MapProvider.OSM_RASTER,
     val autoPublishMeshToTak: Boolean = true,
     val meshNodesLayerVisible: Boolean = true,
+    // GAP-110 — persisted UI toggles. Each one mirrors a switch the operator
+    // hits via the long-press radial menu / Layers sheet / map controls. Used
+    // to evaporate on relaunch (`var X by remember { mutableStateOf(...) }`)
+    // which made the picks feel meaningless.
+    val callsignCardVisible: Boolean = true,
+    val gridEnabled: Boolean = false,
+    val drawingsVisible: Boolean = true,
+    val aircraftVisible: Boolean = true,
+    val contactsVisible: Boolean = true,
+    val followMeActive: Boolean = false,
 )
 
 class UserPrefsStore(private val context: Context) {
@@ -47,6 +57,13 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_MAP = stringPreferencesKey("map_provider")
     private val KEY_AUTO_PUBLISH_MESH = booleanPreferencesKey("auto_publish_mesh_to_tak")
     private val KEY_MESH_LAYER_VISIBLE = booleanPreferencesKey("mesh_nodes_layer_visible")
+    // GAP-110 keys
+    private val KEY_CALLSIGN_CARD = booleanPreferencesKey("callsign_card_visible")
+    private val KEY_GRID = booleanPreferencesKey("grid_enabled")
+    private val KEY_DRAWINGS_VIS = booleanPreferencesKey("drawings_visible")
+    private val KEY_AIRCRAFT_VIS = booleanPreferencesKey("aircraft_visible")
+    private val KEY_CONTACTS_VIS = booleanPreferencesKey("contacts_visible")
+    private val KEY_FOLLOW_ME = booleanPreferencesKey("follow_me_active")
 
     val prefs: Flow<UserPrefs> = context.userPrefsDataStore.data.map { p -> readFrom(p) }
 
@@ -60,6 +77,12 @@ class UserPrefsStore(private val context: Context) {
             p[KEY_MAP] = next.mapProvider.name
             p[KEY_AUTO_PUBLISH_MESH] = next.autoPublishMeshToTak
             p[KEY_MESH_LAYER_VISIBLE] = next.meshNodesLayerVisible
+            p[KEY_CALLSIGN_CARD] = next.callsignCardVisible
+            p[KEY_GRID] = next.gridEnabled
+            p[KEY_DRAWINGS_VIS] = next.drawingsVisible
+            p[KEY_AIRCRAFT_VIS] = next.aircraftVisible
+            p[KEY_CONTACTS_VIS] = next.contactsVisible
+            p[KEY_FOLLOW_ME] = next.followMeActive
         }
     }
 
@@ -85,5 +108,11 @@ class UserPrefsStore(private val context: Context) {
             ?: MapProvider.OSM_RASTER,
         autoPublishMeshToTak = p[KEY_AUTO_PUBLISH_MESH] ?: true,
         meshNodesLayerVisible = p[KEY_MESH_LAYER_VISIBLE] ?: true,
+        callsignCardVisible = p[KEY_CALLSIGN_CARD] ?: true,
+        gridEnabled = p[KEY_GRID] ?: false,
+        drawingsVisible = p[KEY_DRAWINGS_VIS] ?: true,
+        aircraftVisible = p[KEY_AIRCRAFT_VIS] ?: true,
+        contactsVisible = p[KEY_CONTACTS_VIS] ?: true,
+        followMeActive = p[KEY_FOLLOW_ME] ?: false,
     )
 }
