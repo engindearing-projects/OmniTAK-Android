@@ -6,6 +6,26 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
+    <!-- Bluetooth LE for the Meshtastic BLE transport (Android 12+). -->
+    <!-- BLUETOOTH_SCAN with neverForLocation: we don't infer location from
+         scan results, so we don't request the legacy ACCESS_FINE_LOCATION
+         coupling that pre-12 BLE scans needed. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
+    <!-- Legacy permissions (Android 11 and below). -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+
+    <uses-feature
+        android:name="android.hardware.bluetooth_le"
+        android:required="false" />
+
     <application
         android:name=".OmniTAKApp"
         android:allowBackup="false"

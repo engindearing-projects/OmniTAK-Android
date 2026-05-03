@@ -1,27 +1,55 @@
 package soy.engindearing.omnitak.mobile.domain
 
+import android.content.Context
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import java.io.ByteArrayOutputStream
+import soy.engindearing.omnitak.mobile.data.AtakPluginParser
+import soy.engindearing.omnitak.mobile.data.AtakPluginSerializer
+import soy.engindearing.omnitak.mobile.data.CoTEvent
+import soy.engindearing.omnitak.mobile.data.FromRadioFrame
+import soy.engindearing.omnitak.mobile.data.MeshConnectionType
 import soy.engindearing.omnitak.mobile.data.MeshNode
+import soy.engindearing.omnitak.mobile.data.MeshtasticBleClient
+import soy.engindearing.omnitak.mobile.data.MeshtasticProtoParser
 import soy.engindearing.omnitak.mobile.data.MeshtasticTcpClient
 
 /**
- * Application-scoped Meshtastic state holder. Owns the TCP client and
- * exposes node-table + connection state to screens via StateFlow.
+ * Application-scoped Meshtastic state holder. Owns the TCP and BLE
+ * transports and exposes node-table + connection state to screens via
+ * StateFlow.
  *
- * Node ingestion from protobuf frames is wired up as a TODO — the
- * [MeshtasticTcpClient.frames] sharedFlow collector is in place, and
- * once we add the proto set it slots in with a single parse call per
- * frame. Manual injection via [upsertNode] is available for tests and
- * CoT bridge validation in the interim.
+ * Phase 1 wired the protobuf decoder — every framed payload from
+ * [MeshtasticTcpClient.frames] (TCP) or [MeshtasticBleClient.frames]
+ * (BLE) is dispatched through [MeshtasticProtoParser.parseFromRadio],
+ * and recognised NodeInfo frames flow into [_nodes]. POSITION_APP
+ * packets fold into the existing entry without dropping unrelated
+ * metadata. A BLE drain read is byte-for-byte equivalent to a TCP
+ * framed payload so the consumer doesn't care which transport
+ * delivered it.
+ *
+ * Phase 2 added the BLE transport. The active transport at any time
+ * is tracked via [activeTransport]; UI uses that to flip between the
+ * TCP and BLE link-status panels. Since BLE needs a [Context] to
+ * construct, the manager is created lazily with one — the App owns
+ * this and just hands it through.
+ *
+ * Phase 4 wires the ATAK-plugin parser: portnum-72 packets are decoded
+ * into [CoTEvent] via [AtakPluginParser] and pushed into [cotSink], the
+ * same sink [MeshtasticCoTBridge] already feeds. [sendCoTOverMesh]
+ * provides the matching TX path over the active TCP transport — BLE
+ * TX hooks in as a follow-up.
  */
-class MeshtasticManager {
+class MeshtasticManager(private val context: Context? = null) {
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
@@ -29,36 +57,256 @@ class MeshtasticManager {
     val nodes: StateFlow<Map<Long, MeshNode>> = _nodes.asStateFlow()
 
     val tcpClient = MeshtasticTcpClient()
+    private var bleClient: MeshtasticBleClient? = null
+
+    private val _activeTransport = MutableStateFlow<MeshConnectionType?>(null)
+    val activeTransport: StateFlow<MeshConnectionType?> = _activeTransport.asStateFlow()
 
     private var frameCollector: Job? = null
+    private var bytesRx: Long = 0L
+    @Volatile private var _myNodeNum: UInt? = null
+    val myNodeNum: UInt? get() = _myNodeNum
 
-    val state get() = tcpClient.state
-    val bytesReceived get() = tcpClient.bytesReceived
+    /**
+     * Default link state — the TCP client. Existing screens (and the
+     * MeshtasticScreen TCP tab) keep observing this. The BLE tab
+     * collects [bleState] / [bleBytesReceived] separately so each tab
+     * can show its own transport's status without one transport's
+     * state-flow leaking into the other tab.
+     */
+    val state: StateFlow<ConnectionState> get() = tcpClient.state
+    val bytesReceived: StateFlow<Long> get() = tcpClient.bytesReceived
+
+    /** BLE-specific state, lazily wired when the user opens the BLE tab. */
+    fun bleState(): StateFlow<ConnectionState>? = bleClientOrNull()?.state
+    fun bleBytesReceived(): StateFlow<Long>? = bleClientOrNull()?.bytesReceived
+
+    /** Eagerly construct the BLE client (if a Context is available) so
+     *  the BLE tab can observe its state flows even before any
+     *  scan/connect has been issued. */
+    fun ensureBleReady(): Boolean = bleClientOrNull() != null
+
+    private fun bleClientOrNull(): MeshtasticBleClient? {
+        val existing = bleClient
+        if (existing != null) return existing
+        val ctx = context ?: return null
+        return MeshtasticBleClient(ctx).also { bleClient = it }
+    }
+
+    /** Sink for CoT events parsed off the mesh — wired up by
+     *  [OmniTAKApp] to [ContactStore.ingest] so portnum-72 ATAK-plugin
+     *  payloads flow into the same map pipeline as TCP-server CoT. */
+    @Volatile var cotSink: ((CoTEvent) -> Unit)? = null
 
     fun connectTcp(host: String, port: Int = 4403) {
+        // Tearing down a BLE session before opening the TCP one is
+        // fine — we only ever drive one transport at a time.
+        if (_activeTransport.value == MeshConnectionType.BLUETOOTH) disconnect()
         frameCollector?.cancel()
+        _activeTransport.value = MeshConnectionType.TCP
         frameCollector = scope.launch {
-            tcpClient.frames.collect { frame ->
-                // TODO(protobuf): decode FromRadio here, extract NodeInfo
-                // + Position + Telemetry messages, then call upsertNode.
-                // For now we only track byte counts on the client's counter.
-                android.util.Log.d("MeshtasticManager", "frame received: ${frame.size} bytes")
-            }
+            tcpClient.frames.collect { frame -> dispatchFrame(frame) }
+        }
+        // Once the TCP link comes up, kick the radio with want_config_id
+        // so it streams its node DB. Without this the radio sits silent.
+        scope.launch {
+            tcpClient.state.first { it is ConnectionState.Connected }
+            tcpClient.sendBytes(buildWantConfig())
+            Log.i(TAG, "TX want_config_id (TCP)")
         }
         tcpClient.connect(host, port)
     }
 
+    /**
+     * Open a BLE session to the radio at [deviceAddress]. Mirrors
+     * `connectTcp` — same frame collector funnels into the same
+     * parser. Requires the manager to have been constructed with a
+     * Context (`MeshtasticManager(applicationContext)`).
+     */
+    suspend fun connectBle(deviceAddress: String): Boolean {
+        val client = bleClientOrNull() ?: run {
+            Log.w(TAG, "connectBle called but BLE client unavailable")
+            return false
+        }
+        // Tearing down a TCP session before opening BLE.
+        if (_activeTransport.value == MeshConnectionType.TCP) disconnect()
+        frameCollector?.cancel()
+        _activeTransport.value = MeshConnectionType.BLUETOOTH
+        frameCollector = scope.launch {
+            client.frames.collect { frame -> dispatchFrame(frame) }
+        }
+        val ok = client.connectToAddress(deviceAddress)
+        if (ok) {
+            // Critical Meshtastic handshake: ask the radio to dump its
+            // config + node database. Without this the radio doesn't
+            // push any state and the node list stays empty.
+            client.sendToRadio(buildWantConfig())
+            Log.i(TAG, "TX want_config_id (BLE)")
+        }
+        return ok
+    }
+
+    /**
+     * Build a ToRadio { want_config_id } protobuf payload. Tag 0x18 is
+     * field 3, wire type 0 (varint). The radio responds by streaming
+     * NodeInfo / Channel / Config / ModuleConfig frames terminated by
+     * a ConfigComplete with this same id. Matches iOS's buildWantConfig.
+     */
+    private fun buildWantConfig(): ByteArray {
+        val configId = (1..Int.MAX_VALUE).random().toULong()
+        return ByteArrayOutputStream().apply {
+            write(0x18) // field 3, wire type 0
+            // varint encode configId
+            var v = configId
+            while (v >= 0x80u) {
+                write(((v and 0x7Fu) or 0x80u).toInt())
+                v = v shr 7
+            }
+            write(v.toInt())
+        }.toByteArray()
+    }
+
+    /**
+     * Begin a BLE scan and return a flow of discovered devices. The
+     * scan auto-stops after ~10 s; callers can invoke [stopBleScan]
+     * earlier (e.g. when the user taps a result).
+     */
+    suspend fun startBleScan(timeoutMs: Long = 10_000): Flow<MeshtasticBleClient.BleScanResult>? {
+        val client = bleClientOrNull() ?: return null
+        client.startScan(timeoutMs)
+        return client.scanResults
+    }
+
+    fun stopBleScan() {
+        bleClient?.stopScan()
+    }
+
+    /** RSSI of the active BLE link, or null if BLE not initialized. */
+    fun bleRssi(): StateFlow<Int>? = bleClient?.rssi
+
     fun disconnect() {
-        tcpClient.disconnect()
+        when (_activeTransport.value) {
+            MeshConnectionType.TCP -> tcpClient.disconnect()
+            MeshConnectionType.BLUETOOTH -> {
+                // Fire-and-forget — the BLE client's own scope handles
+                // the suspending teardown, and the connection observer
+                // flips state to Disconnected.
+                scope.launch { bleClient?.disconnectClean() }
+            }
+            null -> Unit
+        }
         frameCollector?.cancel()
         frameCollector = null
+        _activeTransport.value = null
+    }
+
+    private fun dispatchFrame(frame: ByteArray) {
+        bytesRx += frame.size
+        when (val parsed = MeshtasticProtoParser.parseFromRadio(frame)) {
+            is FromRadioFrame.NodeInfoFrame -> upsertNode(parsed.node)
+            is FromRadioFrame.Packet -> handlePacket(parsed.packet)
+            is FromRadioFrame.MyInfo -> {
+                _myNodeNum = parsed.nodeNum
+                Log.i(TAG, "my_node_num=${parsed.nodeNum}")
+            }
+            is FromRadioFrame.ConfigComplete -> Log.i(TAG, "config complete id=${parsed.id}")
+            is FromRadioFrame.Unknown -> Log.v(TAG, "unrecognised FromRadio frame (${frame.size}B)")
+            null -> Log.w(TAG, "frame parse returned null (${frame.size}B)")
+        }
     }
 
     fun upsertNode(node: MeshNode) {
-        _nodes.value = _nodes.value + (node.id to node)
+        val existing = _nodes.value[node.id]
+        // Merge with existing entry — incoming NodeInfo frames don't
+        // always carry every field we've previously learned (e.g. a
+        // late battery telemetry frame would otherwise wipe a known
+        // position).
+        val merged = if (existing != null) node.copy(
+            position = node.position ?: existing.position,
+            snr = node.snr ?: existing.snr,
+            hopDistance = node.hopDistance ?: existing.hopDistance,
+            batteryLevel = node.batteryLevel ?: existing.batteryLevel,
+            shortName = node.shortName.ifBlank { existing.shortName },
+            longName = node.longName.ifBlank { existing.longName },
+        ) else node
+        _nodes.value = _nodes.value + (merged.id to merged)
     }
 
     fun clearNodes() {
         _nodes.value = emptyMap()
+    }
+
+    private fun handlePacket(packet: soy.engindearing.omnitak.mobile.data.MeshPacketDecoded) {
+        when (packet.portnum.toInt()) {
+            PORTNUM_POSITION_APP -> {
+                val pos = MeshtasticProtoParser.parsePosition(packet.payload) ?: return
+                val nodeId = packet.from.toLong() and 0xFFFFFFFFL
+                val existing = _nodes.value[nodeId]
+                if (existing != null) {
+                    upsertNode(existing.copy(position = pos, lastHeardEpoch = packet.rxTime ?: existing.lastHeardEpoch))
+                } else {
+                    upsertNode(
+                        MeshNode(
+                            id = nodeId,
+                            shortName = "%04X".format((nodeId and 0xFFFFL).toInt()),
+                            longName = "Node %08X".format(nodeId.toInt()),
+                            position = pos,
+                            lastHeardEpoch = packet.rxTime ?: (System.currentTimeMillis() / 1000),
+                            snr = packet.rxSnr?.toDouble(),
+                        ),
+                    )
+                }
+            }
+            PORTNUM_ATAK_PLUGIN, PORTNUM_ATAK_FORWARDER -> {
+                val event = AtakPluginParser.parse(packet.payload)
+                if (event != null) {
+                    runCatching { cotSink?.invoke(event) }
+                        .onFailure { Log.w(TAG, "cotSink failed for ATAK plugin event: ${it.message}") }
+                    Log.i(
+                        TAG,
+                        "RX ATAK plugin from ${packet.from.toString(16)} -> CoT ${event.uid} ($PORTNUM_ATAK_PLUGIN bytes=${packet.payload.size})",
+                    )
+                } else {
+                    Log.w(
+                        TAG,
+                        "RX ATAK plugin from ${packet.from.toString(16)} unparseable, ${packet.payload.size}B",
+                    )
+                }
+            }
+            else -> Log.v(TAG, "MeshPacket portnum=${packet.portnum} from=${packet.from} payload=${packet.payload.size}B")
+        }
+    }
+
+    /**
+     * Send a CoT event over the active Meshtastic transport as a
+     * portnum-72 ATAK-plugin payload. Returns true when the framed
+     * ToRadio bytes are dispatched to the radio, false when no
+     * transport is connected or the write fails.
+     *
+     * Dispatches by [activeTransport]: TCP writes go through the
+     * 0x94C3-framing path on [MeshtasticTcpClient.sendBytes]; BLE
+     * writes go through the toRadio characteristic on
+     * [MeshtasticBleClient.sendToRadio] (chunked at the negotiated MTU).
+     */
+    suspend fun sendCoTOverMesh(event: CoTEvent, channelIndex: UInt = 0u): Boolean {
+        val payload = AtakPluginSerializer.serialize(event)
+        val toRadio = AtakPluginSerializer.buildToRadio(
+            payloadBytes = payload,
+            channelIndex = channelIndex,
+        )
+        return when (_activeTransport.value) {
+            MeshConnectionType.TCP -> tcpClient.sendBytes(toRadio)
+            MeshConnectionType.BLUETOOTH -> bleClient?.sendToRadio(toRadio) ?: false
+            null -> false
+        }
+    }
+
+    companion object {
+        private const val TAG = "MeshtasticManager"
+        private const val PORTNUM_POSITION_APP = 3
+        private const val PORTNUM_ATAK_PLUGIN = 72
+        // Some ATAK plugin builds send via portnum 257 (ATAK_FORWARDER)
+        // — accept both so OmniTAK can interop with both clients.
+        private const val PORTNUM_ATAK_FORWARDER = 257
     }
 }

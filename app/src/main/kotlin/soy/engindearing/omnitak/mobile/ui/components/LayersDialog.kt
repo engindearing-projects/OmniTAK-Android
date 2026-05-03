@@ -23,6 +23,10 @@ import soy.engindearing.omnitak.mobile.ui.theme.TacticalSurface
 /**
  * Map overlay visibility picker. One switch per toggleable layer;
  * caller owns the backing state and handles persistence.
+ *
+ * The "Mesh nodes" row controls visibility of mesh-origin contacts
+ * (UID prefix `MESHTASTIC-`) on the tactical map without disabling
+ * the bridge globally — the iOS layers picker exposes the same toggle.
  */
 @Composable
 fun LayersDialog(
@@ -31,11 +35,13 @@ fun LayersDialog(
     aircraftVisible: Boolean,
     contactsVisible: Boolean,
     callsignCardVisible: Boolean,
+    meshNodesVisible: Boolean = true,
     onToggleGrid: (Boolean) -> Unit,
     onToggleDrawings: (Boolean) -> Unit,
     onToggleAircraft: (Boolean) -> Unit,
     onToggleContacts: (Boolean) -> Unit,
     onToggleCallsignCard: (Boolean) -> Unit,
+    onToggleMeshNodes: (Boolean) -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
@@ -51,6 +57,7 @@ fun LayersDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 LayerRow("Contacts", contactsVisible, onToggleContacts)
+                LayerRow("Mesh nodes", meshNodesVisible, onToggleMeshNodes)
                 LayerRow("Drawings", drawingsVisible, onToggleDrawings)
                 LayerRow("Aircraft (ADSB)", aircraftVisible, onToggleAircraft)
                 LayerRow("Lat/Lon grid", gridEnabled, onToggleGrid)

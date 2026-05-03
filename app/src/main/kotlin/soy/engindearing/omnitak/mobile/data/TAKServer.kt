@@ -28,6 +28,10 @@ data class TAKServer(
     val certificateName: String? = null,
     val caCertificateName: String? = null,
     val username: String? = null,
+    // GAP-105 — basic-auth password. Stored as plaintext in DataStore today
+    // (matches how username is stored). Move to EncryptedSharedPreferences /
+    // Android KeyStore before any non-test deployment.
+    val password: String? = null,
 ) {
     val displayName: String get() = "$name ($host:$port)"
 

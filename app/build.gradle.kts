@@ -15,8 +15,8 @@ android {
         applicationId = "soy.engindearing.omnitak.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 5
+        versionName = "0.1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
@@ -113,6 +113,18 @@ dependencies {
     // MapLibre Android (open-source fork of Mapbox) — parallel to iOS
     implementation("org.maplibre.gl:android-sdk:11.8.0")
 
+    // Nordic Semiconductor BLE library — used by MeshtasticBleClient.
+    // Wraps the platform GATT API in a queueable, callback-driven manager
+    // with built-in MTU negotiation, bond handling, and reconnection.
+    implementation("no.nordicsemi.android:ble:2.8.0")
+    implementation("no.nordicsemi.android:ble-ktx:2.8.0")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+
+    // Local JVM unit tests — protobuf parser, CoT converter, etc.
+    testImplementation("junit:junit:4.13.2")
+    // runTest / StandardTestDispatcher for coroutine-driven tests
+    // (e.g. MeshtasticCoTBridge enabled toggle).
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
 }

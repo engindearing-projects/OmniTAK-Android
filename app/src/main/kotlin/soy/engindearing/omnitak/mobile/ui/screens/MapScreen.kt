@@ -63,6 +63,7 @@ import soy.engindearing.omnitak.mobile.ui.components.RadialAction
 import soy.engindearing.omnitak.mobile.ui.components.RadialMenu
 import soy.engindearing.omnitak.mobile.ui.components.SelfPositionCard
 import soy.engindearing.omnitak.mobile.ui.components.TacticalMap
+import soy.engindearing.omnitak.mobile.ui.components.styleJsonForProvider
 import soy.engindearing.omnitak.mobile.ui.components.ToolEntry
 import soy.engindearing.omnitak.mobile.ui.components.ToolsDrawer
 import soy.engindearing.omnitak.mobile.ui.components.rememberLocationPermission
@@ -76,6 +77,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     val active by app.serverManager.activeServer.collectAsState()
     val connState by app.serverManager.connectionState.collectAsState()
     val contacts by app.contactStore.contacts.collectAsState()
+    // Layers toggle: mesh-origin contacts are persisted because the
+    // operator's last choice should survive a process restart. Default
+    // visible — matches iOS.
+    val userPrefs by app.userPrefsStore.prefs.collectAsState(initial = soy.engindearing.omnitak.mobile.data.UserPrefs())
+    val meshNodesVisible = userPrefs.meshNodesLayerVisible
 
     val headerLabel = when (val s = connState) {
         is ConnectionState.Connected -> s.serverName
@@ -136,6 +142,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     ) {
         TacticalMap(
             modifier = Modifier.fillMaxSize(),
+            // GAP-101 — react to the basemap selection from Settings.
+            styleJson = styleJsonForProvider(userPrefs.mapProvider),
             onMapLongPress = { latLng, offset ->
                 if (measurementActive) return@TacticalMap
                 radialLatLng = latLng
@@ -163,7 +171,15 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             recenterTrigger = recenterTick,
             zoomInTrigger = zoomInTick,
             zoomOutTrigger = zoomOutTick,
-            contacts = if (contactsVisible) contacts.values else emptyList(),
+            contacts = if (contactsVisible) {
+                if (meshNodesVisible) contacts.values
+                // Hide mesh-origin contacts — they all share the
+                // `MESHTASTIC-` UID prefix produced by
+                // `MeshtasticCoTConverter.takUid`.
+                else contacts.values.filterNot { it.uid.startsWith("MESHTASTIC-") }
+            } else {
+                emptyList()
+            },
             measurementPoints = measurementPoints,
             drawings = if (drawingsVisible) {
                 drawings + buildInProgressDrawing(drawingKind, drawingPoints)
@@ -190,17 +206,22 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 // GAP-023: stub until FusedLocationProviderClient is wired (GAP-030b)
                 gpsAccuracyMeters = 5,
                 timeLabel = nowLabel,
-                onServerTap = { /* Slice 6: open server picker */ },
-                onMenuTap = { /* Slice 6: open tools drawer */ },
+                // GAP-102 — wire the previously dead status-bar taps to
+                // their natural destinations. Server icon goes to the
+                // Servers tab (also helps GAP-105 — server auth lives
+                // there). Hamburger goes to Settings.
+                onServerTap = { onOpenTab("servers") },
+                onMenuTap = { onOpenTab("settings") },
             )
         }
 
         // GAP-030 PPLI self-position card — bottom-right, mirrors iOS layout.
-        // Stub values; live data plumbing tracked as GAP-030b.
+        // Stub coords; live position plumbing tracked as GAP-030b.
+        // Callsign is sourced from UserPrefs (GAP-100 fix — was hardcoded).
         // Operators can hide it via long-press → Layers → Callsign card.
         if (callsignCardVisible) {
             SelfPositionCard(
-                callsign = "OMNI-1",
+                callsign = userPrefs.callsign,
                 coordinateLabel = "11T  MN  37479  1222423",
                 altitudeMetersMSL = 0.0,
                 speedKmh = 0.0,
@@ -443,11 +464,15 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 aircraftVisible = aircraftVisible,
                 contactsVisible = contactsVisible,
                 callsignCardVisible = callsignCardVisible,
+                meshNodesVisible = meshNodesVisible,
                 onToggleGrid = { gridEnabled = it },
                 onToggleDrawings = { drawingsVisible = it },
                 onToggleAircraft = { aircraftVisible = it },
                 onToggleContacts = { contactsVisible = it },
                 onToggleCallsignCard = { callsignCardVisible = it },
+                onToggleMeshNodes = { v ->
+                    scope.launch { app.userPrefsStore.setMeshNodesLayerVisible(v) }
+                },
                 onDismiss = { layersSheetOpen = false },
             )
         }
