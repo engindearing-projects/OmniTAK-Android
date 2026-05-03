@@ -66,7 +66,10 @@ import soy.engindearing.omnitak.mobile.ui.theme.TacticalSurface
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MeshtasticScreen(onOpenTopology: () -> Unit = {}) {
+fun MeshtasticScreen(
+    onOpenTopology: () -> Unit = {},
+    onOpenDeviceSettings: () -> Unit = {},
+) {
     val app = LocalContext.current.applicationContext as OmniTAKApp
     val mesh = app.meshtastic
     // Touching this lazy property kicks the bridge into active
@@ -107,6 +110,14 @@ fun MeshtasticScreen(onOpenTopology: () -> Unit = {}) {
                             onClick = {
                                 menuOpen = false
                                 onOpenTopology()
+                            },
+                        )
+                        // GAP-109 — Meshtastic device settings entry point.
+                        DropdownMenuItem(
+                            text = { Text("Device settings") },
+                            onClick = {
+                                menuOpen = false
+                                onOpenDeviceSettings()
                             },
                         )
                         DropdownMenuItem(

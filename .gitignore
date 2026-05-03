@@ -40,3 +40,6 @@ captures/
 *.aab
 *.ap_
 *.dex
+
+# Agent worktrees
+.claude/worktrees/

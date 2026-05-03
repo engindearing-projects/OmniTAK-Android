@@ -7,6 +7,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import soy.engindearing.omnitak.mobile.data.MeshDeviceConfigStore
 import soy.engindearing.omnitak.mobile.data.TAKServerStore
 import soy.engindearing.omnitak.mobile.data.UserPrefsStore
 import soy.engindearing.omnitak.mobile.domain.ChatStore
@@ -31,6 +32,7 @@ class OmniTAKApp : Application() {
             mgr.cotSink = { event -> contactStore.ingest(event) }
         }
     }
+    val meshDeviceConfigStore: MeshDeviceConfigStore by lazy { MeshDeviceConfigStore(this) }
     val userPrefsStore: UserPrefsStore by lazy { UserPrefsStore(this) }
     val serverManager: ServerManager by lazy {
         ServerManager(TAKServerStore(this), contactStore, chatStore)
