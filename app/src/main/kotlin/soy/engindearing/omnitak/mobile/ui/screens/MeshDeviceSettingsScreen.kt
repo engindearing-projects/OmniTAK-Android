@@ -103,6 +103,15 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
     }
 
     val deviceConnected = connection is ConnectionState.Connected
+
+    // GAP-109 read-back — when a radio is connected, ask it for its
+    // current owner / role / PLI / preset / channel0. Responses arrive
+    // asynchronously and update the DataStore via adminResponseSink in
+    // OmniTAKApp; this screen recomposes off `saved` automatically.
+    LaunchedEffect(deviceConnected) {
+        if (deviceConnected) mesh.requestDeviceConfig()
+    }
+
     val connectionLabel = when (val s = connection) {
         ConnectionState.Disconnected -> "No device connected"
         is ConnectionState.Connecting -> "Connecting to ${s.serverName}…"
@@ -271,8 +280,22 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
                             0 -> "Push failed — check radio connection"
                             else -> "Pushed $sent of 5 — radio dropped mid-write"
                         }
+                        // After push, refetch so the screen reflects what the
+                        // radio actually accepted (some fields may be rejected).
+                        if (sent > 0) {
+                            kotlinx.coroutines.delay(800)
+                            mesh.requestDeviceConfig()
+                        }
                     }
                 },
+                onRefresh = if (deviceConnected) {
+                    {
+                        scope.launch {
+                            val sent = mesh.requestDeviceConfig()
+                            savedToast = if (sent > 0) "Reading from radio…" else "Read failed"
+                        }
+                    }
+                } else null,
             )
 
             savedToast?.let { msg ->
@@ -343,26 +366,53 @@ private fun MeshSection(text: String) {
  * operator knows what's missing.
  */
 @Composable
-private fun PushToDeviceRow(connected: Boolean, onPush: () -> Unit) {
+private fun PushToDeviceRow(
+    connected: Boolean,
+    onPush: () -> Unit,
+    onRefresh: (() -> Unit)? = null,
+) {
     if (!connected) {
         ComingSoonNote()
         return
     }
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(46.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(TacticalAccent)
-            .clickable(onClick = onPush),
-        contentAlignment = Alignment.Center,
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(
-            "Push to device",
-            color = TacticalBackground,
-            fontWeight = FontWeight.SemiBold,
-            style = MaterialTheme.typography.bodyMedium,
-        )
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(46.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(TacticalAccent)
+                .clickable(onClick = onPush),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                "Push to device",
+                color = TacticalBackground,
+                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        if (onRefresh != null) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(46.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(TacticalSurface)
+                    .clickable(onClick = onRefresh),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "Read from device",
+                    color = TacticalAccent,
+                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        }
     }
 }
 

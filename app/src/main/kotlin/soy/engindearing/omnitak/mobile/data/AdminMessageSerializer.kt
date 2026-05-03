@@ -137,6 +137,40 @@ object AdminMessageSerializer {
         return wrapToRadio(admin)
     }
 
+    // region Read requests ----------------------------------------------
+
+    /** AdminMessage.get_owner_request = field 3 (bool). */
+    fun buildGetOwnerRequest(): ByteArray {
+        val admin = ByteArrayOutputStream().apply {
+            appendVarintField(this, field = 3, value = 1UL)
+        }.toByteArray()
+        return wrapToRadio(admin)
+    }
+
+    /**
+     * AdminMessage.get_config_request = field 5 (varint enum, ConfigType).
+     * Values: DEVICE=0, POSITION=1, POWER=2, NETWORK=3, DISPLAY=4, LORA=5,
+     * BLUETOOTH=6, SECURITY=7, SESSIONKEY=8, DEVICEUI=9.
+     */
+    fun buildGetConfigRequest(configType: Int): ByteArray {
+        val admin = ByteArrayOutputStream().apply {
+            appendVarintField(this, field = 5, value = configType.toULong())
+        }.toByteArray()
+        return wrapToRadio(admin)
+    }
+
+    /** AdminMessage.get_channel_request = field 1 (varint, 1-based channel index). */
+    fun buildGetChannelRequest(channelIndex: Int): ByteArray {
+        val admin = ByteArrayOutputStream().apply {
+            // Index in get_channel_request is 1-based; channel 0 is requested as 1.
+            val zeroBased = channelIndex.coerceAtLeast(0)
+            appendVarintField(this, field = 1, value = (zeroBased + 1).toULong())
+        }.toByteArray()
+        return wrapToRadio(admin)
+    }
+
+    // endregion
+
     /** Build `set_config { lora { use_preset = true, modem_preset = ... } }`. */
     fun buildSetLoraPreset(preset: MeshChannelPreset): ByteArray {
         // LoRaConfig.use_preset = field 1 (bool), modem_preset = field 2 (enum).

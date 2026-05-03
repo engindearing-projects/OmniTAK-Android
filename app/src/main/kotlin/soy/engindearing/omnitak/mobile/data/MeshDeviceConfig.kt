@@ -103,6 +103,43 @@ class MeshDeviceConfigStore(private val context: Context) {
         )
     }
 
+    /**
+     * GAP-109 read-back — fold an incoming admin response into the
+     * persisted draft so the Device Settings screen reflects the
+     * radio's actual state after a `requestDeviceConfig()`.
+     *
+     * Each response variant updates one field. Other fields stay at
+     * whatever the user previously edited / the radio previously
+     * reported, so a partial response (eg. radio drops mid-burst) only
+     * partially refreshes the screen rather than blowing it away.
+     */
+    suspend fun applyAdminResponse(response: AdminResponse) {
+        update { current ->
+            when (response) {
+                is AdminResponse.Owner -> current.copy(
+                    longName = response.longName.ifBlank { current.longName },
+                    shortName = response.shortName.ifBlank { current.shortName },
+                )
+                is AdminResponse.DeviceConfig -> current.copy(
+                    role = response.role ?: current.role,
+                )
+                is AdminResponse.PositionConfig -> current.copy(
+                    positionBroadcastSecs = response.broadcastSecs,
+                )
+                is AdminResponse.LoraConfig -> current.copy(
+                    channelPreset = response.preset ?: current.channelPreset,
+                )
+                is AdminResponse.Channel -> {
+                    if (response.isPrimary || response.index == 0) {
+                        current.copy(
+                            channelName = response.name.ifBlank { current.channelName },
+                        )
+                    } else current
+                }
+            }
+        }
+    }
+
     suspend fun update(block: (MeshDeviceConfig) -> MeshDeviceConfig) {
         context.meshDeviceConfigDataStore.edit { p ->
             val current = MeshDeviceConfig(

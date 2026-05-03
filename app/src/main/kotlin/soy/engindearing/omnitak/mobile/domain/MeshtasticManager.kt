@@ -13,7 +13,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
+import soy.engindearing.omnitak.mobile.data.AdminMessageParser
 import soy.engindearing.omnitak.mobile.data.AdminMessageSerializer
+import soy.engindearing.omnitak.mobile.data.AdminResponse
 import soy.engindearing.omnitak.mobile.data.AtakPluginParser
 import soy.engindearing.omnitak.mobile.data.MeshDeviceConfig
 import soy.engindearing.omnitak.mobile.data.AtakPluginSerializer
@@ -275,8 +277,57 @@ class MeshtasticManager(private val context: Context? = null) {
                     )
                 }
             }
+            PORTNUM_ADMIN_APP -> {
+                // GAP-109 read-back — radio's response to one of our
+                // get_*_request admin messages. Decode and notify the
+                // listener so MeshDeviceConfigStore can mirror radio state.
+                val response = AdminMessageParser.parse(packet.payload)
+                if (response != null) {
+                    Log.i(TAG, "RX admin response: $response")
+                    runCatching { adminResponseSink?.invoke(response) }
+                        .onFailure { Log.w(TAG, "adminResponseSink failed: ${it.message}") }
+                } else {
+                    Log.v(TAG, "RX admin packet from=${packet.from} payload=${packet.payload.size}B (unrecognised)")
+                }
+            }
             else -> Log.v(TAG, "MeshPacket portnum=${packet.portnum} from=${packet.from} payload=${packet.payload.size}B")
         }
+    }
+
+    /**
+     * GAP-109 read-back — listener for decoded AdminMessage responses.
+     * Wired in [OmniTAKApp] to [MeshDeviceConfigStore.applyAdminResponse]
+     * so the Device Settings screen reflects the radio's actual state
+     * after a `requestDeviceConfig()` round-trip.
+     */
+    @Volatile var adminResponseSink: ((AdminResponse) -> Unit)? = null
+
+    /**
+     * Ask the connected radio for its current owner / device role / PLI
+     * cadence / LoRa preset / primary-channel name. Sends 5 admin
+     * requests; responses arrive asynchronously via [adminResponseSink].
+     *
+     * No-op when no transport is active. Returns the count successfully
+     * dispatched so the caller can toast on partial / total failure.
+     */
+    suspend fun requestDeviceConfig(): Int {
+        val transport = _activeTransport.value ?: return 0
+        val requests = listOf(
+            AdminMessageSerializer.buildGetOwnerRequest(),
+            AdminMessageSerializer.buildGetConfigRequest(GET_CONFIG_DEVICE),
+            AdminMessageSerializer.buildGetConfigRequest(GET_CONFIG_POSITION),
+            AdminMessageSerializer.buildGetConfigRequest(GET_CONFIG_LORA),
+            AdminMessageSerializer.buildGetChannelRequest(0),
+        )
+        var sent = 0
+        for (bytes in requests) {
+            val ok = when (transport) {
+                MeshConnectionType.TCP -> tcpClient.sendBytes(bytes)
+                MeshConnectionType.BLUETOOTH -> bleClient?.sendToRadio(bytes) ?: false
+            }
+            if (ok) sent += 1 else break
+        }
+        return sent
     }
 
     /**
@@ -342,6 +393,11 @@ class MeshtasticManager(private val context: Context? = null) {
     companion object {
         private const val TAG = "MeshtasticManager"
         private const val PORTNUM_POSITION_APP = 3
+        private const val PORTNUM_ADMIN_APP = 6
+        // ConfigType enum values (admin.proto)
+        private const val GET_CONFIG_DEVICE = 0
+        private const val GET_CONFIG_POSITION = 1
+        private const val GET_CONFIG_LORA = 5
         private const val PORTNUM_ATAK_PLUGIN = 72
         // Some ATAK plugin builds send via portnum 257 (ATAK_FORWARDER)
         // — accept both so OmniTAK can interop with both clients.

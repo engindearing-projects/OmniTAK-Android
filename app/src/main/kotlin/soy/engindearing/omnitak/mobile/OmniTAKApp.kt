@@ -30,6 +30,12 @@ class OmniTAKApp : Application() {
             // into CoT events; route them into the same ingest sink the
             // node-table bridge uses so they surface as map contacts.
             mgr.cotSink = { event -> contactStore.ingest(event) }
+            // GAP-109 read-back — admin responses to our get_*_request
+            // calls fold into the device-config store on a background
+            // coroutine. Screen collects from the store and re-renders.
+            mgr.adminResponseSink = { response ->
+                appScope.launch { meshDeviceConfigStore.applyAdminResponse(response) }
+            }
         }
     }
     val meshDeviceConfigStore: MeshDeviceConfigStore by lazy { MeshDeviceConfigStore(this) }
