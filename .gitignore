@@ -52,3 +52,6 @@ app/src/main/jniLibs/
 
 # Agent worktrees
 .claude/worktrees/
+
+# Demo TAK data package — contains private cert, never commit
+app/src/main/assets/demo-package.zip
