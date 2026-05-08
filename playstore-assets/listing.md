@@ -44,7 +44,7 @@ Cursor-on-Target messages with your team, and integrates Meshtastic mesh radios
 for off-grid communication.
 
 OmniTAK is a CLIENT. You bring your own TAK Server — the official community
-"CIV" edition from tak.gov, or the open-source FreeTAKServer. OmniTAK does not
+"CIV" edition from tak.gov, or the open-source OpenTAKServer. OmniTAK does not
 provide, broker, or proxy any server.
 
 == What it does ==
@@ -268,7 +268,7 @@ package soy.engindearing.omnitak.mobile. We ramped from a 2-tester
 internal track to 12 opt-in closed testers over ~12 days, sourcing
 testers from the public TAK Community Discord (#takdev and adjacent
 channels) and from existing TAK operators in adjacent open-source
-ecosystems (FreeTAKServer, OpenTAKServer, Meshtastic).
+ecosystems (OpenTAKServer, Meshtastic).
 
 Feedback flowed through three channels:
 
