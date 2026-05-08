@@ -379,7 +379,14 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     "drop" -> if (ll != null) markerSheetLatLng = ll
                     "layers" -> layersSheetOpen = true
                     else -> {
-                        val coord = ll?.let { "%.5f, %.5f".format(it.latitude, it.longitude) } ?: ""
+                        // Respect the operator's coordinate-format pref (Lat/Lon,
+                        // DMS, MGRS, UTM) so the "Add @ …" toast matches the
+                        // SelfPositionCard readout instead of always lat/lon.
+                        val coord = ll?.let {
+                            soy.engindearing.omnitak.mobile.data.CoordFormatter.position(
+                                it.latitude, it.longitude, userPrefs.coordFormat,
+                            )
+                        } ?: ""
                         toast("${action.label}${if (coord.isNotEmpty()) " @ $coord" else ""}")
                     }
                 }

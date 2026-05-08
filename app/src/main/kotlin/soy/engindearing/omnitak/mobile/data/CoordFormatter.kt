@@ -24,8 +24,16 @@ object CoordFormatter {
         CoordFormat.MGRS -> runCatching { MGRS.from(Point.point(lon, lat)).coordinate() }
             .getOrElse { latLonDecimal(lat, lon) }
         CoordFormat.UTM -> runCatching {
-            val u = UTM.from(Point.point(lon, lat))
-            "%dZ %.0fE %.0fN".format(u.zone, u.easting, u.northing)
+            val p = Point.point(lon, lat)
+            val u = UTM.from(p)
+            // Band letter (C..X, omitting I and O) comes from the MGRS
+            // grid-zone designator — UTM proper only carries zone + hemisphere,
+            // but the standard "11T 471845mE 5269313mN" readout users expect
+            // includes the latitude band. Falls through to hemisphere if the
+            // band lookup fails (poles / UPS regions outside MGRS coverage).
+            val band: String = runCatching { MGRS.from(p).band.toString() }
+                .getOrElse { if (u.hemisphere.name == "NORTH") "N" else "S" }
+            "%d%s %.0fmE %.0fmN".format(u.zone, band, u.easting, u.northing)
         }.getOrElse { latLonDecimal(lat, lon) }
     }
 
