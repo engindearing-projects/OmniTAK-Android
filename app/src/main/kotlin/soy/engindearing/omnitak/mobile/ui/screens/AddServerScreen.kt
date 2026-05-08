@@ -4,22 +4,29 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -45,6 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import soy.engindearing.omnitak.mobile.OmniTAKApp
 import soy.engindearing.omnitak.mobile.data.ConnectionProtocol
@@ -71,6 +79,10 @@ fun AddServerScreen(onDone: () -> Unit) {
     var certName by remember { mutableStateOf<String?>(null) }
     var certPassword by remember { mutableStateOf("") }
     var certError by remember { mutableStateOf<String?>(null) }
+    // BUG-A — visibility toggles so users can confirm what they typed.
+    // Default to masked (dots) on both password fields.
+    var passwordVisible by remember { mutableStateOf(false) }
+    var certPasswordVisible by remember { mutableStateOf(false) }
 
     val pickCertLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
@@ -105,6 +117,56 @@ fun AddServerScreen(onDone: () -> Unit) {
                     navigationIconContentColor = MaterialTheme.colorScheme.onBackground,
                 ),
             )
+        },
+        // BUG-B — pin the primary action to the bottom of the screen so
+        // it is always reachable. The form is long and used to live at
+        // the bottom of a verticalScroll column, where reporters
+        // (closed-test, May 2026) couldn't find it under the floating
+        // bottom nav. windowInsetsPadding keeps it clear of the gesture
+        // nav; imePadding lifts it above the soft keyboard.
+        bottomBar = {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(TacticalBackground)
+                    .windowInsetsPadding(WindowInsets.navigationBars)
+                    .imePadding()
+                    .padding(horizontal = 20.dp, vertical = 12.dp),
+            ) {
+                Button(
+                    onClick = {
+                        if (!canSave) return@Button
+                        manager.addServer(
+                            TAKServer(
+                                name = name.trim(),
+                                host = host,
+                                port = port!!,
+                                protocol = if (useTLS) {
+                                    ConnectionProtocol.TLS.wire
+                                } else {
+                                    ConnectionProtocol.TCP.wire
+                                },
+                                useTLS = useTLS,
+                                username = username.takeIf { it.isNotBlank() },
+                                password = password.takeIf { it.isNotEmpty() },
+                                certificateName = certName.takeIf { useTLS },
+                                certificatePassword = certPassword.takeIf {
+                                    useTLS && certName != null && it.isNotEmpty()
+                                },
+                            ),
+                        )
+                        onDone()
+                    },
+                    enabled = canSave,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = TacticalAccent,
+                        contentColor = TacticalBackground,
+                    ),
+                ) {
+                    Text("Save Server")
+                }
+            }
         },
     ) { inner: PaddingValues ->
         Column(
@@ -220,8 +282,29 @@ fun AddServerScreen(onDone: () -> Unit) {
                         label = { Text("Certificate password") },
                         placeholder = { Text("atakatak") },
                         singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
+                        visualTransformation = if (certPasswordVisible) {
+                            VisualTransformation.None
+                        } else {
+                            PasswordVisualTransformation()
+                        },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        trailingIcon = {
+                            IconButton(onClick = { certPasswordVisible = !certPasswordVisible }) {
+                                Icon(
+                                    imageVector = if (certPasswordVisible) {
+                                        Icons.Filled.VisibilityOff
+                                    } else {
+                                        Icons.Filled.Visibility
+                                    },
+                                    contentDescription = if (certPasswordVisible) {
+                                        "Hide certificate password"
+                                    } else {
+                                        "Show certificate password"
+                                    },
+                                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                                )
+                            }
+                        },
                         modifier = Modifier.fillMaxWidth(),
                         colors = tacticalOutlineColors(),
                     )
@@ -264,41 +347,37 @@ fun AddServerScreen(onDone: () -> Unit) {
                 onValueChange = { password = it },
                 label = { Text("Password") },
                 singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
+                visualTransformation = if (passwordVisible) {
+                    VisualTransformation.None
+                } else {
+                    PasswordVisualTransformation()
+                },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = {
+                    IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                        Icon(
+                            imageVector = if (passwordVisible) {
+                                Icons.Filled.VisibilityOff
+                            } else {
+                                Icons.Filled.Visibility
+                            },
+                            contentDescription = if (passwordVisible) {
+                                "Hide password"
+                            } else {
+                                "Show password"
+                            },
+                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                        )
+                    }
+                },
                 modifier = Modifier.fillMaxWidth(),
                 colors = tacticalOutlineColors(),
             )
 
+            // Tail spacer so the last field clears the sticky Save bar
+            // when the keyboard is up. The bottomBar already adds its
+            // own padding above the gesture nav inset.
             Spacer(Modifier.height(8.dp))
-
-            Button(
-                onClick = {
-                    if (!canSave) return@Button
-                    manager.addServer(
-                        TAKServer(
-                            name = name.trim(),
-                            host = host,
-                            port = port!!,
-                            protocol = if (useTLS) ConnectionProtocol.TLS.wire else ConnectionProtocol.TCP.wire,
-                            useTLS = useTLS,
-                            username = username.takeIf { it.isNotBlank() },
-                            password = password.takeIf { it.isNotEmpty() },
-                            certificateName = certName.takeIf { useTLS },
-                            certificatePassword = certPassword.takeIf { useTLS && certName != null && it.isNotEmpty() },
-                        ),
-                    )
-                    onDone()
-                },
-                enabled = canSave,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = TacticalAccent,
-                    contentColor = TacticalBackground,
-                ),
-            ) {
-                Text("Save Server")
-            }
         }
     }
 }
