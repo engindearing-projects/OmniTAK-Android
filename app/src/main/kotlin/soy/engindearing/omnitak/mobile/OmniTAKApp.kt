@@ -32,6 +32,13 @@ class OmniTAKApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // First-launch only: copy any bundled demo data-package from
+        // assets/ into the import dir so DataPackageBootstrap's existing
+        // sideload path picks it up. Production builds bundle one
+        // pointing at tak.engindearing.soy:8089; open-source builds
+        // skip silently.
+        seedBundledDemoPackageIfNeeded()
+
         // Sideload data-package zips dropped into <files-dir>/import/.
         // Touches `serverManager` (and through it `userPrefsStore`,
         // `certVault`), so kicking it off here also wakes those lazies.
@@ -168,6 +175,25 @@ class OmniTAKApp : Application() {
         val bm = getSystemService(Context.BATTERY_SERVICE) as? BatteryManager ?: return null
         val level = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
         return if (level in 0..100) level else null
+    }
+
+    private fun seedBundledDemoPackageIfNeeded() {
+        val prefs = getSharedPreferences("omnitak_install", Context.MODE_PRIVATE)
+        if (prefs.getBoolean("demoPackageSeeded", false)) return
+        val importDir = getExternalFilesDir("import") ?: return
+        if (!importDir.exists()) importDir.mkdirs()
+        val target = java.io.File(importDir, "demo-package.zip")
+        val imported = java.io.File(importDir, "demo-package.zip.imported")
+        if (target.exists() || imported.exists()) {
+            prefs.edit().putBoolean("demoPackageSeeded", true).apply()
+            return
+        }
+        runCatching {
+            assets.open("demo-package.zip").use { input ->
+                target.outputStream().use { input.copyTo(it) }
+            }
+            prefs.edit().putBoolean("demoPackageSeeded", true).apply()
+        }
     }
 
     /** Bridges Meshtastic node updates into the active server's CoT
