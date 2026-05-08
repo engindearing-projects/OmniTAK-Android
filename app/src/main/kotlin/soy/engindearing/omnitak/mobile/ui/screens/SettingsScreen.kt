@@ -167,7 +167,7 @@ fun SettingsScreen() {
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Text(
-                    "Must be an XYZ-style URL with {z}, {x}, {y} placeholders. WMTS endpoints from agency / private servers usually expose this. Falls back to OSM if invalid.",
+                    "Must be an XYZ-style URL with {z}, {x}, {y} placeholders (ATAK-style {\$z}/{\$x}/{\$y} also works). WMTS endpoints from agency / private servers usually expose this. Falls back to OSM if invalid.",
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                     style = MaterialTheme.typography.bodySmall,
                 )

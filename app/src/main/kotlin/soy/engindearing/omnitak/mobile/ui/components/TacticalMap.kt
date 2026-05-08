@@ -642,9 +642,41 @@ val TACTICAL_STYLE_DARK_MATTER = buildTacticalStyle(
 )
 
 /**
+ * Normalize tile-URL placeholder syntax to MapLibre/Mapbox convention.
+ *
+ * CivTAK / ATAK and a handful of WMTS docs use `{$z}/{$y}/{$x}` (dollar
+ * inside braces). MapLibre's raster source spec only understands plain
+ * `{z}/{y}/{x}` (and `{bbox-epsg-3857}`, `{quadkey}`). Without this
+ * rewrite the literal `{$z}` text gets requested → 404 and the tile
+ * layer renders empty.
+ *
+ * Applied once at the boundary, in [styleJsonForProvider], so call
+ * sites don't have to remember to normalize. We also strip whitespace
+ * — operators paste from chat and frequently get a stray newline.
+ */
+internal fun normalizeTileUrlPlaceholders(raw: String): String {
+    if (raw.isEmpty()) return raw
+    var out = raw.trim()
+    // Common ATAK / WMTS variants. Order matters only insofar as we
+    // want the longest match first; ${z} → {z} happens before {$z} → {z}
+    // even though Kotlin's replace is exact-match (no overlap).
+    val tokens = listOf("z", "x", "y", "s", "q", "r")
+    for (t in tokens) {
+        out = out
+            .replace("\${$t}", "{$t}")  // ${z}
+            .replace("{\$$t}", "{$t}")  // {$z}
+    }
+    return out
+}
+
+/**
  * Map a [MapProvider] preference to its style JSON. For WMTS_CUSTOM,
  * the operator-supplied XYZ URL is wrapped in a fresh tactical style.
  * Falls back to OSM if WMTS_CUSTOM is selected with an empty/invalid URL.
+ *
+ * Accepts both `{z}/{x}/{y}` (MapLibre / OSM) and `{$z}/{$x}/{$y}`
+ * (CivTAK / ATAK) placeholder conventions — the latter is normalized
+ * before the URL is handed to MapLibre.
  */
 fun styleJsonForProvider(
     provider: MapProvider,
@@ -654,7 +686,7 @@ fun styleJsonForProvider(
     MapProvider.TOPO_HINT -> TACTICAL_STYLE_TOPO
     MapProvider.SATELLITE_HINT -> TACTICAL_STYLE_SATELLITE
     MapProvider.WMTS_CUSTOM -> {
-        val url = customTileUrl.trim()
+        val url = normalizeTileUrlPlaceholders(customTileUrl)
         if (url.startsWith("http") && url.contains("{z}") && url.contains("{x}") && url.contains("{y}")) {
             buildTacticalStyle("OmniTAK Custom WMTS", url, "Custom tile source")
         } else {
