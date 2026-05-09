@@ -57,6 +57,14 @@ object ContactLayer {
         }
 
         // Add or update markers for incoming contacts.
+        // Issue #23 — index-stable in-place update. The previous
+        // implementation called removeMarker + addMarker on every PPLI
+        // tick when the icon or position changed; the brief gap between
+        // remove and re-add was visible as a flicker on tap. Mutating
+        // the existing Marker's `position`, `title`, and `icon` keeps the
+        // same native annotation alive across updates.
+        val targetIcon = { c: CoTEvent -> iconFor(c.affiliation) }
+        val targetTitle = { c: CoTEvent -> c.callsign ?: c.uid }
         contacts.forEach { c ->
             val existing = markers[c.uid]
             val ll = LatLng(c.lat, c.lon)
@@ -64,24 +72,16 @@ object ContactLayer {
                 val marker = map.addMarker(
                     MarkerOptions()
                         .position(ll)
-                        .title(c.callsign ?: c.uid)
-                        .icon(iconFor(c.affiliation))
+                        .title(targetTitle(c))
+                        .icon(targetIcon(c))
                 )
                 markers[c.uid] = marker
             } else {
-                // Position may have moved (live PPLI). Re-add to
-                // refresh — Marker's `position` setter doesn't
-                // always trigger a redraw on 11.x.
-                if (existing.position != ll || existing.icon != iconFor(c.affiliation)) {
-                    map.removeMarker(existing)
-                    val marker = map.addMarker(
-                        MarkerOptions()
-                            .position(ll)
-                            .title(c.callsign ?: c.uid)
-                            .icon(iconFor(c.affiliation))
-                    )
-                    markers[c.uid] = marker
-                }
+                if (existing.position != ll) existing.position = ll
+                val newIcon = targetIcon(c)
+                if (existing.icon != newIcon) existing.icon = newIcon
+                val newTitle = targetTitle(c)
+                if (existing.title != newTitle) existing.title = newTitle
             }
         }
     }
