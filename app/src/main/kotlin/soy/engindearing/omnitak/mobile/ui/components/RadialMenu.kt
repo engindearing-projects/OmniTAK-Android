@@ -81,7 +81,6 @@ fun RadialMenu(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.35f))
             .clickable(indication = null, interactionSource = null, onClick = onDismiss),
     ) {
         // Ring items, evenly spaced starting from top (−π/2).
