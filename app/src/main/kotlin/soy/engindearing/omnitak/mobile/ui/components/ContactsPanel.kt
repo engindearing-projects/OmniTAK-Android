@@ -13,7 +13,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
@@ -46,6 +51,7 @@ fun ContactsPanel(
     contacts: List<CoTEvent>,
     onSelect: (CoTEvent) -> Unit,
     onDismiss: () -> Unit,
+    onNavigate: ((CoTEvent) -> Unit)? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
     val sorted = contacts.sortedWith(
@@ -93,7 +99,7 @@ fun ContactsPanel(
                         .heightIn(max = 360.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    items(sorted, key = { it.uid }) { c -> ContactRow(c, onSelect) }
+                    items(sorted, key = { it.uid }) { c -> ContactRow(c, onSelect, onNavigate) }
                 }
             }
         }
@@ -101,7 +107,15 @@ fun ContactsPanel(
 }
 
 @Composable
-private fun ContactRow(contact: CoTEvent, onSelect: (CoTEvent) -> Unit) {
+private fun ContactRow(
+    contact: CoTEvent,
+    onSelect: (CoTEvent) -> Unit,
+    onNavigate: ((CoTEvent) -> Unit)?,
+) {
+    // Issue #26 — row body is the "Show on Map" affordance (parity with iOS
+    // .centerMapOnContact). The Navigate icon button hands off to the
+    // system maps app via a `geo:` Intent, which is the Android equivalent
+    // of iOS's TurnByTurnNavigationService — every device has one.
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -131,6 +145,22 @@ private fun ContactRow(contact: CoTEvent, onSelect: (CoTEvent) -> Unit) {
                 style = MaterialTheme.typography.labelSmall,
                 fontFamily = FontFamily.Monospace,
             )
+        }
+        IconButton(onClick = { onSelect(contact) }) {
+            Icon(
+                Icons.Filled.MyLocation,
+                contentDescription = "Show on map",
+                tint = TacticalAccent,
+            )
+        }
+        if (onNavigate != null) {
+            IconButton(onClick = { onNavigate(contact) }) {
+                Icon(
+                    Icons.Filled.Navigation,
+                    contentDescription = "Navigate to contact",
+                    tint = TacticalAccent,
+                )
+            }
         }
     }
 }

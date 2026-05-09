@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Canonical English copy for the onboarding flow + common UI buttons.
+  Mirrors iOS Localizable.strings 1:1 (dotted keys → underscored Android
+  resource IDs). Translators copy these into values-pl / values-de /
+  values-fr. Keep keys stable.
+
+  Paired with iOS PR B (i18n: scaffold + Polish + German + French).
+-->
+<resources>
+
+    <!-- Common -->
+    <string name="common_continue">Continue</string>
+    <string name="common_back">Back</string>
+    <string name="common_skip">Skip</string>
+    <string name="common_maybe_later">Maybe later</string>
+    <string name="common_cancel">Cancel</string>
+    <string name="common_done">Done</string>
+    <string name="common_next">Next</string>
+
+    <!-- Page 1: Welcome / Language -->
+    <string name="onboarding_welcome_title">Welcome to OmniTAK</string>
+    <string name="onboarding_welcome_subtitle">By Engindearing — situational awareness for everyone.</string>
+    <string name="onboarding_welcome_language_prompt">Pick your language</string>
+    <string name="onboarding_welcome_cta">Get Started</string>
+    <string name="onboarding_language_english">English</string>
+    <string name="onboarding_language_polish">Polski</string>
+    <string name="onboarding_language_german">Deutsch</string>
+    <string name="onboarding_language_french">Français</string>
+
+    <!-- Page 2: What OmniTAK Does -->
+    <string name="onboarding_about_title">What OmniTAK does</string>
+    <string name="onboarding_about_subtitle">Four things, every time you open it.</string>
+    <string name="onboarding_about_feature_location_title">Real-time location</string>
+    <string name="onboarding_about_feature_location_body">Your team sees you, you see your team.</string>
+    <string name="onboarding_about_feature_comms_title">Secure comms</string>
+    <string name="onboarding_about_feature_comms_body">Encrypted chat, marker drops, file share.</string>
+    <string name="onboarding_about_feature_map_title">Map awareness</string>
+    <string name="onboarding_about_feature_map_body">Online or offline. ATAK-compatible markers.</string>
+    <string name="onboarding_about_feature_cross_platform_title">Multi-platform</string>
+    <string name="onboarding_about_feature_cross_platform_body">Talks to ATAK, WinTAK, iTAK, OpenTAK servers.</string>
+
+    <!-- Page 3: Location Permission -->
+    <string name="onboarding_location_title">Share your location</string>
+    <string name="onboarding_location_subtitle">OmniTAK is useless without GPS — that\'s the whole point.</string>
+    <string name="onboarding_location_bullet_share">Send your position to your team</string>
+    <string name="onboarding_location_bullet_see">See teammates on the map</string>
+    <string name="onboarding_location_bullet_background">Stay visible when the screen is off</string>
+    <string name="onboarding_location_allow">Allow Location</string>
+    <string name="onboarding_location_granted">Location enabled</string>
+
+    <!-- Page 4: Bluetooth Permission -->
+    <string name="onboarding_bluetooth_title">Connect Meshtastic radios</string>
+    <string name="onboarding_bluetooth_subtitle">Off-grid mesh comms when there\'s no cell or Wi-Fi.</string>
+    <string name="onboarding_bluetooth_bullet_lora">LoRa text + position over BLE</string>
+    <string name="onboarding_bluetooth_bullet_range">Miles of range, no infrastructure</string>
+    <string name="onboarding_bluetooth_bullet_optional">Optional — skip if you don\'t have a radio</string>
+    <string name="onboarding_bluetooth_allow">Allow Bluetooth</string>
+    <string name="onboarding_bluetooth_granted">Bluetooth enabled</string>
+
+    <!-- Page 5: Notifications Permission -->
+    <string name="onboarding_notifications_title">Get alerted</string>
+    <string name="onboarding_notifications_subtitle">Direct messages, geofence breaches, server events.</string>
+    <string name="onboarding_notifications_bullet_dm">Direct messages from teammates</string>
+    <string name="onboarding_notifications_bullet_geofence">Geofence enter/exit alerts</string>
+    <string name="onboarding_notifications_bullet_server">Server connection status</string>
+    <string name="onboarding_notifications_allow">Allow Notifications</string>
+    <string name="onboarding_notifications_granted">Notifications enabled</string>
+
+    <!-- Page 6: Callsign -->
+    <string name="onboarding_callsign_title">Pick your callsign</string>
+    <string name="onboarding_callsign_subtitle">How your team sees you on the map.</string>
+    <string name="onboarding_callsign_use">Use this callsign</string>
+    <string name="onboarding_callsign_choose">Choose my own</string>
+    <string name="onboarding_callsign_custom_title">Enter your callsign</string>
+    <string name="onboarding_callsign_custom_placeholder">e.g. RAVEN-6</string>
+    <string name="onboarding_callsign_custom_save">Save</string>
+
+    <!-- Page 7: Team / Role / Position -->
+    <string name="onboarding_team_title">Pick your team &amp; role</string>
+    <string name="onboarding_team_subtitle">Color groups your team on the map. Role tells them what you do.</string>
+    <string name="onboarding_team_color_label">Team color</string>
+    <string name="onboarding_team_role_label">Role</string>
+    <string name="onboarding_team_position_label">Position</string>
+
+    <string name="onboarding_team_color_white">White</string>
+    <string name="onboarding_team_color_yellow">Yellow</string>
+    <string name="onboarding_team_color_orange">Orange</string>
+    <string name="onboarding_team_color_magenta">Magenta</string>
+    <string name="onboarding_team_color_red">Red</string>
+    <string name="onboarding_team_color_maroon">Maroon</string>
+    <string name="onboarding_team_color_purple">Purple</string>
+    <string name="onboarding_team_color_dark_blue">Dark Blue</string>
+    <string name="onboarding_team_color_blue">Blue</string>
+    <string name="onboarding_team_color_cyan">Cyan</string>
+    <string name="onboarding_team_color_teal">Teal</string>
+    <string name="onboarding_team_color_green">Green</string>
+    <string name="onboarding_team_color_dark_green">Dark Green</string>
+    <string name="onboarding_team_color_brown">Brown</string>
+
+    <string name="onboarding_team_role_member">Team Member</string>
+    <string name="onboarding_team_role_lead">Team Lead</string>
+    <string name="onboarding_team_role_hq">HQ</string>
+    <string name="onboarding_team_role_sniper">Sniper</string>
+    <string name="onboarding_team_role_medic">Medic</string>
+    <string name="onboarding_team_role_fo">Forward Observer</string>
+    <string name="onboarding_team_role_rto">RTO</string>
+    <string name="onboarding_team_role_k9">K9</string>
+    <string name="onboarding_team_role_driver">Driver</string>
+    <string name="onboarding_team_role_gunner">Gunner</string>
+
+    <!-- Page 8: Connect Server -->
+    <string name="onboarding_connect_title">Connect to a TAK server</string>
+    <string name="onboarding_connect_subtitle">Pick whatever\'s easiest — you can change it later.</string>
+    <string name="onboarding_connect_demo_title">Use Demo Server</string>
+    <string name="onboarding_connect_demo_body">1-tap. Public OpenTAK server.</string>
+    <string name="onboarding_connect_demo_time">&lt; 30 sec</string>
+    <string name="onboarding_connect_qr_title">Scan QR code</string>
+    <string name="onboarding_connect_qr_body">From your TAK admin or onboarding email.</string>
+    <string name="onboarding_connect_qr_time">&lt; 30 sec</string>
+    <string name="onboarding_connect_import_title">Import .zip / certs</string>
+    <string name="onboarding_connect_import_body">Data package or .p12 file from Files.</string>
+    <string name="onboarding_connect_import_time">&lt; 1 min</string>
+    <string name="onboarding_connect_skip">Skip — I\'ll connect later</string>
+
+    <!-- Final / Ready -->
+    <string name="onboarding_ready_title">You\'re ready!</string>
+    <string name="onboarding_ready_subtitle">Tap anywhere to open the map.</string>
+</resources>

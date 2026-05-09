@@ -45,7 +45,10 @@ data class UserPrefs(
     val selfLon: Double = Double.NaN,
     val distanceUnit: DistanceUnit = DistanceUnit.METRIC,
     val coordFormat: CoordFormat = CoordFormat.LATLON_DECIMAL,
-    val mapProvider: MapProvider = MapProvider.OSM_RASTER,
+    // Issue #17 — first-run users see OpenTopoMap (terrain shading + contour
+    // lines). Existing operators keep whatever they last picked because the
+    // DataStore read returns their persisted value before this default fires.
+    val mapProvider: MapProvider = MapProvider.TOPO_HINT,
     // GAP-107 — XYZ tile URL template the operator pasted in. Used when
     // mapProvider == WMTS_CUSTOM. Format: https://host/{z}/{x}/{y}.png
     val customTileUrl: String = "",
@@ -130,7 +133,7 @@ class UserPrefsStore(private val context: Context) {
         coordFormat = p[KEY_COORD]?.let { runCatching { CoordFormat.valueOf(it) }.getOrNull() }
             ?: CoordFormat.LATLON_DECIMAL,
         mapProvider = p[KEY_MAP]?.let { runCatching { MapProvider.valueOf(it) }.getOrNull() }
-            ?: MapProvider.OSM_RASTER,
+            ?: MapProvider.TOPO_HINT,
         customTileUrl = p[KEY_CUSTOM_TILE_URL] ?: "",
         autoPublishMeshToTak = p[KEY_AUTO_PUBLISH_MESH] ?: true,
         meshNodesLayerVisible = p[KEY_MESH_LAYER_VISIBLE] ?: true,
