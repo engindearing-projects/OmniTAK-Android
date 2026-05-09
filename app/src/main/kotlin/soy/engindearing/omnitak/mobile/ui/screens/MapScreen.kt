@@ -527,6 +527,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         }
 
         if (teamsPanelOpen) {
+            val mapsLauncherCtx = LocalContext.current
             ContactsPanel(
                 contacts = contacts.values.toList(),
                 onSelect = { c ->
@@ -535,6 +536,24 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     if (followMeActive) mutatePref { it.copy(followMeActive = false) }
                     teamsPanelOpen = false
                     toast("Panning to ${c.callsign ?: c.uid}")
+                },
+                onNavigate = { c ->
+                    // Issue #26 — Navigate hands off to the system maps app
+                    // via a `geo:` Intent. Android's parity for iOS's
+                    // intra-app TurnByTurnNavigationService.
+                    val label = (c.callsign ?: c.uid)
+                        .replace("&", "%26")
+                        .replace("?", "%3F")
+                    val uri = android.net.Uri.parse(
+                        "geo:0,0?q=${c.lat},${c.lon}($label)"
+                    )
+                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, uri)
+                    runCatching {
+                        mapsLauncherCtx.startActivity(intent)
+                    }.onFailure {
+                        toast("No maps app installed for navigation")
+                    }
+                    teamsPanelOpen = false
                 },
                 onDismiss = { teamsPanelOpen = false },
             )
