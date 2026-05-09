@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  LLM-translated 2026-05-08. Needs native speaker review before public release.
+  Translation philosophy: formal "vous" register; Légion-/Armée-adjacent
+  tactical vocabulary (indicatif d'appel, situation tactique, transmissions
+  chiffrées, observateur avancé, opérateur radio).
+  Imperative forms kept short for fat-thumb buttons.
+-->
+<resources>
+
+    <!-- Common -->
+    <string name="common_continue">Continuer</string>
+    <string name="common_back">Retour</string>
+    <string name="common_skip">Passer</string>
+    <string name="common_maybe_later">Plus tard</string>
+    <string name="common_cancel">Annuler</string>
+    <string name="common_done">Terminé</string>
+    <string name="common_next">Suivant</string>
+
+    <!-- Page 1: Welcome / Language -->
+    <string name="onboarding_welcome_title">Bienvenue dans OmniTAK</string>
+    <string name="onboarding_welcome_subtitle">Engindearing — situation tactique pour tous.</string>
+    <string name="onboarding_welcome_language_prompt">Choisissez votre langue</string>
+    <string name="onboarding_welcome_cta">Commencer</string>
+    <string name="onboarding_language_english">English</string>
+    <string name="onboarding_language_polish">Polski</string>
+    <string name="onboarding_language_german">Deutsch</string>
+    <string name="onboarding_language_french">Français</string>
+
+    <!-- Page 2: What OmniTAK Does -->
+    <string name="onboarding_about_title">Ce que fait OmniTAK</string>
+    <string name="onboarding_about_subtitle">Quatre choses — à chaque ouverture.</string>
+    <string name="onboarding_about_feature_location_title">Position en temps réel</string>
+    <string name="onboarding_about_feature_location_body">Votre équipe vous voit, vous voyez votre équipe.</string>
+    <string name="onboarding_about_feature_comms_title">Transmissions chiffrées</string>
+    <string name="onboarding_about_feature_comms_body">Messagerie, marqueurs, fichiers — tout chiffré.</string>
+    <string name="onboarding_about_feature_map_title">Situation cartographique</string>
+    <string name="onboarding_about_feature_map_body">En ligne ou hors ligne. Marqueurs compatibles ATAK.</string>
+    <string name="onboarding_about_feature_cross_platform_title">Multi-plateforme</string>
+    <string name="onboarding_about_feature_cross_platform_body">Compatible ATAK, WinTAK, iTAK, OpenTAK.</string>
+
+    <!-- Page 3: Location Permission -->
+    <string name="onboarding_location_title">Partager votre position</string>
+    <string name="onboarding_location_subtitle">OmniTAK ne sert à rien sans GPS — c\'est tout l\'intérêt.</string>
+    <string name="onboarding_location_bullet_share">Envoyer votre position à l\'équipe</string>
+    <string name="onboarding_location_bullet_see">Voir vos camarades sur la carte</string>
+    <string name="onboarding_location_bullet_background">Rester visible écran éteint</string>
+    <string name="onboarding_location_allow">Autoriser la localisation</string>
+    <string name="onboarding_location_granted">Localisation activée</string>
+
+    <!-- Page 4: Bluetooth Permission -->
+    <string name="onboarding_bluetooth_title">Connecter les radios Meshtastic</string>
+    <string name="onboarding_bluetooth_subtitle">Maillage hors-grille — sans réseau cellulaire ni Wi-Fi.</string>
+    <string name="onboarding_bluetooth_bullet_lora">Texte et position LoRa via BLE</string>
+    <string name="onboarding_bluetooth_bullet_range">Plusieurs kilomètres, sans infrastructure</string>
+    <string name="onboarding_bluetooth_bullet_optional">Optionnel — passer si pas de radio</string>
+    <string name="onboarding_bluetooth_allow">Autoriser le Bluetooth</string>
+    <string name="onboarding_bluetooth_granted">Bluetooth activé</string>
+
+    <!-- Page 5: Notifications Permission -->
+    <string name="onboarding_notifications_title">Recevoir les alertes</string>
+    <string name="onboarding_notifications_subtitle">Messages directs, franchissements de zones, événements serveur.</string>
+    <string name="onboarding_notifications_bullet_dm">Messages directs des camarades</string>
+    <string name="onboarding_notifications_bullet_geofence">Alertes d\'entrée/sortie de zone</string>
+    <string name="onboarding_notifications_bullet_server">État de la connexion serveur</string>
+    <string name="onboarding_notifications_allow">Autoriser les notifications</string>
+    <string name="onboarding_notifications_granted">Notifications activées</string>
+
+    <!-- Page 6: Callsign -->
+    <string name="onboarding_callsign_title">Choisir un indicatif d\'appel</string>
+    <string name="onboarding_callsign_subtitle">C\'est ainsi que votre équipe vous voit sur la carte.</string>
+    <string name="onboarding_callsign_use">Utiliser cet indicatif</string>
+    <string name="onboarding_callsign_choose">Choisir le mien</string>
+    <string name="onboarding_callsign_custom_title">Saisir votre indicatif</string>
+    <string name="onboarding_callsign_custom_placeholder">ex. CORBEAU-6</string>
+    <string name="onboarding_callsign_custom_save">Enregistrer</string>
+
+    <!-- Page 7: Team / Role / Position -->
+    <string name="onboarding_team_title">Choisir équipe et fonction</string>
+    <string name="onboarding_team_subtitle">La couleur regroupe l\'équipe sur la carte. La fonction indique le rôle.</string>
+    <string name="onboarding_team_color_label">Couleur d\'équipe</string>
+    <string name="onboarding_team_role_label">Fonction</string>
+    <string name="onboarding_team_position_label">Poste</string>
+
+    <string name="onboarding_team_color_white">Blanc</string>
+    <string name="onboarding_team_color_yellow">Jaune</string>
+    <string name="onboarding_team_color_orange">Orange</string>
+    <string name="onboarding_team_color_magenta">Magenta</string>
+    <string name="onboarding_team_color_red">Rouge</string>
+    <string name="onboarding_team_color_maroon">Bordeaux</string>
+    <string name="onboarding_team_color_purple">Violet</string>
+    <string name="onboarding_team_color_dark_blue">Bleu marine</string>
+    <string name="onboarding_team_color_blue">Bleu</string>
+    <string name="onboarding_team_color_cyan">Cyan</string>
+    <string name="onboarding_team_color_teal">Sarcelle</string>
+    <string name="onboarding_team_color_green">Vert</string>
+    <string name="onboarding_team_color_dark_green">Vert foncé</string>
+    <string name="onboarding_team_color_brown">Marron</string>
+
+    <string name="onboarding_team_role_member">Équipier</string>
+    <string name="onboarding_team_role_lead">Chef d\'équipe</string>
+    <string name="onboarding_team_role_hq">PC</string>
+    <string name="onboarding_team_role_sniper">Tireur d\'élite</string>
+    <string name="onboarding_team_role_medic">Infirmier</string>
+    <string name="onboarding_team_role_fo">Observateur avancé</string>
+    <string name="onboarding_team_role_rto">Opérateur radio</string>
+    <string name="onboarding_team_role_k9">Maître-chien</string>
+    <string name="onboarding_team_role_driver">Pilote</string>
+    <string name="onboarding_team_role_gunner">Mitrailleur</string>
+
+    <!-- Page 8: Connect Server -->
+    <string name="onboarding_connect_title">Connecter à un serveur TAK</string>
+    <string name="onboarding_connect_subtitle">Choisissez le plus simple — modifiable plus tard.</string>
+    <string name="onboarding_connect_demo_title">Serveur de démo</string>
+    <string name="onboarding_connect_demo_body">Un tap. Serveur OpenTAK public.</string>
+    <string name="onboarding_connect_demo_time">&lt; 30 s</string>
+    <string name="onboarding_connect_qr_title">Scanner un QR</string>
+    <string name="onboarding_connect_qr_body">Depuis l\'admin TAK ou l\'e-mail d\'inscription.</string>
+    <string name="onboarding_connect_qr_time">&lt; 30 s</string>
+    <string name="onboarding_connect_import_title">Importer .zip / certificats</string>
+    <string name="onboarding_connect_import_body">Pack de données ou fichier .p12 depuis Fichiers.</string>
+    <string name="onboarding_connect_import_time">&lt; 1 min</string>
+    <string name="onboarding_connect_skip">Passer — je connecterai plus tard</string>
+
+    <!-- Final / Ready -->
+    <string name="onboarding_ready_title">Prêt !</string>
+    <string name="onboarding_ready_subtitle">Touchez pour ouvrir la carte.</string>
+</resources>
