@@ -3,15 +3,14 @@ package soy.engindearing.omnitak.mobile.ui.components
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffColorFilter
-import androidx.core.content.ContextCompat
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.RectF
 import org.maplibre.android.annotations.IconFactory
 import org.maplibre.android.annotations.Marker
 import org.maplibre.android.annotations.MarkerOptions
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.maps.MapLibreMap
-import soy.engindearing.omnitak.mobile.R
 import soy.engindearing.omnitak.mobile.data.CoTAffiliation
 import soy.engindearing.omnitak.mobile.data.CoTEvent
 
@@ -88,11 +87,20 @@ object ContactLayer {
 
     private fun ensureIcons(context: Context) {
         if (iconFriend != null) return
+        // Issue #21 — MIL-STD-2525B affiliation frames. Each frame has a
+        // standard shape per ATAK convention:
+        //   FRIEND   → cyan rounded rectangle
+        //   HOSTILE  → red diamond
+        //   NEUTRAL  → green square
+        //   UNKNOWN  → yellow quatrefoil (drawn as a circle with four
+        //              cardinal lobes, simplified for raster output)
+        // Frames carry the affiliation; the inner pip stays the same
+        // shape so contacts of unknown frame still read as contacts.
         val factory = IconFactory.getInstance(context)
-        iconFriend = factory.fromBitmap(tintedDot(context, 0xFF4ADE80.toInt()))
-        iconHostile = factory.fromBitmap(tintedDot(context, 0xFFF44336.toInt()))
-        iconNeutral = factory.fromBitmap(tintedDot(context, 0xFFFFC107.toInt()))
-        iconUnknown = factory.fromBitmap(tintedDot(context, 0xFFB39DDB.toInt()))
+        iconFriend = factory.fromBitmap(framedIcon(CoTAffiliation.FRIEND, 0xFF4ADE80.toInt()))
+        iconHostile = factory.fromBitmap(framedIcon(CoTAffiliation.HOSTILE, 0xFFF44336.toInt()))
+        iconNeutral = factory.fromBitmap(framedIcon(CoTAffiliation.NEUTRAL, 0xFFFFC107.toInt()))
+        iconUnknown = factory.fromBitmap(framedIcon(CoTAffiliation.UNKNOWN, 0xFFB39DDB.toInt()))
     }
 
     private fun iconFor(affiliation: CoTAffiliation): org.maplibre.android.annotations.Icon =
@@ -103,14 +111,77 @@ object ContactLayer {
             else -> iconUnknown!!
         }
 
-    private fun tintedDot(context: Context, colorArgb: Int): Bitmap {
-        val drawable = ContextCompat.getDrawable(context, R.drawable.ic_contact_dot)!!.mutate()
-        val w = drawable.intrinsicWidth.takeIf { it > 0 } ?: 72
-        val h = drawable.intrinsicHeight.takeIf { it > 0 } ?: 72
-        drawable.setBounds(0, 0, w, h)
-        drawable.colorFilter = PorterDuffColorFilter(colorArgb, PorterDuff.Mode.SRC_IN)
-        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        drawable.draw(Canvas(bmp))
+    private fun framedIcon(affiliation: CoTAffiliation, colorArgb: Int): Bitmap {
+        val size = 72
+        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bmp)
+        val pad = 6f
+        val left = pad
+        val top = pad
+        val right = size - pad
+        val bottom = size - pad
+        val cx = size / 2f
+        val cy = size / 2f
+
+        // Outer dark stroke for contrast on light basemaps.
+        val stroke = Paint().apply {
+            isAntiAlias = true
+            style = Paint.Style.STROKE
+            strokeWidth = 4f
+            color = 0xFF0A1628.toInt()
+        }
+        val fill = Paint().apply {
+            isAntiAlias = true
+            style = Paint.Style.FILL
+            color = colorArgb
+        }
+
+        when (affiliation) {
+            CoTAffiliation.FRIEND -> {
+                // Rounded rectangle frame.
+                val rect = RectF(left, top + 8f, right, bottom - 8f)
+                val r = 12f
+                canvas.drawRoundRect(rect, r, r, fill)
+                canvas.drawRoundRect(rect, r, r, stroke)
+            }
+            CoTAffiliation.HOSTILE -> {
+                // Diamond.
+                val path = Path().apply {
+                    moveTo(cx, top)
+                    lineTo(right, cy)
+                    lineTo(cx, bottom)
+                    lineTo(left, cy)
+                    close()
+                }
+                canvas.drawPath(path, fill)
+                canvas.drawPath(path, stroke)
+            }
+            CoTAffiliation.NEUTRAL -> {
+                // Square.
+                val rect = RectF(left + 4f, top + 4f, right - 4f, bottom - 4f)
+                canvas.drawRect(rect, fill)
+                canvas.drawRect(rect, stroke)
+            }
+            else -> {
+                // Unknown / pending / suspect / exercise / assumed:
+                // simplified quatrefoil — circle with four cardinal lobes.
+                // Center disc, plus 4 small overlapping discs N/E/S/W.
+                val r = (size / 2f) - pad - 4f
+                canvas.drawCircle(cx, cy, r * 0.55f, fill)
+                canvas.drawCircle(cx, cy, r * 0.55f, stroke)
+                val lobeR = r * 0.35f
+                val offset = r * 0.55f
+                listOf(
+                    cx to cy - offset,
+                    cx + offset to cy,
+                    cx to cy + offset,
+                    cx - offset to cy,
+                ).forEach { (lx, ly) ->
+                    canvas.drawCircle(lx, ly, lobeR, fill)
+                    canvas.drawCircle(lx, ly, lobeR, stroke)
+                }
+            }
+        }
         return bmp
     }
 
