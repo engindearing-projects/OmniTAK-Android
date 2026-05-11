@@ -1,0 +1,7 @@
+<en-US>
+What's new in 0.3.0 (vc32):
+
+• Full QR enrollment — scan a tak://enroll link and the app generates a CSR, gets it signed by your TAK/OpenTAKserver, and auto-connects with mTLS. No manual cert handling.
+• Server-driven config — set a "config bundle URL" in Settings, and every launch pulls the latest team preferences. Operator edits once, every EUD picks it up.
+• tak:// deep links — /connect, /import, /preference all wired (paired with iOS).
+</en-US>
