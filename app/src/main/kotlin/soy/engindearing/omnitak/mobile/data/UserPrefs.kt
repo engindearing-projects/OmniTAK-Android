@@ -86,6 +86,13 @@ data class UserPrefs(
     // twice" duplication when running TAK_TRACKER role on the mesh side
     // alongside the OmniTAK client publishing its own PPLI.
     val hideSelfFromMeshContacts: Boolean = true,
+    // When true (default), whenever the operator's TAK callsign changes
+    // and a Meshtastic transport is connected, push the new callsign to
+    // the radio as the owner long/short name (set_owner AdminMessage).
+    // This is the "unified identity" half of mata's TAK_TRACKER ask —
+    // the mesh node and the TAK client wear the same callsign so the
+    // self-dedup is guaranteed to match, no manual sync.
+    val autoSyncCallsignToMesh: Boolean = true,
 )
 
 class UserPrefsStore(private val context: Context) {
@@ -110,6 +117,7 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_CONFIG_BUNDLE_URL = stringPreferencesKey("config_bundle_url")
     private val KEY_PLI_INTERVAL_SECS = intPreferencesKey("pli_interval_secs")
     private val KEY_HIDE_SELF_FROM_MESH = booleanPreferencesKey("hide_self_from_mesh_contacts")
+    private val KEY_AUTO_SYNC_CALLSIGN_TO_MESH = booleanPreferencesKey("auto_sync_callsign_to_mesh")
 
     val prefs: Flow<UserPrefs> = context.userPrefsDataStore.data.map { p -> readFrom(p) }
 
@@ -136,6 +144,7 @@ class UserPrefsStore(private val context: Context) {
             p[KEY_CONFIG_BUNDLE_URL] = next.configBundleUrl
             p[KEY_PLI_INTERVAL_SECS] = next.pliIntervalSecs
             p[KEY_HIDE_SELF_FROM_MESH] = next.hideSelfFromMeshContacts
+            p[KEY_AUTO_SYNC_CALLSIGN_TO_MESH] = next.autoSyncCallsignToMesh
         }
     }
 
@@ -174,5 +183,6 @@ class UserPrefsStore(private val context: Context) {
         configBundleUrl = p[KEY_CONFIG_BUNDLE_URL] ?: "",
         pliIntervalSecs = (p[KEY_PLI_INTERVAL_SECS] ?: 30).coerceIn(5, 600),
         hideSelfFromMeshContacts = p[KEY_HIDE_SELF_FROM_MESH] ?: true,
+        autoSyncCallsignToMesh = p[KEY_AUTO_SYNC_CALLSIGN_TO_MESH] ?: true,
     )
 }

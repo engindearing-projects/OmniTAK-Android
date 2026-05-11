@@ -16,6 +16,7 @@ import soy.engindearing.omnitak.mobile.data.AdminResponse
 import soy.engindearing.omnitak.mobile.data.CertVault
 import soy.engindearing.omnitak.mobile.data.LocationProvider
 import soy.engindearing.omnitak.mobile.data.MeshDeviceConfigStore
+import soy.engindearing.omnitak.mobile.data.MeshOwnerNames
 import soy.engindearing.omnitak.mobile.data.TAKServerStore
 import soy.engindearing.omnitak.mobile.data.UserPrefsStore
 import soy.engindearing.omnitak.mobile.domain.ChatStore
@@ -45,6 +46,11 @@ class OmniTAKApp : Application() {
         // Touches `serverManager` (and through it `userPrefsStore`,
         // `certVault`), so kicking it off here also wakes those lazies.
         DataPackageBootstrap(this, certVault, serverManager).runIfNeeded()
+
+        // Mirror operator callsign onto the connected mesh node so the
+        // self-dedup in MeshtasticCoTBridge always has a clean name
+        // match. Idempotent + gated by `autoSyncCallsignToMesh`.
+        startMeshOwnerSync()
 
         // GAP-108 — server-driven config. If the operator set a
         // configBundleUrl (via Settings or a tak://preference QR), fetch
@@ -228,6 +234,44 @@ class OmniTAKApp : Application() {
      *  immediately stops/resumes pushes to `cotSink`. */
     private companion object {
         const val FGS_DEBOUNCE_MS = 750L
+    }
+
+    /**
+     * GAP-130 (unified identity, half 1) — when the operator's TAK
+     * callsign changes and a Meshtastic radio is connected, push the
+     * new long/short owner name to the radio. This pairs with the
+     * [MeshtasticCoTBridge.isSelfNode] dedup so the mesh node and the
+     * TAK client always share a name — the operator sees themselves
+     * once on the map regardless of mesh role (TAK or TAK_TRACKER).
+     *
+     * Gated by `userPrefs.autoSyncCallsignToMesh` (default true).
+     * Skipped silently when no radio is connected; the next time a
+     * transport comes online we re-sync because the flow re-emits the
+     * (still-current) callsign on transport changes.
+     */
+    private fun startMeshOwnerSync() {
+        appScope.launch {
+            // Combine callsign + transport availability + the gating
+            // toggle so we only push when (a) operator wants auto-sync,
+            // (b) a callsign is set, and (c) a radio is reachable.
+            kotlinx.coroutines.flow.combine(
+                userPrefsStore.prefs,
+                meshtastic.activeTransport,
+            ) { prefs, transport -> Triple(prefs.autoSyncCallsignToMesh, prefs.callsign, transport) }
+                .distinctUntilChanged()
+                .collect { (enabled, callsign, transport) ->
+                    if (!enabled || transport == null) return@collect
+                    val derived = MeshOwnerNames.derive(callsign) ?: return@collect
+                    val pushed = meshtastic.pushOwnerName(
+                        longName = derived.first,
+                        shortName = derived.second,
+                    )
+                    android.util.Log.i(
+                        "OmniTAK",
+                        "Mesh owner sync: ${derived.first} / ${derived.second} → $pushed",
+                    )
+                }
+        }
     }
 
     val meshtasticCoTBridge: MeshtasticCoTBridge by lazy {

@@ -531,6 +531,22 @@ class MeshtasticManager(private val context: Context? = null) {
      * back as `FromRadio.routing` frames and would need protobuf decode
      * we haven't built yet (filed under GAP-109b).
      */
+    /**
+     * Push just the owner name (long + short) without touching role,
+     * PLI, channel, or LoRa preset. Used by the auto-sync that mirrors
+     * the operator's TAK callsign onto the connected mesh node so the
+     * TAK_TRACKER self-dedup in [MeshtasticCoTBridge] has a guaranteed
+     * name match. Returns true if the bytes hit the wire.
+     */
+    suspend fun pushOwnerName(longName: String, shortName: String): Boolean {
+        val transport = _activeTransport.value ?: return false
+        val bytes = AdminMessageSerializer.buildSetOwner(longName, shortName)
+        return when (transport) {
+            MeshConnectionType.TCP -> tcpClient.sendBytes(bytes)
+            MeshConnectionType.BLUETOOTH -> bleClient?.sendToRadio(bytes) ?: false
+        }
+    }
+
     suspend fun pushDeviceConfig(config: MeshDeviceConfig): Int {
         val transport = _activeTransport.value ?: return 0
 
