@@ -405,6 +405,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             initialAltitude = editingMarker?.hae?.takeIf { it != 0.0 },
             initialRemarks = editingMarker?.remarks ?: "",
             editing = editingMarker != null,
+            coordFormat = userPrefs.coordFormat,
             onSave = { result ->
                 val ll = markerSheetLatLng
                 if (ll != null) {
@@ -530,6 +531,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             val mapsLauncherCtx = LocalContext.current
             ContactsPanel(
                 contacts = contacts.values.toList(),
+                coordFormat = userPrefs.coordFormat,
                 onSelect = { c ->
                     panTarget = LatLng(c.lat, c.lon)
                     panTargetTick += 1

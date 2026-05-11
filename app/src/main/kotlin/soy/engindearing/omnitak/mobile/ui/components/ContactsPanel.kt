@@ -52,6 +52,8 @@ fun ContactsPanel(
     onSelect: (CoTEvent) -> Unit,
     onDismiss: () -> Unit,
     onNavigate: ((CoTEvent) -> Unit)? = null,
+    coordFormat: soy.engindearing.omnitak.mobile.data.CoordFormat =
+        soy.engindearing.omnitak.mobile.data.CoordFormat.LATLON_DECIMAL,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
     val sorted = contacts.sortedWith(
@@ -99,7 +101,7 @@ fun ContactsPanel(
                         .heightIn(max = 360.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    items(sorted, key = { it.uid }) { c -> ContactRow(c, onSelect, onNavigate) }
+                    items(sorted, key = { it.uid }) { c -> ContactRow(c, onSelect, onNavigate, coordFormat) }
                 }
             }
         }
@@ -111,6 +113,7 @@ private fun ContactRow(
     contact: CoTEvent,
     onSelect: (CoTEvent) -> Unit,
     onNavigate: ((CoTEvent) -> Unit)?,
+    coordFormat: soy.engindearing.omnitak.mobile.data.CoordFormat,
 ) {
     // Issue #26 — row body is the "Show on Map" affordance (parity with iOS
     // .centerMapOnContact). The Navigate icon button hands off to the
@@ -139,8 +142,9 @@ private fun ContactRow(
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                "%.5f, %.5f".format(contact.lat, contact.lon) + " · " +
-                    contact.affiliation.name.lowercase(),
+                soy.engindearing.omnitak.mobile.data.CoordFormatter.position(
+                    contact.lat, contact.lon, coordFormat,
+                ) + " · " + contact.affiliation.name.lowercase(),
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                 style = MaterialTheme.typography.labelSmall,
                 fontFamily = FontFamily.Monospace,

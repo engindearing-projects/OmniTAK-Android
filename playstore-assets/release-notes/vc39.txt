@@ -1,0 +1,5 @@
+<en-US>
+What's new in 0.4.0 (vc39):
+- Marker drop + Contacts panel now honour your coordinate format pref. Set UTM in Settings, every readout uses UTM. (Was hardcoded to decimal lat/lon — fix for P-E feedback.)
+- Custom map URLs now decode HTML-entity ampersands automatically. WMTS URLs copied out of Discord / a webpage with `&amp;` work without manual fix-up.
+</en-US>

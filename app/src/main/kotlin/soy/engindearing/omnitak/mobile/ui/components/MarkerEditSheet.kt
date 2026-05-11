@@ -67,6 +67,8 @@ fun MarkerEditSheet(
     initialAltitude: Double? = null,
     initialRemarks: String = "",
     editing: Boolean = false,
+    coordFormat: soy.engindearing.omnitak.mobile.data.CoordFormat =
+        soy.engindearing.omnitak.mobile.data.CoordFormat.LATLON_DECIMAL,
     onSave: (MarkerEditResult) -> Unit,
     onDelete: (() -> Unit)? = null,
     onDismiss: () -> Unit,
@@ -101,7 +103,9 @@ fun MarkerEditSheet(
             Spacer(Modifier.height(4.dp))
             latLng?.let {
                 Text(
-                    "%.5f, %.5f".format(it.latitude, it.longitude),
+                    soy.engindearing.omnitak.mobile.data.CoordFormatter.position(
+                        it.latitude, it.longitude, coordFormat,
+                    ),
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
                     fontFamily = FontFamily.Monospace,
                     style = MaterialTheme.typography.bodyMedium,

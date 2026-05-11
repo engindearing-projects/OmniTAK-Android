@@ -1,8 +1,8 @@
 <en-US>
 What's new in 0.4.0:
-- True multi-server — every enabled TAK server connects in parallel. PPLI fans out to all of them. Per-row connection status in Settings.
-- Full QR enrollment — tak://enroll generates a CSR, gets it signed by your TAK or OpenTAKserver, auto-connects with mTLS.
-- Server-driven config — point the app at one URL; every launch pulls the latest team prefs (PLI interval, callsign, basemap…).
+- True multi-server — every enabled TAK server connects in parallel. PPLI fans out to all.
+- Full QR enrollment — tak://enroll generates a CSR, gets it signed, auto-connects with mTLS.
+- Server-driven config — point the app at one URL; every launch pulls the latest team prefs.
 - Meshtastic owner name auto-synced to your TAK callsign so you don't show up twice.
-- Edit existing servers in place; Add Server form keyboard fix.
+- Edit servers in place. Keyboard no longer hides the Add Server form.
 </en-US>

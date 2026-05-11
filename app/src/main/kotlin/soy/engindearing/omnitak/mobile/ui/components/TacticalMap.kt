@@ -657,6 +657,16 @@ val TACTICAL_STYLE_DARK_MATTER = buildTacticalStyle(
 internal fun normalizeTileUrlPlaceholders(raw: String): String {
     if (raw.isEmpty()) return raw
     var out = raw.trim()
+    // HTML-entity decode first. Operators paste URLs out of Discord /
+    // webpages and end up with `&amp;` (sometimes double-encoded as
+    // `&amp;amp;`) where the URL needs real `&`. P-E's French IGN WMTS
+    // URL failed silently because the literal `&amp;` reached MapLibre
+    // and no tile request ever matched the server's expected params.
+    // Walk repeatedly so double-encoded entities collapse fully.
+    val entities = listOf("&amp;" to "&", "&lt;" to "<", "&gt;" to ">", "&quot;" to "\"", "&#39;" to "'")
+    repeat(3) {
+        for ((from, to) in entities) out = out.replace(from, to)
+    }
     // Common ATAK / WMTS variants. Order matters only insofar as we
     // want the longest match first; ${z} → {z} happens before {$z} → {z}
     // even though Kotlin's replace is exact-match (no overlap).
