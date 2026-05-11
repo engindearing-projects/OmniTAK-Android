@@ -20,6 +20,7 @@ import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.data.DeepLinkAction
 import soy.engindearing.omnitak.mobile.data.DeepLinkImport
 import soy.engindearing.omnitak.mobile.data.PreferenceUriApplier
+import soy.engindearing.omnitak.mobile.domain.CsrEnrollment
 import soy.engindearing.omnitak.mobile.domain.DataPackageBootstrap
 import soy.engindearing.omnitak.mobile.domain.DataPackageDownloader
 import soy.engindearing.omnitak.mobile.ui.navigation.AppNav
@@ -125,21 +126,23 @@ class MainActivity : ComponentActivity() {
                 }
             }
             is DeepLinkAction.Enroll -> {
-                // GAP-081: full CSR flow ships with iOS today. On Android we
-                // record the server stub + token so the operator at least
-                // sees the target in the Servers tab while CSR enrollment is
-                // in flight. The token is parked in the password slot until
-                // the dedicated CSR pipeline lands.
-                val stub = soy.engindearing.omnitak.mobile.data.ImportedServerConfig(
-                    name = action.host,
-                    host = action.host,
-                    port = 8089,
-                    useTLS = true,
-                    username = action.username,
-                    password = action.token,
-                )
-                app.serverManager.addServer(DeepLinkImport.toServer(stub))
-                toast("Enrollment staged for ${action.host} — Android CSR coming next")
+                toast("Enrolling with ${action.host}…")
+                lifecycleScope.launch {
+                    runCatching {
+                        CsrEnrollment(this@MainActivity, app.certVault).enroll(
+                            host = action.host,
+                            username = action.username,
+                            token = action.token,
+                            enrollmentPort = action.port,
+                        )
+                    }.onSuccess { server ->
+                        app.serverManager.addServer(server)
+                        toast("Enrolled: ${server.name} → auto-connecting")
+                    }.onFailure { t ->
+                        Log.w("OmniTAK", "CSR enrollment failed", t)
+                        toast("Enrollment failed: ${t.message ?: t.javaClass.simpleName}")
+                    }
+                }
             }
             DeepLinkAction.Unknown -> {
                 toast("Onboarding link missing host or payload")

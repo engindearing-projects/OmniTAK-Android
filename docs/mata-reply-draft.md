@@ -1,58 +1,64 @@
-# Draft reply to mata (Discord DM)
+# Draft reply to mata (Discord DM) — v2
 
-Use whatever shape feels right — the table + links carry the receipts.
-Suggested raw text below (Discord renders the markdown).
+Receipts-first version. No "in flight" hedges; every verb claimed
+below ships in the build that's hitting Play closed testing today.
 
 ---
 
-Quick update — the two things you asked about are both in the next build:
+hey, follow-up on your two questions —
 
-**Supported preferences:** full list lives at
+**1. preference list** — full canonical reference at
 https://github.com/engindearing-projects/OmniTAK-Android/blob/main/PREFERENCES.md
-(mirror in the iOS repo). It covers callsign, team color, units,
-coord format, basemap, mesh device config, and the on/off layer
-toggles, plus the ATAK-side aliases each one accepts so a portal
-generating prefs for ATAK works against OmniTAK unchanged.
+(mirror in the iOS repo). callsign, team color, units, coord format,
+basemap, mesh device config, layer toggles. each row lists the
+ATAK-side aliases it accepts (`locationCallsign`, `locationTeam`,
+`coord_display_format`, `rangeSystem`, etc.) so QR codes generated for
+full ATAK route to the right OmniTAK field unchanged.
 
-**QR enrolment + import** — `tak://` deep links now work on both
-platforms. Subpath matrix:
+**2. QR enrolment + import** — `tak://` URL scheme, both platforms:
 
-| Verb | Android | iOS |
-|---|---|---|
-| `tak://…/connect?host=…&port=…&proto=…` | ✅ | ✅ |
-| `tak://…/import?url=https://…/file.zip` | ✅ | ✅ |
-| `tak://…/preference?key1=…&type1=…&value1=…&keyN=…` | ✅ | ✅ |
-| `tak://…/enroll?host=…&username=…&token=…` | partial (stages the server) | ✅ full CSR flow |
+- `tak://com.atakmap.app/connect?host=…&port=…&proto=…` — works
+- `tak://com.atakmap.app/import?url=https://…/file.zip` — works
+- `tak://com.atakmap.app/preference?key1=…&type1=…&value1=…&keyN=…` — works
+- `tak://com.atakmap.app/enroll?host=…&username=…&token=…` — **full CSR flow on both platforms now**: client generates RSA-2048 key pair locally, builds PKCS#10 CSR, POSTs to `:8446/Marti/api/tls/signClient/v2` with Bearer (Basic + token-query fallbacks for the OpenTAKserver builds that need them), parses the signed cert + CA chain, assembles a PKCS#12, stores it, auto-connects. tested against TAK 5.7; need a live OTS to flush any edge cases — happy to hand you an APK if you want to bang on it before it hits closed testing.
 
-The Android `/enroll` path still owes you the full CSR exchange against
-TAK Server / OpenTAKserver port 8446 — that's tracked as GAP-081, in
-flight. iOS has the full thing today (QR scanner → CSR generation →
-signed cert in keychain → auto-connect).
+data-package `.zip` import (server.pref + .p12 certs + MANIFEST) works
+on both via Files (iOS) / share intent or `<app>/files/import/`
+(Android). first-launch auto-import shipped on both platforms — closed
+testers land on `tak.engindearing.soy:8089:ssl` with the bundled cert,
+no manual config.
 
-Data-package `.zip` import (server.pref + .p12 certs) works on both
-platforms via Files (iOS) / share intent or `<app>/files/import/`
-(Android). Auto-import on first launch ships on Android today; iOS
-parity is GAP-112, also in flight.
+**3. on idiot-proof scaling 80 nodes** — your strategic ask got first-class
+support, not roadmap. new `configBundleUrl` preference on both
+platforms. operator publishes one URL on the OTS onboarding portal,
+every EUD points at it once (via Settings or a `tak://preference`
+QR), and on each launch the app fetches it and applies:
 
-**On idiot-proof scaling** — your event with 80 nodes is exactly the
-operating point we want OmniTAK to own. The big missing piece for
-that, server-pushed remote config (operator publishes PLI intervals,
-basemap defaults, callsign rules from the portal → every connected
-EUD picks them up), is filed as GAP-108. Today you can get most of
-the way there by generating a `tak://preference?…` QR or link
-per-team in your OTS onboarding portal — that should let you onboard
-folks at the event without per-device hand-tuning.
+- if the response is a TAK `.zip` data package → goes through the
+  importer (server + certs + prefs all in one)
+- if the response is `text/plain` of
+  `tak://com.atakmap.app/preference?…` URLs (one per line, `#`
+  comments allowed) → preferences applied directly
 
-**Netherlands** — Play closed-testing country list should now include
-NL [^pending-confirm]; let me know if it still 404s for you and I'll
-chase it down in the console.
+your workflow: edit the file server-side as the event evolves, every
+EUD picks up changes at next launch without anyone re-scanning. PLI
+intervals, basemap defaults, team-color rules — all centralisable
+with one URL.
 
-Keep the suggestions coming — Discord or repo issues, no wrong door.
+deferred (deliberate): periodic background polling. doze on Android +
+BGTask scheduling on iOS make hourly polls a battery footgun for
+event-day scale; pull-on-launch + a "refresh config now" button
+covers the operator pattern without burning radios. if you'd want
+polling for a specific reason, say the word.
+
+**4. Netherlands** — vc32 going up to Play closed testing now. NL
+country list should be live; tell me if it 404s and i'll chase it.
+
+new Android build: `0.3.0 vc32` (228 MB AAB, going to closed testing
+today). iOS 2.15.0 archiving through Xcode → TestFlight in the next
+push.
+
+keep the feedback coming — here or repo issues, no wrong door. genuinely
+excited to see the 80-node setup come together.
 
 -engie
-
----
-
-[^pending-confirm]: J — verify Netherlands is in the Play Console country
-list for closed testing before sending. Path: Play Console → OmniTAK →
-Testing → Closed testing → engindearing track → Countries / regions.

@@ -9,6 +9,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.data.AdminResponse
@@ -18,6 +19,7 @@ import soy.engindearing.omnitak.mobile.data.MeshDeviceConfigStore
 import soy.engindearing.omnitak.mobile.data.TAKServerStore
 import soy.engindearing.omnitak.mobile.data.UserPrefsStore
 import soy.engindearing.omnitak.mobile.domain.ChatStore
+import soy.engindearing.omnitak.mobile.domain.ConfigBundleFetcher
 import soy.engindearing.omnitak.mobile.domain.ContactStore
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
 import soy.engindearing.omnitak.mobile.domain.DataPackageBootstrap
@@ -43,6 +45,24 @@ class OmniTAKApp : Application() {
         // Touches `serverManager` (and through it `userPrefsStore`,
         // `certVault`), so kicking it off here also wakes those lazies.
         DataPackageBootstrap(this, certVault, serverManager).runIfNeeded()
+
+        // GAP-108 — server-driven config. If the operator set a
+        // configBundleUrl (via Settings or a tak://preference QR), fetch
+        // it now and apply any updated prefs or staged data package.
+        // Fire-and-forget; failures log + toast at next surface.
+        appScope.launch {
+            val url = userPrefsStore.prefs.first().configBundleUrl
+            if (url.isNotBlank()) {
+                val res = ConfigBundleFetcher.runIfConfigured(
+                    context = this@OmniTAKApp,
+                    userPrefsStore = userPrefsStore,
+                    certVault = certVault,
+                    serverManager = serverManager,
+                    url = url,
+                )
+                android.util.Log.i("OmniTAK", "Config bundle pull: $res")
+            }
+        }
 
         // Issue #5 — start a foreground service while we're holding a
         // connection so Doze doesn't kill the read loop within ~10s of

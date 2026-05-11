@@ -64,6 +64,14 @@ data class UserPrefs(
     val aircraftVisible: Boolean = true,
     val contactsVisible: Boolean = true,
     val followMeActive: Boolean = false,
+    // GAP-108 — server-driven config. When set, the app fetches this URL
+    // on every launch (and on demand from Settings → "Refresh config now").
+    // Response can be either a TAK data-package .zip (server creds + prefs
+    // + certs) or a plain-text body containing one or more
+    // `tak://com.atakmap.app/preference?…` URLs separated by newlines.
+    // Pattern: operator publishes one team config URL via OTS onboarding
+    // portal; every EUD picks up changes without re-scanning.
+    val configBundleUrl: String = "",
 )
 
 class UserPrefsStore(private val context: Context) {
@@ -85,6 +93,7 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_AIRCRAFT_VIS = booleanPreferencesKey("aircraft_visible")
     private val KEY_CONTACTS_VIS = booleanPreferencesKey("contacts_visible")
     private val KEY_FOLLOW_ME = booleanPreferencesKey("follow_me_active")
+    private val KEY_CONFIG_BUNDLE_URL = stringPreferencesKey("config_bundle_url")
 
     val prefs: Flow<UserPrefs> = context.userPrefsDataStore.data.map { p -> readFrom(p) }
 
@@ -108,6 +117,7 @@ class UserPrefsStore(private val context: Context) {
             p[KEY_AIRCRAFT_VIS] = next.aircraftVisible
             p[KEY_CONTACTS_VIS] = next.contactsVisible
             p[KEY_FOLLOW_ME] = next.followMeActive
+            p[KEY_CONFIG_BUNDLE_URL] = next.configBundleUrl
         }
     }
 
@@ -143,5 +153,6 @@ class UserPrefsStore(private val context: Context) {
         aircraftVisible = p[KEY_AIRCRAFT_VIS] ?: true,
         contactsVisible = p[KEY_CONTACTS_VIS] ?: true,
         followMeActive = p[KEY_FOLLOW_ME] ?: false,
+        configBundleUrl = p[KEY_CONFIG_BUNDLE_URL] ?: "",
     )
 }

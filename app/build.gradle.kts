@@ -21,7 +21,7 @@ android {
         applicationId = "soy.engindearing.omnitak.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 30
+        versionCode = 32
         versionName = "0.3.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -93,7 +93,11 @@ android {
             excludes += setOf(
                 "META-INF/AL2.0",
                 "META-INF/LGPL2.1",
-                "/META-INF/{AL2.0,LGPL2.1}"
+                "/META-INF/{AL2.0,LGPL2.1}",
+                // BouncyCastle 1.78 ships duplicate OSGi manifests across
+                // bcprov / bcpkix / bcutil — exclude them so mergeJavaRes
+                // doesn't choke. None of these are runtime-loaded.
+                "META-INF/versions/9/OSGI-INF/MANIFEST.MF",
             )
         }
     }
@@ -142,6 +146,12 @@ dependencies {
 
     // GAP-030b — FusedLocationProviderClient for real GPS fixes.
     implementation("com.google.android.gms:play-services-location:21.3.0")
+
+    // GAP-081 — Bouncy Castle for CSR (PKCS#10) generation and PKCS#12
+    // keystore assembly during TAK Server / OpenTAKserver CSR enrollment.
+    // Android ships an older BC that's hidden; pin our own.
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+    implementation("org.bouncycastle:bcpkix-jdk18on:1.78.1")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
