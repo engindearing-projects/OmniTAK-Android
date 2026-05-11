@@ -73,13 +73,19 @@ class SelfPositionBroadcaster internal constructor(
             // Ensure we have a stable UID before broadcasting. First boot
             // generates one and writes it back so future runs reuse it.
             val prefs = ensureSelfUid()
-            Log.i(TAG, "Starting PPLI broadcast — uid=${prefs.selfUid} callsign=${prefs.callsign}")
+            Log.i(TAG, "Starting PPLI broadcast — uid=${prefs.selfUid} callsign=${prefs.callsign} interval=${prefs.pliIntervalSecs}s")
             broadcastOnce(prefs)
             while (isActive) {
+                // Re-read pliIntervalSecs each iteration so an operator
+                // pushing a new value via tak://preference or
+                // configBundleUrl takes effect on the next tick without a
+                // restart. Floor at 5s to avoid accidental DoS of the
+                // mesh / TAK server.
+                val latest = currentPrefs()
+                val intervalMs = (latest.pliIntervalSecs.coerceAtLeast(5)) * 1000L
                 delay(intervalMs)
                 if (!isActive) break
-                val latest = currentPrefs()
-                broadcastOnce(latest)
+                broadcastOnce(currentPrefs())
             }
         }
     }

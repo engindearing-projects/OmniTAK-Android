@@ -1,0 +1,6 @@
+<en-US>
+What's new in 0.3.0 (vc33):
+
+• In-app reporting interval — new "pliIntervalSecs" preference (5–600 s). Push it via tak://preference, configBundleUrl, or Settings. ATAK aliases dispatchLocationCotInterval and locationReportingInterval also work, so existing ATAK config bundles drop right in.
+• TAK_TRACKER self-dedup — when your mesh node's callsign matches your TAK callsign, OmniTAK suppresses it so you don't see yourself twice on the map.
+</en-US>

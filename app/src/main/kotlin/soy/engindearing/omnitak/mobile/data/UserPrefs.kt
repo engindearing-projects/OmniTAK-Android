@@ -3,6 +3,7 @@ package soy.engindearing.omnitak.mobile.data
 import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -72,6 +73,19 @@ data class UserPrefs(
     // Pattern: operator publishes one team config URL via OTS onboarding
     // portal; every EUD picks up changes without re-scanning.
     val configBundleUrl: String = "",
+    // PLI broadcast interval for the app's self-position CoT, in seconds.
+    // Critical knob for large-mesh deployments — the operator pushes a
+    // longer interval (60–300s) when running 50+ EUDs so the mesh isn't
+    // saturated by self-position chatter. Pushable via tak://preference
+    // (key `pliIntervalSecs` or the ATAK aliases `dispatchLocationCotInterval`
+    // / `locationReportingInterval`) so an OpenTAKserver onboarding
+    // portal can set it for the whole team via configBundleUrl.
+    val pliIntervalSecs: Int = 30,
+    // When true (default), the MeshtasticCoTBridge suppresses any mesh
+    // node whose callsign matches our own — solves the "see yourself
+    // twice" duplication when running TAK_TRACKER role on the mesh side
+    // alongside the OmniTAK client publishing its own PPLI.
+    val hideSelfFromMeshContacts: Boolean = true,
 )
 
 class UserPrefsStore(private val context: Context) {
@@ -94,6 +108,8 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_CONTACTS_VIS = booleanPreferencesKey("contacts_visible")
     private val KEY_FOLLOW_ME = booleanPreferencesKey("follow_me_active")
     private val KEY_CONFIG_BUNDLE_URL = stringPreferencesKey("config_bundle_url")
+    private val KEY_PLI_INTERVAL_SECS = intPreferencesKey("pli_interval_secs")
+    private val KEY_HIDE_SELF_FROM_MESH = booleanPreferencesKey("hide_self_from_mesh_contacts")
 
     val prefs: Flow<UserPrefs> = context.userPrefsDataStore.data.map { p -> readFrom(p) }
 
@@ -118,6 +134,8 @@ class UserPrefsStore(private val context: Context) {
             p[KEY_CONTACTS_VIS] = next.contactsVisible
             p[KEY_FOLLOW_ME] = next.followMeActive
             p[KEY_CONFIG_BUNDLE_URL] = next.configBundleUrl
+            p[KEY_PLI_INTERVAL_SECS] = next.pliIntervalSecs
+            p[KEY_HIDE_SELF_FROM_MESH] = next.hideSelfFromMeshContacts
         }
     }
 
@@ -154,5 +172,7 @@ class UserPrefsStore(private val context: Context) {
         contactsVisible = p[KEY_CONTACTS_VIS] ?: true,
         followMeActive = p[KEY_FOLLOW_ME] ?: false,
         configBundleUrl = p[KEY_CONFIG_BUNDLE_URL] ?: "",
+        pliIntervalSecs = (p[KEY_PLI_INTERVAL_SECS] ?: 30).coerceIn(5, 600),
+        hideSelfFromMeshContacts = p[KEY_HIDE_SELF_FROM_MESH] ?: true,
     )
 }

@@ -67,6 +67,16 @@ object PreferenceUriApplier {
             "aircraftVisible" -> coerceBool(entry.value)?.let { prefs.copy(aircraftVisible = it) }
             "contactsVisible" -> coerceBool(entry.value)?.let { prefs.copy(contactsVisible = it) }
             "followMeActive" -> coerceBool(entry.value)?.let { prefs.copy(followMeActive = it) }
+            "configBundleUrl" -> prefs.copy(configBundleUrl = entry.value.trim())
+            // mata's strategic ask: in-app reporting interval pushable from
+            // a portal config. ATAK names two variants of this in its prefs
+            // schema — accept either as an alias so a config bundle
+            // generated against ATAK targets us too.
+            "pliIntervalSecs", "dispatchLocationCotInterval", "locationReportingInterval" ->
+                entry.value.trim().toIntOrNull()
+                    ?.takeIf { it in 5..600 }
+                    ?.let { prefs.copy(pliIntervalSecs = it) }
+            "hideSelfFromMeshContacts" -> coerceBool(entry.value)?.let { prefs.copy(hideSelfFromMeshContacts = it) }
             else -> null
         }
     }

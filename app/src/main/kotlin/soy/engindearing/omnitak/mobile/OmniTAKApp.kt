@@ -244,6 +244,25 @@ class OmniTAKApp : Application() {
                     .distinctUntilChanged()
                     .collect { bridge.enabled = it }
             }
+            // TAK_TRACKER self-dedup — when our callsign matches the
+            // mesh node's name (long or short), the node is our own and
+            // its PPLI duplicates the SelfPositionBroadcaster output.
+            // hideSelfFromMeshContacts gates this; default true.
+            appScope.launch {
+                userPrefsStore.prefs
+                    .map { Pair(it.hideSelfFromMeshContacts, it.callsign.trim()) }
+                    .distinctUntilChanged()
+                    .collect { (hide, callsign) ->
+                        bridge.isSelfNode = if (!hide || callsign.isBlank()) {
+                            { false }
+                        } else {
+                            { node ->
+                                node.longName.trim().equals(callsign, ignoreCase = true) ||
+                                    node.shortName.trim().equals(callsign, ignoreCase = true)
+                            }
+                        }
+                    }
+            }
         }
     }
 }

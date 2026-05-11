@@ -25,6 +25,15 @@ class MeshtasticCoTBridge(
     private val mesh: MeshtasticManager,
     private val cotSink: (CoTEvent) -> Unit,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    /**
+     * Predicate evaluated against every mesh node before publication.
+     * When it returns true, the node is suppressed — used to drop the
+     * operator's own mesh node when its callsign matches the user's
+     * TAK callsign (solves the TAK_TRACKER "see yourself twice"
+     * duplication). Default: never suppress, callers wire the prefs-aware
+     * matcher.
+     */
+    @Volatile var isSelfNode: (MeshNode) -> Boolean = { false },
 ) {
 
     @Volatile var enabled: Boolean = true
@@ -38,6 +47,14 @@ class MeshtasticCoTBridge(
             mesh.nodes.collect { table ->
                 if (!enabled) return@collect
                 for ((id, node) in table) {
+                    if (isSelfNode(node)) {
+                        // Drop the operator's own mesh PPLI so it doesn't
+                        // collide with the SelfPositionBroadcaster's CoT.
+                        // Track the fingerprint anyway so we don't re-evaluate
+                        // unchanged self-ticks on every flow re-emission.
+                        lastSent[id] = NodeFingerprint.of(node)
+                        continue
+                    }
                     val fp = NodeFingerprint.of(node)
                     if (lastSent[id] == fp) continue
                     val event = MeshtasticCoTConverter.nodeToCoT(node) ?: continue
