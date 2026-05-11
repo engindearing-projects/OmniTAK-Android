@@ -50,7 +50,15 @@ provide, broker, or proxy any server.
 == What it does ==
 
 • TAK Server connectivity — TCP, TLS, or mutual TLS with client-certificate
-  enrollment. Multiple servers, switch between them.
+  enrollment. Multiple servers in parallel: PPLI fans out to every connected
+  server, every server's contacts merge into one map.
+• QR onboarding — tak:// deep links for /connect, /import (data package zip),
+  /preference (settings push), and /enroll (full CSR against TAK Server :8446).
+• Server-driven config — point the app at one URL on your TAK / OpenTAKserver
+  portal; every launch pulls the latest team prefs.
+• Meshtastic integration — read + push device config (PLI interval, role,
+  channel, LoRa preset), TAK_TRACKER self-dedup so you don't see yourself
+  twice, automatic mesh owner name sync to your TAK callsign.
 • Cursor-on-Target (CoT) — full XML parser. Send and receive markers, chat,
   PPLI position reports, range-and-bearing lines.
 • Tactical map — MapLibre Native vector + raster basemaps. Default ships with
@@ -107,19 +115,20 @@ in SECURITY.md in the repo.
 
 ## What's new (≤500 chars) — current release
 
-For v0.2.7 (versionCode 27):
+For v0.4.0 (versionCode 36). Per-build release notes live at
+`playstore-assets/release-notes/<vcN>.txt`; this is the consolidated
+0.4.x cut for the main listing.
 
 ```
-What's new in 0.2.7:
-• PPLI now reports your real battery level instead of always showing 100%
-• Save Server no longer crashes on mTLS-required hosts
-• Add Server: password is masked while typing, Save button is always visible
-• Custom map URLs accept ATAK-style {$z}/{$x}/{$y} placeholders
-• Map callsign card respects your coord-format preference (lat/lon, MGRS, UTM)
-• Dropped markers now render on Adreno-GPU devices
+What's new in 0.4.0:
+- True multi-server — every enabled TAK server connects in parallel. PPLI reaches all of them.
+- Full QR enrollment — tak://enroll generates a CSR, gets it signed, auto-connects.
+- Server-driven config — point the app at a URL; every launch pulls the latest team prefs.
+- Meshtastic owner name auto-synced to your TAK callsign so you don't show up twice.
+- Edit existing servers in place; Add Server form keyboard fix.
 ```
 
-> Char count: ~485 / 500.
+> Char count: ~480 / 500.
 
 ---
 
