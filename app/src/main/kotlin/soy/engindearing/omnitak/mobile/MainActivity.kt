@@ -10,12 +10,18 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.lifecycleScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
+import kotlinx.coroutines.launch
+import soy.engindearing.omnitak.mobile.data.DeepLinkAction
 import soy.engindearing.omnitak.mobile.data.DeepLinkImport
+import soy.engindearing.omnitak.mobile.data.PreferenceUriApplier
+import soy.engindearing.omnitak.mobile.domain.DataPackageBootstrap
+import soy.engindearing.omnitak.mobile.domain.DataPackageDownloader
 import soy.engindearing.omnitak.mobile.ui.navigation.AppNav
 import soy.engindearing.omnitak.mobile.ui.theme.OmniTAKTheme
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalBackground
@@ -61,35 +67,100 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * GAP-105 rest — handle `atak://` / `omnitak://` deep links carrying
-     * a server-onboarding payload. Singletask launchMode means a second
-     * scan while the app is open re-enters via [onNewIntent] instead of
-     * spawning a new task.
+     * Dispatch ATAK-compatible deep links. Singletask launchMode means a
+     * second QR scan while the app is open re-enters via [onNewIntent]
+     * instead of spawning a new task.
+     *
+     * Supported verbs (any of `tak://`, `atak://`, `omnitak://`, or an
+     * `https://?host=…` fallback):
+     *
+     * - `/connect` or bare-query — add a server config + auto-connect.
+     * - `/import?url=…` — download a data-package zip and apply it via
+     *   [DataPackageBootstrap].
+     * - `/preference?keyN=…&typeN=…&valueN=…` — write supported keys to
+     *   [UserPrefs]. Unsupported keys are dropped (toast names them).
+     * - `/enroll?host=…&username=…&token=…` — CSR enrollment. iOS has
+     *   the full flow; on Android we add the server with credentials so
+     *   the connect attempt at least surfaces in the Servers tab while
+     *   GAP-081 is in flight.
      */
     private fun handleImportIntent(intent: Intent?) {
         if (intent?.action != Intent.ACTION_VIEW) return
         val uri = intent.data ?: return
-        if (!DeepLinkImport.isServerConfig(uri)) return
 
-        val cfg = DeepLinkImport.parseServerConfig(uri)
-        if (cfg == null) {
-            Toast.makeText(
-                this,
-                "Onboarding link missing host or port",
-                Toast.LENGTH_LONG,
-            ).show()
-            return
-        }
+        val action = DeepLinkImport.parse(uri)
+        Log.i("OmniTAK", "Deep link $uri → ${action::class.simpleName}")
 
         val app = applicationContext as OmniTAKApp
-        val server = DeepLinkImport.toServer(cfg)
-        app.serverManager.addServer(server)
+        when (action) {
+            is DeepLinkAction.AddServer -> {
+                val server = DeepLinkImport.toServer(action.config)
+                app.serverManager.addServer(server)
+                toast("Added server: ${server.name} (${server.host}:${server.port})")
+            }
+            is DeepLinkAction.ImportFromUrl -> {
+                toast("Downloading data package…")
+                lifecycleScope.launch {
+                    val file = DataPackageDownloader.download(this@MainActivity, action.url)
+                    if (file == null) {
+                        toast("Data-package download failed")
+                        return@launch
+                    }
+                    DataPackageBootstrap(this@MainActivity, app.certVault, app.serverManager)
+                        .runIfNeeded()
+                    toast("Importing ${file.name}")
+                }
+            }
+            is DeepLinkAction.SetPreferences -> {
+                lifecycleScope.launch {
+                    val result = applyPreferences(app, action.entries)
+                    val msg = buildString {
+                        append("Applied ${result.applied.size} preference")
+                        if (result.applied.size != 1) append("s")
+                        if (result.ignored.isNotEmpty()) {
+                            append(" (ignored ${result.ignored.size}: ${result.ignored.joinToString(",")})")
+                        }
+                    }
+                    toast(msg)
+                }
+            }
+            is DeepLinkAction.Enroll -> {
+                // GAP-081: full CSR flow ships with iOS today. On Android we
+                // record the server stub + token so the operator at least
+                // sees the target in the Servers tab while CSR enrollment is
+                // in flight. The token is parked in the password slot until
+                // the dedicated CSR pipeline lands.
+                val stub = soy.engindearing.omnitak.mobile.data.ImportedServerConfig(
+                    name = action.host,
+                    host = action.host,
+                    port = 8089,
+                    useTLS = true,
+                    username = action.username,
+                    password = action.token,
+                )
+                app.serverManager.addServer(DeepLinkImport.toServer(stub))
+                toast("Enrollment staged for ${action.host} — Android CSR coming next")
+            }
+            DeepLinkAction.Unknown -> {
+                toast("Onboarding link missing host or payload")
+            }
+        }
+    }
 
-        Log.i("OmniTAK", "Imported server '${server.name}' from $uri")
-        Toast.makeText(
-            this,
-            "Added server: ${server.name} (${server.host}:${server.port})",
-            Toast.LENGTH_LONG,
-        ).show()
+    private suspend fun applyPreferences(
+        app: OmniTAKApp,
+        entries: List<DeepLinkAction.PreferenceEntry>,
+    ): PreferenceUriApplier.ApplyResult {
+        var captured: PreferenceUriApplier.ApplyResult? = null
+        app.userPrefsStore.update { current ->
+            val res = PreferenceUriApplier.apply(current, entries)
+            captured = res
+            res.prefs
+        }
+        return captured!!
+    }
+
+    private fun toast(msg: String) {
+        Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
     }
 }

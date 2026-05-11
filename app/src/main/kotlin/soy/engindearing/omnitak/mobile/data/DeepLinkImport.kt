@@ -37,49 +37,26 @@ data class ImportedServerConfig(
 )
 
 object DeepLinkImport {
-    /** Accept any URI we recognise as a server-onboarding payload. */
-    fun isServerConfig(uri: Uri?): Boolean {
-        if (uri == null) return false
-        val scheme = uri.scheme?.lowercase() ?: return false
-        if (scheme !in setOf("atak", "omnitak", "http", "https")) return false
-        return !uri.getQueryParameter("host").isNullOrBlank()
-    }
+    /** Accept any URI we recognise as a TAK-flavoured deep link. */
+    fun isServerConfig(uri: Uri?): Boolean = parse(uri) !is DeepLinkAction.Unknown
 
     /**
-     * Parse a server-config URI. Returns null if the URI doesn't carry
-     * a usable host or port — the caller should toast a friendly error
-     * rather than silently dropping the import.
+     * Parse a TAK deep link into a typed [DeepLinkAction]. Delegates to
+     * the pure-Kotlin [AtakUriParser] so the same code path covers
+     * `tak://com.atakmap.app/<verb>?…` (canonical ATAK), `atak://…`
+     * (de-facto), `omnitak://…` (our own scheme), and `https?://?host=…`
+     * fallbacks. [MainActivity.handleImportIntent] dispatches on the
+     * returned action.
      */
-    fun parseServerConfig(uri: Uri): ImportedServerConfig? {
-        val host = uri.getQueryParameter("host")?.trim().orEmpty()
-        if (host.isBlank()) return null
-
-        val port = uri.getQueryParameter("port")?.toIntOrNull() ?: 8089
-        if (port !in 1..65535) return null
-
-        val tlsFromFlag = uri.getQueryParameter("tls")?.equals("true", ignoreCase = true)
-        val tlsFromProto = uri.getQueryParameter("proto")?.equals("tls", ignoreCase = true)
-        val useTLS = tlsFromFlag ?: tlsFromProto ?: (port == 8089)
-
-        // Both schemes share the credential param names, with shorthand
-        // `user` / `pw` in our own scheme to keep QR payloads tighter.
-        val username = (uri.getQueryParameter("username")
-            ?: uri.getQueryParameter("user"))
-            ?.takeIf { it.isNotBlank() }
-        val password = (uri.getQueryParameter("password")
-            ?: uri.getQueryParameter("pw"))
-            ?.takeIf { it.isNotEmpty() }
-
-        val name = uri.getQueryParameter("name")?.takeIf { it.isNotBlank() }
-            ?: host
-
-        return ImportedServerConfig(
-            name = name,
-            host = host,
-            port = port,
-            useTLS = useTLS,
-            username = username,
-            password = password,
+    fun parse(uri: Uri?): DeepLinkAction {
+        if (uri == null) return DeepLinkAction.Unknown
+        val query = uri.queryParameterNames
+            .mapNotNull { name -> uri.getQueryParameter(name)?.let { name to it } }
+            .toMap()
+        return AtakUriParser.parse(
+            scheme = uri.scheme,
+            path = uri.path,
+            query = query,
         )
     }
 
