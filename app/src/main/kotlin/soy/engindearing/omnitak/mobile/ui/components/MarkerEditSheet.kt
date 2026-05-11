@@ -69,6 +69,8 @@ fun MarkerEditSheet(
     editing: Boolean = false,
     coordFormat: soy.engindearing.omnitak.mobile.data.CoordFormat =
         soy.engindearing.omnitak.mobile.data.CoordFormat.LATLON_DECIMAL,
+    appMode: soy.engindearing.omnitak.mobile.data.AppMode =
+        soy.engindearing.omnitak.mobile.data.AppMode.TACTICAL,
     onSave: (MarkerEditResult) -> Unit,
     onDelete: (() -> Unit)? = null,
     onDismiss: () -> Unit,
@@ -148,6 +150,7 @@ fun MarkerEditSheet(
                 ).forEach { a ->
                     AffiliationChip(
                         affiliation = a,
+                        label = labelFor(a, appMode),
                         selected = affiliation == a,
                         onClick = { affiliation = a },
                     )
@@ -227,9 +230,34 @@ private fun tacticalFieldColors() = TextFieldDefaults.colors(
     cursorColor = TacticalAccent,
 )
 
+/**
+ * Translate a [CoTAffiliation] into the operator-persona-aware label
+ * (Searcher / Clue / POI / Hazard for SAR; Crew / Hazard / Resource /
+ * Unknown for Fire-Rescue; Friend / Caution / Point / Unknown for
+ * Civilian; default Friendly / Hostile / Neutral / Unknown for Tactical).
+ *
+ * Closes K9Blue's TROP feedback: military icons / labels were too
+ * abstract for SAR teams. The CoT type still rides the wire as
+ * `a-f-G-U-C` etc. — only the on-screen vocabulary changes.
+ */
+private fun labelFor(
+    a: CoTAffiliation,
+    mode: soy.engindearing.omnitak.mobile.data.AppMode,
+): String {
+    val t = mode.terminology
+    return when (a) {
+        CoTAffiliation.FRIEND -> t.friendlyMarker
+        CoTAffiliation.HOSTILE -> t.hostileMarker
+        CoTAffiliation.NEUTRAL -> t.neutralMarker
+        CoTAffiliation.UNKNOWN -> t.unknownMarker
+        else -> a.name.lowercase().replaceFirstChar { it.uppercase() }
+    }
+}
+
 @Composable
 private fun AffiliationChip(
     affiliation: CoTAffiliation,
+    label: String = affiliation.name.lowercase().replaceFirstChar { it.uppercase() },
     selected: Boolean,
     onClick: () -> Unit,
 ) {
@@ -250,7 +278,7 @@ private fun AffiliationChip(
         )
         Spacer(Modifier.width(6.dp))
         Text(
-            affiliation.name.lowercase().replaceFirstChar { it.uppercase() },
+            label,
             color = if (selected) color else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
         )

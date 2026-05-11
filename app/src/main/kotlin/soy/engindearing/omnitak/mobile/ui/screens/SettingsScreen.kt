@@ -1,5 +1,8 @@
 package soy.engindearing.omnitak.mobile.ui.screens
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -17,6 +20,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -87,6 +92,23 @@ fun SettingsScreen() {
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
+            SectionHeader("Operator persona")
+            SegmentedRow(
+                options = listOf(
+                    soy.engindearing.omnitak.mobile.data.AppMode.TACTICAL to "Tactical",
+                    soy.engindearing.omnitak.mobile.data.AppMode.FIRE_RESCUE to "Fire/Rescue",
+                    soy.engindearing.omnitak.mobile.data.AppMode.SAR to "SAR",
+                    soy.engindearing.omnitak.mobile.data.AppMode.CIVILIAN to "Civilian",
+                ),
+                selected = prefs.appMode,
+                onSelect = { v -> mutate { it.copy(appMode = v) } },
+            )
+            Text(
+                "${prefs.appMode.subtitle} — markers labelled ${prefs.appMode.terminology.friendlyMarker} / ${prefs.appMode.terminology.unknownMarker} / ${prefs.appMode.terminology.neutralMarker} / ${prefs.appMode.terminology.hostileMarker}.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+            )
+
             SectionHeader("Identity")
             // GAP-103 — local state insulates the field from DataStore round-trip
             // latency, otherwise every keystroke re-emits prefs.callsign and the
@@ -172,6 +194,52 @@ fun SettingsScreen() {
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
+
+            SectionHeader("Mission")
+            // SAR feedback (K9Blue, 5/9/26): "Exporting Missions is not
+            // possible from the app. Which really stinks because
+            // sometimes we will be asked to provide search data on the
+            // spot when we do not have a CalTopo file or equivalent."
+            // Build a KML of every marker + drawing on the map and let
+            // the operator save it via SAF (Downloads, Drive, AirDrop-
+            // equivalent share targets).
+            val context = LocalContext.current
+            val markers by app.contactStore.contacts.collectAsState()
+            val drawings by app.drawingStore.drawings.collectAsState()
+            val saveKml = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.CreateDocument("application/vnd.google-earth.kml+xml"),
+            ) { uri: Uri? ->
+                if (uri != null) {
+                    scope.launch {
+                        runCatching {
+                            val kml = soy.engindearing.omnitak.mobile.data.MissionKmlExporter.export(
+                                markers = markers,
+                                drawings = drawings,
+                            )
+                            context.contentResolver.openOutputStream(uri)?.use {
+                                it.write(kml.toByteArray(Charsets.UTF_8))
+                            }
+                        }
+                    }
+                }
+            }
+            Button(
+                onClick = {
+                    val ts = java.text.SimpleDateFormat("yyyy-MM-dd-HHmm", java.util.Locale.US)
+                        .format(java.util.Date())
+                    saveKml.launch("OmniTAK-Mission-$ts.kml")
+                },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = TacticalAccent,
+                    contentColor = TacticalBackground,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Export mission as KML") }
+            Text(
+                "${markers.size} marker(s), ${drawings.size} drawing(s) on the map. Save to Downloads / Drive / share-sheet — drops cleanly into CalTopo, ATAK, iTAK.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+            )
 
             Spacer(Modifier.height(8.dp))
         }

@@ -93,6 +93,13 @@ data class UserPrefs(
     // the mesh node and the TAK client wear the same callsign so the
     // self-dedup is guaranteed to match, no manual sync.
     val autoSyncCallsignToMesh: Boolean = true,
+    // App persona — Tactical / Fire-Rescue / SAR / Civilian. Drives the
+    // radial-menu action set, marker terminology, and the accent
+    // palette. Pairs with iOS `AppModeManager.currentMode`. K9Blue's
+    // TROP feedback drove the SAR variant; team labels become
+    // Searcher / Clue / POI / Hazard so dropped markers carry the
+    // search team's vocabulary instead of military 2525B abstractions.
+    val appMode: AppMode = AppMode.TACTICAL,
 )
 
 class UserPrefsStore(private val context: Context) {
@@ -118,6 +125,7 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_PLI_INTERVAL_SECS = intPreferencesKey("pli_interval_secs")
     private val KEY_HIDE_SELF_FROM_MESH = booleanPreferencesKey("hide_self_from_mesh_contacts")
     private val KEY_AUTO_SYNC_CALLSIGN_TO_MESH = booleanPreferencesKey("auto_sync_callsign_to_mesh")
+    private val KEY_APP_MODE = stringPreferencesKey("app_mode")
 
     val prefs: Flow<UserPrefs> = context.userPrefsDataStore.data.map { p -> readFrom(p) }
 
@@ -145,6 +153,7 @@ class UserPrefsStore(private val context: Context) {
             p[KEY_PLI_INTERVAL_SECS] = next.pliIntervalSecs
             p[KEY_HIDE_SELF_FROM_MESH] = next.hideSelfFromMeshContacts
             p[KEY_AUTO_SYNC_CALLSIGN_TO_MESH] = next.autoSyncCallsignToMesh
+            p[KEY_APP_MODE] = next.appMode.wire
         }
     }
 
@@ -184,5 +193,6 @@ class UserPrefsStore(private val context: Context) {
         pliIntervalSecs = (p[KEY_PLI_INTERVAL_SECS] ?: 30).coerceIn(5, 600),
         hideSelfFromMeshContacts = p[KEY_HIDE_SELF_FROM_MESH] ?: true,
         autoSyncCallsignToMesh = p[KEY_AUTO_SYNC_CALLSIGN_TO_MESH] ?: true,
+        appMode = AppMode.fromWire(p[KEY_APP_MODE]),
     )
 }

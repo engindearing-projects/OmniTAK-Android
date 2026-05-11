@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.PinDrop
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Remove
@@ -357,6 +358,46 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 enabled = locationGranted,
                 onClick = { recenterTick++ },
             )
+            // SAR feedback (K9Blue): "no option for dropping a
+            // waypoint/marker on your current position … having to lock
+            // onto your own position and create a waypoint takes a lot
+            // of time when we need to be watching our dogs". One-tap
+            // marker at the current GPS fix; auto-callsign with
+            // timestamp; broadcasts to every connected server via
+            // sendCoT fan-out.
+            MapControlFab(
+                icon = Icons.Filled.PinDrop,
+                contentDescription = "Mark my position",
+                tint = if (selfFix != null) TacticalAccent else androidx.compose.ui.graphics.Color.Gray,
+                enabled = selfFix != null,
+                onClick = {
+                    val fix = selfFix ?: return@MapControlFab
+                    val callsign = soy.engindearing.omnitak.mobile.data.MarkerCoT.timestampedCallsign()
+                    val uid = "local-${System.currentTimeMillis()}"
+                    val type = "a-f-G-U-C"
+                    app.contactStore.ingest(
+                        soy.engindearing.omnitak.mobile.data.CoTEvent(
+                            uid = uid,
+                            type = type,
+                            lat = fix.lat,
+                            lon = fix.lon,
+                            hae = fix.altitudeM,
+                            callsign = callsign,
+                        ),
+                    )
+                    val xml = soy.engindearing.omnitak.mobile.data.MarkerCoT.build(
+                        uid = uid,
+                        callsign = callsign,
+                        type = type,
+                        lat = fix.lat,
+                        lon = fix.lon,
+                        hae = fix.altitudeM,
+                        team = userPrefs.team,
+                    )
+                    scope.launch { app.serverManager.sendCoT(xml) }
+                    toast("Marked $callsign")
+                },
+            )
         }
 
         RadialMenu(
@@ -406,6 +447,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             initialRemarks = editingMarker?.remarks ?: "",
             editing = editingMarker != null,
             coordFormat = userPrefs.coordFormat,
+            appMode = userPrefs.appMode,
             onSave = { result ->
                 val ll = markerSheetLatLng
                 if (ll != null) {

@@ -77,6 +77,7 @@ object PreferenceUriApplier {
                     ?.takeIf { it in 5..600 }
                     ?.let { prefs.copy(pliIntervalSecs = it) }
             "hideSelfFromMeshContacts" -> coerceBool(entry.value)?.let { prefs.copy(hideSelfFromMeshContacts = it) }
+            "appMode" -> AppMode.fromWire(entry.value).let { prefs.copy(appMode = it) }
             else -> null
         }
     }
