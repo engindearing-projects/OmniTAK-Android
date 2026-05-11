@@ -78,10 +78,26 @@ fun AppNav() {
                 )
             }
             composable("servers") {
-                ServersScreen(onAdd = { nav.navigate("servers/add") })
+                ServersScreen(
+                    onAdd = { nav.navigate("servers/add") },
+                    onEditServer = { id -> nav.navigate("servers/edit/$id") },
+                )
             }
             composable("servers/add") {
                 AddServerScreen(onDone = { nav.popBackStack() })
+            }
+            composable(
+                route = "servers/edit/{id}",
+                arguments = listOf(
+                    androidx.navigation.navArgument("id") {
+                        type = androidx.navigation.NavType.StringType
+                    },
+                ),
+            ) { backStackEntry ->
+                AddServerScreen(
+                    onDone = { nav.popBackStack() },
+                    editingId = backStackEntry.arguments?.getString("id"),
+                )
             }
             composable("chat") { ChatScreen() }
             composable(

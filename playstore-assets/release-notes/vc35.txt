@@ -1,0 +1,6 @@
+<en-US>
+What's new in 0.3.0 (vc35):
+- True multi-server — every enabled TAK server now holds its own live connection in parallel. Your PPLI fans out to all of them, so peers on each server see you. Per-row connection status in Settings shows what's actually connected.
+- Edit existing server — pencil icon on each server row opens the form pre-filled, so changing a port or cert password no longer means delete + re-add.
+- Add Server form fields no longer collapse when the keyboard opens.
+</en-US>

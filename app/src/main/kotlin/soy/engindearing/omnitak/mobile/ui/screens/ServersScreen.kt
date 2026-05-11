@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
@@ -58,12 +59,16 @@ import soy.engindearing.omnitak.mobile.ui.theme.TacticalSurface
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ServersScreen(onAdd: () -> Unit) {
+fun ServersScreen(onAdd: () -> Unit, onEditServer: (String) -> Unit = {}) {
     val app = LocalContext.current.applicationContext as OmniTAKApp
     val manager = app.serverManager
     val servers by manager.servers.collectAsState()
     val active by manager.activeServer.collectAsState()
     val connState by manager.connectionState.collectAsState()
+    // Per-server state for the multi-connection model — each row's icon
+    // reflects ITS socket, not the active server's. Fixes P-E's "bright
+    // green for your default, dark green for mine" confusion.
+    val connStates by manager.connectionStates.collectAsState()
 
     Scaffold(
         containerColor = TacticalBackground,
@@ -99,20 +104,26 @@ fun ServersScreen(onAdd: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 items(items = servers, key = { it.id }) { server ->
-                    val connectedToThis = active?.id == server.id && (
-                        connState is ConnectionState.Connected || connState is ConnectionState.Connecting
-                    )
+                    val rowState = connStates[server.id] ?: ConnectionState.Disconnected
+                    val connectedToThis = rowState is ConnectionState.Connected ||
+                        rowState is ConnectionState.Connecting
                     ServerCard(
                         server = server,
                         isActive = active?.id == server.id,
-                        connState = if (active?.id == server.id) connState else ConnectionState.Disconnected,
+                        connState = rowState,
                         onTap = { manager.setActive(server.id) },
                         onToggle = { manager.toggleEnabled(server.id) },
                         onDelete = { manager.deleteServer(server.id) },
+                        onEdit = { onEditServer(server.id) },
                         onConnectToggle = {
-                            if (connectedToThis) manager.disconnect() else {
-                                manager.setActive(server.id)
-                                manager.connect(server)
+                            // True multi-server: connect/disconnect targets
+                            // THIS row only. Other servers stay as they are.
+                            if (connectedToThis) {
+                                manager.toggleEnabled(server.id)
+                                // Toggle off path already disconnects this one.
+                            } else {
+                                if (!server.enabled) manager.toggleEnabled(server.id)
+                                else manager.connect(server)
                             }
                         },
                     )
@@ -161,6 +172,7 @@ private fun ServerCard(
     onToggle: () -> Unit,
     onDelete: () -> Unit,
     onConnectToggle: () -> Unit,
+    onEdit: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -243,6 +255,14 @@ private fun ServerCard(
                 checkedTrackColor = TacticalAccent,
             ),
         )
+
+        IconButton(onClick = onEdit) {
+            Icon(
+                Icons.Filled.Edit,
+                contentDescription = "Edit ${server.name}",
+                tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+            )
+        }
 
         IconButton(onClick = onDelete) {
             Icon(

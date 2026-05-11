@@ -1,6 +1,5 @@
 <en-US>
 What's new in 0.3.0 (vc34):
-
-• Unified callsign — your TAK callsign is now auto-synced to the connected Meshtastic node as its owner name (set_owner). The mesh node and the OmniTAK client always wear the same name, so the TAK_TRACKER self-dedup just works regardless of mesh role.
-• Short-name derivation keeps trailing digits ("ALPHA-7" → short "ALP7") so teammates can still tell you apart in the mesh node list.
+- Unified callsign — your TAK callsign is now auto-synced to the connected Meshtastic node as its owner name (set_owner). The mesh node and the OmniTAK client always wear the same name, so the TAK_TRACKER self-dedup just works regardless of mesh role.
+- Short-name derivation keeps trailing digits ("ALPHA-7" → short "ALP7") so teammates can still tell you apart in the mesh node list.
 </en-US>

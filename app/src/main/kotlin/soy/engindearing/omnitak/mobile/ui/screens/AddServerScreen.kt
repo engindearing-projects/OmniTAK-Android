@@ -62,22 +62,29 @@ import soy.engindearing.omnitak.mobile.ui.theme.TacticalBackground
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AddServerScreen(onDone: () -> Unit) {
+fun AddServerScreen(onDone: () -> Unit, editingId: String? = null) {
     val context = LocalContext.current
     val app = context.applicationContext as OmniTAKApp
     val manager = app.serverManager
     val certVault = app.certVault
 
-    var name by remember { mutableStateOf("") }
-    var host by remember { mutableStateOf("") }
-    var portText by remember { mutableStateOf("8089") }
-    var useTLS by remember { mutableStateOf(true) }
+    // Edit mode (P-E feedback 2026-05-11): when an editingId is supplied,
+    // pre-fill the form from the existing TAKServer so the operator can
+    // change a port or cert password without delete + re-add.
+    val existing = remember(editingId) {
+        editingId?.let { id -> manager.servers.value.firstOrNull { it.id == id } }
+    }
+
+    var name by remember { mutableStateOf(existing?.name ?: "") }
+    var host by remember { mutableStateOf(existing?.host ?: "") }
+    var portText by remember { mutableStateOf(existing?.port?.toString() ?: "8089") }
+    var useTLS by remember { mutableStateOf(existing?.useTLS ?: true) }
     // GAP-105 — basic-auth credentials. Either both fields filled or both blank.
-    var username by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
+    var username by remember { mutableStateOf(existing?.username ?: "") }
+    var password by remember { mutableStateOf(existing?.password ?: "") }
     // GAP-105 — client-cert .p12 + passphrase for mTLS to TAK Server.
-    var certName by remember { mutableStateOf<String?>(null) }
-    var certPassword by remember { mutableStateOf("") }
+    var certName by remember { mutableStateOf<String?>(existing?.certificateName) }
+    var certPassword by remember { mutableStateOf(existing?.certificatePassword ?: "") }
     var certError by remember { mutableStateOf<String?>(null) }
     // BUG-A — visibility toggles so users can confirm what they typed.
     // Default to masked (dots) on both password fields.
@@ -105,7 +112,7 @@ fun AddServerScreen(onDone: () -> Unit) {
         containerColor = TacticalBackground,
         topBar = {
             TopAppBar(
-                title = { Text("Add TAK Server") },
+                title = { Text(if (existing != null) "Edit TAK Server" else "Add TAK Server") },
                 navigationIcon = {
                     IconButton(onClick = onDone) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -136,25 +143,26 @@ fun AddServerScreen(onDone: () -> Unit) {
                 Button(
                     onClick = {
                         if (!canSave) return@Button
-                        manager.addServer(
-                            TAKServer(
-                                name = name.trim(),
-                                host = host,
-                                port = port!!,
-                                protocol = if (useTLS) {
-                                    ConnectionProtocol.TLS.wire
-                                } else {
-                                    ConnectionProtocol.TCP.wire
-                                },
-                                useTLS = useTLS,
-                                username = username.takeIf { it.isNotBlank() },
-                                password = password.takeIf { it.isNotEmpty() },
-                                certificateName = certName.takeIf { useTLS },
-                                certificatePassword = certPassword.takeIf {
-                                    useTLS && certName != null && it.isNotEmpty()
-                                },
-                            ),
+                        val draft = TAKServer(
+                            id = existing?.id ?: java.util.UUID.randomUUID().toString(),
+                            name = name.trim(),
+                            host = host,
+                            port = port!!,
+                            protocol = if (useTLS) {
+                                ConnectionProtocol.TLS.wire
+                            } else {
+                                ConnectionProtocol.TCP.wire
+                            },
+                            useTLS = useTLS,
+                            enabled = existing?.enabled ?: true,
+                            username = username.takeIf { it.isNotBlank() },
+                            password = password.takeIf { it.isNotEmpty() },
+                            certificateName = certName.takeIf { useTLS },
+                            certificatePassword = certPassword.takeIf {
+                                useTLS && certName != null && it.isNotEmpty()
+                            },
                         )
+                        if (existing != null) manager.updateServer(draft) else manager.addServer(draft)
                         onDone()
                     },
                     enabled = canSave,
@@ -164,16 +172,22 @@ fun AddServerScreen(onDone: () -> Unit) {
                         contentColor = TacticalBackground,
                     ),
                 ) {
-                    Text("Save Server")
+                    Text(if (existing != null) "Save Changes" else "Save Server")
                 }
             }
         },
     ) { inner: PaddingValues ->
+        // BUG-feedback (P-E, 2026-05-11): when the soft keyboard opens the
+        // entire form area collapsed and only "Save Server" remained
+        // visible. Cause: the Scaffold's `inner` PaddingValues already
+        // account for the IME (via the bottomBar's imePadding), and adding
+        // `.imePadding()` here on top double-subtracted the keyboard's
+        // height — viewport went to ~0 and all fields scrolled out of
+        // view. Drop the second imePadding.
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(inner)
-                .imePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
