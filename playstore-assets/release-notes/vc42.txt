@@ -1,0 +1,8 @@
+<en-US>
+What's new in 0.5.0 — SAR closeout:
+- Drawings now share over TAK. Every line, polygon, circle, and bullseye you save is broadcast to every connected server as a CoT event (u-d-f / u-d-c-c) and renders on every TAK client, not just OmniTAK peers. Incoming drawings from peers ingest back into your map.
+- New Bullseye shape. Drop a centre, get 100 m / 500 m / 1 km concentric rings out of the box. Closes K9Blue's TROP feedback line ("Bullseye could not be shared within a mission").
+- Breadcrumb track recording — record FAB on the map, full pause/discard/export in Settings → Tracks. GPX and KML share-sheet exports for CalTopo, Garmin, OsmAnd, Google Earth.
+- Offline map pre-fetch — pick a radius around your current position and a zoom range; tiles serve locally when you drop off cell mid-search. Settings → Offline maps.
+- KML mission export now includes bullseye rings so handoffs reproduce the SAR-standard set exactly.
+</en-US>
