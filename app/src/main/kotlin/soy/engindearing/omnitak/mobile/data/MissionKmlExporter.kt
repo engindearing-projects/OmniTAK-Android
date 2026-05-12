@@ -78,6 +78,9 @@ object MissionKmlExporter {
                 DrawingKind.LINE -> appendLine(sb, d)
                 DrawingKind.POLYGON -> appendPolygon(sb, d)
                 DrawingKind.CIRCLE -> appendCircle(sb, d)
+                // == S3:bullseye BEGIN ==
+                DrawingKind.BULLSEYE -> appendBullseye(sb, d)
+                // == S3:bullseye END ==
             }
         }
         sb.append("</Folder>\n")
@@ -129,6 +132,42 @@ object MissionKmlExporter {
         }
         sb.append("</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>\n")
     }
+
+    // == S3:bullseye BEGIN ==
+    /**
+     * K9 feedback (5/9/26): "Bullseye could not be shared within a
+     * mission." Each ring renders as its own closed polygon so CalTopo
+     * and the wider KML ecosystem (which has no bullseye primitive)
+     * still reproduces the SAR-standard 100 m / 500 m / 1 km set the
+     * operator drew.
+     */
+    private fun appendBullseye(sb: StringBuilder, d: Drawing) {
+        val (cLat, cLon) = d.points.firstOrNull() ?: return
+        val radii = (d.radiiM ?: DrawingCoT.DEFAULT_BULLSEYE_RADII_M)
+            .filter { it > 0.0 }
+            .sorted()
+        if (radii.isEmpty()) return
+        radii.forEachIndexed { idx, radiusM ->
+            sb.append("<Placemark><name>")
+                .append(escape(d.name.ifBlank { "Bullseye" }))
+                .append(" R").append(idx + 1)
+                .append(" (").append(formatRadius(radiusM)).append(")</name>")
+                .append("<styleUrl>#sar_drawing</styleUrl>")
+                .append("<Polygon><outerBoundaryIs><LinearRing><coordinates>")
+            val steps = 64
+            for (i in 0..steps) {
+                val ang = (i.toDouble() / steps) * 2.0 * Math.PI
+                val dLat = (radiusM / EARTH_R_M) * Math.cos(ang)
+                val dLon = (radiusM / EARTH_R_M) * Math.sin(ang) /
+                    Math.cos(Math.toRadians(cLat))
+                val plat = cLat + Math.toDegrees(dLat)
+                val plon = cLon + Math.toDegrees(dLon)
+                sb.append(plon).append(',').append(plat).append(",0 ")
+            }
+            sb.append("</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>\n")
+        }
+    }
+    // == S3:bullseye END ==
 
     private val AFFILIATION_STYLES = mapOf(
         "friend" to "ff00ff00",   // green (kml is aabbggrr)

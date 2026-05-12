@@ -1,0 +1,33 @@
+SAR feedback closeout — Session 3 (cross-platform drawing CoT)
+
+Closes K9Blue's TROP feedback line: "Bullseye could not be shared
+within a mission."
+
+What's new on Android (S3 branch additions):
+- New shape: Bullseye — drop a centre, get 100 m / 500 m / 1 km
+  concentric rings out of the box (radii are configurable in code; UI
+  customisation is the next iteration).
+- Drawing → CoT broadcast: every line, polygon, circle, and bullseye
+  the operator saves fans out via ServerManager.sendCoT to every
+  connected TAK server. CoT envelopes use the ATAK-compatible
+  u-d-f (line/polygon) and u-d-c-c (circle / bullseye ring) types so
+  every TAK client renders them — not just OmniTAK peers.
+- Receive: incoming u-d-* events ingest into DrawingStore. A peer
+  drawing a bullseye in iOS shows on the Android map (rings recovered
+  as individual circles tagged with the shared bullseye group UID).
+- KML mission export now includes bullseye rings as polygons, so
+  CalTopo / Google Earth handoffs reproduce the SAR-standard ring set
+  exactly.
+
+Tests:
+- app/src/test/.../DrawingCoTTest.kt — line/polygon/circle/bullseye
+  envelope checks + round-trip (build → parse → verify) for all
+  three shape families, including the polygon closing-duplicate
+  strip and the colour ARGB ↔ hex conversion.
+
+What this branch does NOT touch:
+- Track recording, offline tile prefetch (S1's territory).
+- Mark-My-Position FAB, mission KML on iOS (S2's territory).
+
+versionCode / versionName are left at the merge-base values; the
+integration step will assign the final coherent vc + semver.

@@ -194,6 +194,9 @@ class OmniTAKApp : Application() {
             // unknown; map that to null so SelfPositionBroadcaster omits
             // <status> rather than emitting a misleading number.
             batteryProvider = ::readDeviceBatteryPercent,
+            // == S3:drawing-cot-receive BEGIN ==
+            drawingStore = drawingStore,
+            // == S3:drawing-cot-receive END ==
         )
     }
 

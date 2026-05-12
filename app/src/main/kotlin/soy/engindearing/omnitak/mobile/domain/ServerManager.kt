@@ -12,6 +12,7 @@ import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.data.CertVault
 import soy.engindearing.omnitak.mobile.data.ChatXml
 import soy.engindearing.omnitak.mobile.data.CoTParser
+import soy.engindearing.omnitak.mobile.data.DrawingCoT
 import soy.engindearing.omnitak.mobile.data.LocationProvider
 import soy.engindearing.omnitak.mobile.data.TAKConnection
 import soy.engindearing.omnitak.mobile.data.TAKServer
@@ -43,6 +44,12 @@ class ServerManager(
     private val userPrefsStore: UserPrefsStore? = null,
     private val locationProvider: LocationProvider? = null,
     private val batteryProvider: () -> Int? = { null },
+    // == S3:drawing-cot-receive BEGIN ==
+    // Optional sink for incoming drawing CoT (u-d-* events). Wired by
+    // OmniTAKApp so a peer's bullseye / line / polygon / circle lands
+    // in the same DrawingStore the operator's own shapes do.
+    private val drawingStore: soy.engindearing.omnitak.mobile.domain.DrawingStore? = null,
+    // == S3:drawing-cot-receive END ==
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -107,7 +114,18 @@ class ServerManager(
                 if (chat != null) {
                     chatStore?.ingest(chat)
                 } else {
-                    CoTParser.parse(xml)?.let { contactStore?.ingest(it) }
+                    // == S3:drawing-cot-receive BEGIN ==
+                    // u-d-* events are drawings (line / polygon / circle /
+                    // bullseye ring). DrawingCoT.parse returns null for
+                    // anything else, so contact ingest still wins for
+                    // markers and PPLI.
+                    val drawing = DrawingCoT.parse(xml)
+                    if (drawing != null) {
+                        drawingStore?.add(drawing)
+                    } else {
+                        CoTParser.parse(xml)?.let { contactStore?.ingest(it) }
+                    }
+                    // == S3:drawing-cot-receive END ==
                 }
             }
         }

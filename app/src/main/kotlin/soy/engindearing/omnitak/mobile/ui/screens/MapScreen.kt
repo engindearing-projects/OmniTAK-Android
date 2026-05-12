@@ -501,15 +501,29 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         DrawingKind.LINE -> 2
                         DrawingKind.POLYGON -> 3
                         DrawingKind.CIRCLE -> 2
+                        // == S3:bullseye BEGIN ==
+                        DrawingKind.BULLSEYE -> 1
+                        // == S3:bullseye END ==
                     }
                     if (drawingPoints.size >= minPts) {
-                        app.drawingStore.add(
-                            Drawing(
-                                id = "draw-${System.currentTimeMillis()}",
-                                kind = drawingKind!!,
-                                points = drawingPoints.map { it.latitude to it.longitude },
-                            )
+                        val newDrawing = Drawing(
+                            id = "draw-${System.currentTimeMillis()}",
+                            kind = drawingKind!!,
+                            points = drawingPoints.map { it.latitude to it.longitude },
                         )
+                        app.drawingStore.add(newDrawing)
+                        // == S3:drawing-cot-broadcast BEGIN ==
+                        // Closes K9Blue's mission-sharing feedback: every
+                        // shape an operator finishes fans out to every
+                        // enabled TAK server so peers see the same map.
+                        // Fire-and-forget; sendCoT() is multi-server +
+                        // tolerant of zero connected servers.
+                        scope.launch {
+                            val payloads = soy.engindearing.omnitak.mobile.data.DrawingCoT
+                                .buildAll(newDrawing, callsign = userPrefs.callsign)
+                            for (xml in payloads) app.serverManager.sendCoT(xml)
+                        }
+                        // == S3:drawing-cot-broadcast END ==
                         toast("Saved ${drawingKind!!.name.lowercase()}")
                     } else {
                         toast("Need at least $minPts points")
@@ -638,6 +652,9 @@ private fun DrawingKindPicker(
                     DrawingKind.LINE to "Line — connected segments",
                     DrawingKind.POLYGON to "Polygon — closed shape",
                     DrawingKind.CIRCLE to "Circle — center + edge",
+                    // == S3:bullseye BEGIN ==
+                    DrawingKind.BULLSEYE to "Bullseye — concentric 100/500/1000 m rings",
+                    // == S3:bullseye END ==
                 ).forEach { (kind, label) ->
                     androidx.compose.material3.TextButton(
                         onClick = { onPick(kind) },
