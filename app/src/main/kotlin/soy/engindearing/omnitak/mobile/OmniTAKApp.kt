@@ -30,11 +30,27 @@ import soy.engindearing.omnitak.mobile.domain.MeshtasticCoTBridge
 import soy.engindearing.omnitak.mobile.domain.TAKConnectionService
 import soy.engindearing.omnitak.mobile.domain.MeshtasticManager
 import soy.engindearing.omnitak.mobile.domain.ServerManager
+// == S1:singletons-imports BEGIN ==
+import soy.engindearing.omnitak.mobile.domain.offline.OfflineTileCache
+import soy.engindearing.omnitak.mobile.domain.offline.OfflineTileStore
+import soy.engindearing.omnitak.mobile.domain.offline.TileDownloader
+import soy.engindearing.omnitak.mobile.domain.tracking.TrackRecorder
+import soy.engindearing.omnitak.mobile.domain.tracking.TrackStore
+// == S1:singletons-imports END ==
 
 class OmniTAKApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // == S1:onCreate BEGIN ==
+        // Wire the offline-tile read-through cache to MapLibre's HTTP
+        // stack so cached tiles short-circuit network reads when the
+        // operator goes off-cellular mid-search. MapLibre 11 exposes a
+        // setOkHttpClient hook for this; if the API is missing or the
+        // module isn't on the classpath, we no-op rather than crash —
+        // the downloader still uses the cache directly via OkHttp.
+        wireOfflineTileCacheToMapLibre()
+        // == S1:onCreate END ==
         // First-launch only: copy any bundled demo data-package from
         // assets/ into the import dir so DataPackageBootstrap's existing
         // sideload path picks it up. Production builds bundle one
@@ -181,6 +197,19 @@ class OmniTAKApp : Application() {
     val userPrefsStore: UserPrefsStore by lazy { UserPrefsStore(this) }
     val certVault: CertVault by lazy { CertVault(this) }
     val locationProvider: LocationProvider by lazy { LocationProvider(this) }
+
+    // == S1:singletons BEGIN ==
+    // SAR field-tools singletons. TrackRecorder observes
+    // locationProvider.fix so it sits below it in declaration order.
+    val trackStore: TrackStore by lazy { TrackStore(this) }
+    val trackRecorder: TrackRecorder by lazy {
+        TrackRecorder(store = trackStore, locationProvider = locationProvider)
+    }
+    val offlineTileStore: OfflineTileStore by lazy { OfflineTileStore(this) }
+    val offlineTileDownloader: TileDownloader by lazy {
+        TileDownloader(store = offlineTileStore)
+    }
+    // == S1:singletons END ==
     val serverManager: ServerManager by lazy {
         ServerManager(
             store = TAKServerStore(this),
@@ -196,6 +225,24 @@ class OmniTAKApp : Application() {
             batteryProvider = ::readDeviceBatteryPercent,
         )
     }
+
+    // == S1:wire-maplibre BEGIN ==
+    private fun wireOfflineTileCacheToMapLibre() {
+        runCatching {
+            val client = okhttp3.OkHttpClient.Builder()
+                .addInterceptor(OfflineTileCache(offlineTileStore))
+                .build()
+            // Reflectively reach for HttpRequestUtil.setOkHttpClient so a
+            // future MapLibre rename doesn't take down app startup.
+            val cls = Class.forName("org.maplibre.android.module.http.HttpRequestUtil")
+            val method = cls.getDeclaredMethod("setOkHttpClient", okhttp3.OkHttpClient::class.java)
+            method.invoke(null, client)
+            android.util.Log.i("OmniTAK", "Offline tile cache wired into MapLibre HttpRequestUtil")
+        }.onFailure { t ->
+            android.util.Log.w("OmniTAK", "Could not wire offline tile cache: ${t.message}")
+        }
+    }
+    // == S1:wire-maplibre END ==
 
     private fun readDeviceBatteryPercent(): Int? {
         val bm = getSystemService(Context.BATTERY_SERVICE) as? BatteryManager ?: return null

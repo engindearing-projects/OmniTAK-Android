@@ -21,8 +21,8 @@ android {
         applicationId = "soy.engindearing.omnitak.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 40
-        versionName = "0.4.0"
+        versionCode = 41
+        versionName = "0.5.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
@@ -152,6 +152,14 @@ dependencies {
     // Android ships an older BC that's hidden; pin our own.
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
     implementation("org.bouncycastle:bcpkix-jdk18on:1.78.1")
+
+    // == S1:offline-tiles BEGIN ==
+    // OkHttp powers the offline tile downloader (TileDownloader) and the
+    // read-through interceptor we hand to MapLibre via HttpRequestUtil
+    // so map tiles inside a downloaded region are served from disk even
+    // when the operator drops off cellular mid-search.
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // == S1:offline-tiles END ==
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
