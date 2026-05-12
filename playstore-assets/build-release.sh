@@ -27,10 +27,17 @@ if [[ -z "$current_vc" || -z "$current_vn" ]]; then
 fi
 
 # Highest vc ever staged in playstore-assets/ — that's our floor.
-# Filenames follow OmniTAK-<versionName>-vc<N>.aab.
-max_staged_vc=$(ls playstore-assets/*.aab 2>/dev/null \
-  | sed -E 's/.*-vc([0-9]+)\.aab$/\1/' \
-  | sort -n | tail -1)
+# Filenames follow OmniTAK-<versionName>-vc<N>.aab. nullglob keeps the
+# pipeline from aborting under `set -euo pipefail` when no AAB has been
+# staged yet (e.g. first run in a fresh worktree).
+shopt -s nullglob
+staged_aabs=(playstore-assets/*.aab)
+shopt -u nullglob
+if (( ${#staged_aabs[@]} > 0 )); then
+  max_staged_vc=$(printf '%s\n' "${staged_aabs[@]}" \
+    | sed -E 's/.*-vc([0-9]+)\.aab$/\1/' \
+    | sort -n | tail -1)
+fi
 max_staged_vc=${max_staged_vc:-0}
 
 new_vc=$(( max_staged_vc > current_vc ? max_staged_vc + 1 : current_vc + 1 ))
