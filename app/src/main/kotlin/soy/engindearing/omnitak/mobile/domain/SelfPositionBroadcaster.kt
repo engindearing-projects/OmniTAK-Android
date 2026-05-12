@@ -43,6 +43,14 @@ class SelfPositionBroadcaster internal constructor(
     // a tester-friendly default for unit tests). The previous hardcoded
     // "100" was misleading every peer that read our PPLI.
     private val batteryProvider: () -> Int? = { null },
+    // Step 2 of unified identity. Returns the operator's own mesh-node
+    // fix or null. Caller is responsible for matching the node to the
+    // operator (callsign equality) and filtering by freshness
+    // ([UserPrefs.selfMeshFixFreshnessSecs]). Receives the live prefs so
+    // wiring can read both threshold + callsign without a separate
+    // suspend lookup. Default `{ null }` keeps existing test wiring
+    // unchanged.
+    private val selfMeshFix: (UserPrefs) -> SelfFix? = { null },
     private val intervalMs: Long = DEFAULT_INTERVAL_MS,
     private val staleSeconds: Long = DEFAULT_STALE_SECONDS,
 ) {
@@ -52,6 +60,7 @@ class SelfPositionBroadcaster internal constructor(
         sendCoT: suspend (String) -> Boolean,
         locationFix: StateFlow<SelfFix?>,
         batteryProvider: () -> Int? = { null },
+        selfMeshFix: (UserPrefs) -> SelfFix? = { null },
         intervalMs: Long = DEFAULT_INTERVAL_MS,
         staleSeconds: Long = DEFAULT_STALE_SECONDS,
     ) : this(
@@ -61,6 +70,7 @@ class SelfPositionBroadcaster internal constructor(
         sendCoT = sendCoT,
         locationFix = locationFix,
         batteryProvider = batteryProvider,
+        selfMeshFix = selfMeshFix,
         intervalMs = intervalMs,
         staleSeconds = staleSeconds,
     )
@@ -106,7 +116,18 @@ class SelfPositionBroadcaster internal constructor(
     private suspend fun currentPrefs(): UserPrefs = prefsFlow.first()
 
     internal suspend fun broadcastOnce(prefs: UserPrefs) {
-        val fix = locationFix.value
+        // Step 2 of unified identity. When the operator runs a Meshtastic
+        // node in TAK_TRACKER role with the same callsign, that node's GPS
+        // (worn on body) is the authoritative position. The phone GPS is
+        // only a fallback if the radio is unreachable / stale.
+        val meshFix = if (prefs.preferMeshFixForSelfPpli) selfMeshFix(prefs) else null
+        val phoneFix = locationFix.value
+        val (fix, source) = when {
+            meshFix != null -> meshFix to PositionSource.MESHTASTIC
+            phoneFix != null -> phoneFix to PositionSource.GPS
+            else -> null to PositionSource.GPS
+        }
+
         val lat: Double
         val lon: Double
         val hae: Double
@@ -141,13 +162,25 @@ class SelfPositionBroadcaster internal constructor(
             speedKmh = speedKmh,
             staleSeconds = staleSeconds,
             batteryPercent = batteryProvider().takeIf { it != null && it in 0..100 },
+            positionSource = source,
         )
         val ok = sendCoT(xml)
         if (ok) {
-            Log.d(TAG, "PPLI sent — ${prefs.callsign} @ $lat,$lon")
+            Log.d(TAG, "PPLI sent — ${prefs.callsign} @ $lat,$lon (src=${source.wire})")
         } else {
             Log.w(TAG, "PPLI send failed (no socket?)")
         }
+    }
+
+    /**
+     * Tags the `<precisionlocation geopointsrc="…">` attribute so peers
+     * know whether this PPLI came from the phone's GPS or from the
+     * operator's mesh node. ATAK and TAKaware both surface this in the
+     * contact details pane.
+     */
+    enum class PositionSource(val wire: String) {
+        GPS("GPS"),
+        MESHTASTIC("Meshtastic"),
     }
 
     companion object {
@@ -174,6 +207,7 @@ class SelfPositionBroadcaster internal constructor(
             // battery field gracefully (column shows blank); a hardcoded
             // 100 misled operators reading peer status panes.
             batteryPercent: Int? = null,
+            positionSource: PositionSource = PositionSource.GPS,
         ): String {
             val now = System.currentTimeMillis()
             val time = isoUtc(now)
@@ -205,7 +239,8 @@ class SelfPositionBroadcaster internal constructor(
                 append("<takv device=\"AVD\" platform=\"OmniTAK-Android\" os=\"Android\" version=\"0.1\"/>")
                 append("<track speed=\"").append(String.format(Locale.US, "%.2f", speedMs))
                     .append("\" course=\"0.00\"/>")
-                append("<precisionlocation altsrc=\"GPS\" geopointsrc=\"GPS\"/>")
+                append("<precisionlocation altsrc=\"").append(positionSource.wire)
+                    .append("\" geopointsrc=\"").append(positionSource.wire).append("\"/>")
                 append("<uid Droid=\"").append(safeCallsign).append("\"/>")
                 append("<usericon iconsetpath=\"COT_MAPPING_2525B/a-f/a-f-G-U-C\"/>")
                 append("</detail>")

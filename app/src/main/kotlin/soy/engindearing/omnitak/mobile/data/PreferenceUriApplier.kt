@@ -77,6 +77,15 @@ object PreferenceUriApplier {
                     ?.takeIf { it in 5..600 }
                     ?.let { prefs.copy(pliIntervalSecs = it) }
             "hideSelfFromMeshContacts" -> coerceBool(entry.value)?.let { prefs.copy(hideSelfFromMeshContacts = it) }
+            "autoSyncCallsignToMesh" -> coerceBool(entry.value)?.let { prefs.copy(autoSyncCallsignToMesh = it) }
+            // Step 2 of unified identity. No ATAK alias — TAK_TRACKER role
+            // is the upstream equivalent and lives on the radio, not in
+            // app prefs.
+            "preferMeshFixForSelfPpli" -> coerceBool(entry.value)?.let { prefs.copy(preferMeshFixForSelfPpli = it) }
+            "selfMeshFixFreshnessSecs" ->
+                entry.value.trim().toIntOrNull()
+                    ?.takeIf { it in 5..600 }
+                    ?.let { prefs.copy(selfMeshFixFreshnessSecs = it) }
             "appMode" -> AppMode.fromWire(entry.value).let { prefs.copy(appMode = it) }
             else -> null
         }

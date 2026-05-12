@@ -20,10 +20,12 @@ Three on-ramps, all of them work today on both platforms:
    `.p12` bundle into the app via Files (iOS) / share-sheet or
    `<app>/files/import/` (Android).
 
-> Server-pushed remote config (`OpenTAKserver` → many clients) is **on
-> the roadmap as GAP-108** but not shipped on either platform yet.
-> Today every preference write goes through one of the three on-ramps
-> above.
+> Server-pushed remote config (`OpenTAKserver` → many clients) shipped
+> as the `configBundleUrl` preference. Set it once via deep link or
+> data-package, and every app launch fetches that URL and applies the
+> contents (either a TAK `.zip` data package or a `text/plain` body
+> of `tak://com.atakmap.app/preference?…` URLs, one per line, `#`
+> comments allowed).
 
 `tak://` URL scheme verb summary:
 
@@ -55,6 +57,28 @@ field — anything outside this table is ignored.
 | `aircraftVisible` | boolean | `true` | — |
 | `contactsVisible` | boolean | `true` | — |
 | `followMeActive` | boolean | `false` | — |
+| `pliIntervalSecs` | int (5–600) | `30` | `dispatchLocationCotInterval`, `locationReportingInterval` |
+| `configBundleUrl` | string (URL) | `""` | — |
+| `hideSelfFromMeshContacts` | boolean | `true` | — |
+| `autoSyncCallsignToMesh` | boolean | `true` | — |
+| `preferMeshFixForSelfPpli` | boolean | `true` | — |
+| `selfMeshFixFreshnessSecs` | int (5–600) | `60` | — |
+
+**Step 1 of unified identity** (v0.5.0): `hideSelfFromMeshContacts` +
+`autoSyncCallsignToMesh` make the operator's mesh node and TAK client
+wear the same callsign and dedup on display — fixes the TAK_TRACKER
+"see yourself twice" pain.
+
+**Step 2 of unified identity** (current): `preferMeshFixForSelfPpli`
+makes the operator's outbound PPLI source the lat/lon from their own
+mesh node instead of the phone GPS, when one is connected and reporting
+fresh fixes. CoT goes out under the operator's TAK identity
+(`<contact callsign=…>`) with `geopointsrc="Meshtastic"` so peers see
+the right provenance. Falls back to phone GPS when the mesh node has
+no position or its `last_heard` is older than `selfMeshFixFreshnessSecs`.
+Matching policy: case-insensitive equality between TAK callsign and
+the node's short *or* long name — which is reliable in practice
+because `autoSyncCallsignToMesh` pushes that callsign onto the radio.
 
 ### Android Meshtastic device-config keys
 

@@ -223,9 +223,57 @@ class OmniTAKApp : Application() {
             // unknown; map that to null so SelfPositionBroadcaster omits
             // <status> rather than emitting a misleading number.
             batteryProvider = ::readDeviceBatteryPercent,
+            // Step 2 of unified identity. When the operator runs their
+            // mesh node in TAK_TRACKER role with the same callsign, the
+            // node's on-body GPS becomes the PPLI source — phone GPS is
+            // the fallback. See [resolveSelfMeshFix] for the matching
+            // policy.
+            selfMeshFix = ::resolveSelfMeshFix,
             // == S3:drawing-cot-receive BEGIN ==
             drawingStore = drawingStore,
             // == S3:drawing-cot-receive END ==
+        )
+    }
+
+    /**
+     * Look up the operator's own mesh node in the latest [MeshtasticManager]
+     * snapshot. Match policy: equal short or long name to the TAK
+     * callsign (case-insensitive). The [autoSyncCallsignToMesh] pref
+     * pushes the operator's callsign onto the radio as `set_owner`, so
+     * after the first sync the names line up and this match is reliable.
+     *
+     * Freshness gate uses [UserPrefs.selfMeshFixFreshnessSecs] against
+     * the node's `lastHeardEpoch` so a radio that fell off the mesh
+     * doesn't pin us to a stale waypoint.
+     *
+     * Returns null when:
+     *  - no mesh node matches the callsign (operator has no radio, or
+     *    auto-sync hasn't run yet),
+     *  - the matched node has never reported a position, or
+     *  - the matched node's last_heard is older than the freshness window.
+     */
+    private fun resolveSelfMeshFix(prefs: soy.engindearing.omnitak.mobile.data.UserPrefs):
+        soy.engindearing.omnitak.mobile.data.SelfFix? {
+        val callsign = prefs.callsign.trim()
+        if (callsign.isEmpty()) return null
+        val node = meshtastic.nodes.value.values.firstOrNull { n ->
+            n.shortName.trim().equals(callsign, ignoreCase = true) ||
+                n.longName.trim().equals(callsign, ignoreCase = true)
+        } ?: return null
+        val pos = node.position ?: return null
+        val nowMs = System.currentTimeMillis()
+        val ageMs = nowMs - node.lastHeardEpoch * 1_000L
+        val freshnessMs = prefs.selfMeshFixFreshnessSecs.coerceAtLeast(5) * 1_000L
+        if (ageMs > freshnessMs) return null
+        return soy.engindearing.omnitak.mobile.data.SelfFix(
+            lat = pos.lat,
+            lon = pos.lon,
+            altitudeM = (pos.altitudeM ?: 0).toDouble(),
+            speedKmh = 0.0,
+            // Meshtastic GPS doesn't carry ATAK-style ce/le; treat the
+            // accuracy as unknown so peers don't read a fake confidence.
+            accuracyM = Float.NaN,
+            timeMs = node.lastHeardEpoch * 1_000L,
         )
     }
 

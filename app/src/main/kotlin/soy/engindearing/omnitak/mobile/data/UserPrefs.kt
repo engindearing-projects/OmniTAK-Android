@@ -93,6 +93,22 @@ data class UserPrefs(
     // the mesh node and the TAK client wear the same callsign so the
     // self-dedup is guaranteed to match, no manual sync.
     val autoSyncCallsignToMesh: Boolean = true,
+    // Step 2 of unified identity. When true (default), the
+    // SelfPositionBroadcaster prefers the operator's own mesh node fix
+    // over the phone's GPS for the outbound PPLI. The mesh node (run as
+    // TAK_TRACKER on Meshtastic) carries its own GPS receiver and is on
+    // the operator's body, so its lat/lon is the authoritative position
+    // even when phone-to-radio BLE is flaky. Fresh fix means
+    // `lastHeardEpoch` within [selfMeshFixFreshnessSecs]. When the mesh
+    // node is unreachable or stale, the broadcaster falls back to the
+    // phone GPS exactly like before, so operators without a connected
+    // mesh see zero behaviour change.
+    val preferMeshFixForSelfPpli: Boolean = true,
+    // How recent the self mesh node's last_heard must be for the
+    // broadcaster to trust it as the PPLI source. Default 60s — long
+    // enough to survive a hop or two of mesh latency, short enough to
+    // fall back to phone GPS if BLE drops.
+    val selfMeshFixFreshnessSecs: Int = 60,
     // App persona — Tactical / Fire-Rescue / SAR / Civilian. Drives the
     // radial-menu action set, marker terminology, and the accent
     // palette. Pairs with iOS `AppModeManager.currentMode`. K9Blue's
@@ -125,6 +141,8 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_PLI_INTERVAL_SECS = intPreferencesKey("pli_interval_secs")
     private val KEY_HIDE_SELF_FROM_MESH = booleanPreferencesKey("hide_self_from_mesh_contacts")
     private val KEY_AUTO_SYNC_CALLSIGN_TO_MESH = booleanPreferencesKey("auto_sync_callsign_to_mesh")
+    private val KEY_PREFER_MESH_FIX_FOR_SELF_PPLI = booleanPreferencesKey("prefer_mesh_fix_for_self_ppli")
+    private val KEY_SELF_MESH_FIX_FRESHNESS_SECS = intPreferencesKey("self_mesh_fix_freshness_secs")
     private val KEY_APP_MODE = stringPreferencesKey("app_mode")
 
     val prefs: Flow<UserPrefs> = context.userPrefsDataStore.data.map { p -> readFrom(p) }
@@ -153,6 +171,8 @@ class UserPrefsStore(private val context: Context) {
             p[KEY_PLI_INTERVAL_SECS] = next.pliIntervalSecs
             p[KEY_HIDE_SELF_FROM_MESH] = next.hideSelfFromMeshContacts
             p[KEY_AUTO_SYNC_CALLSIGN_TO_MESH] = next.autoSyncCallsignToMesh
+            p[KEY_PREFER_MESH_FIX_FOR_SELF_PPLI] = next.preferMeshFixForSelfPpli
+            p[KEY_SELF_MESH_FIX_FRESHNESS_SECS] = next.selfMeshFixFreshnessSecs
             p[KEY_APP_MODE] = next.appMode.wire
         }
     }
@@ -193,6 +213,8 @@ class UserPrefsStore(private val context: Context) {
         pliIntervalSecs = (p[KEY_PLI_INTERVAL_SECS] ?: 30).coerceIn(5, 600),
         hideSelfFromMeshContacts = p[KEY_HIDE_SELF_FROM_MESH] ?: true,
         autoSyncCallsignToMesh = p[KEY_AUTO_SYNC_CALLSIGN_TO_MESH] ?: true,
+        preferMeshFixForSelfPpli = p[KEY_PREFER_MESH_FIX_FOR_SELF_PPLI] ?: true,
+        selfMeshFixFreshnessSecs = (p[KEY_SELF_MESH_FIX_FRESHNESS_SECS] ?: 60).coerceIn(5, 600),
         appMode = AppMode.fromWire(p[KEY_APP_MODE]),
     )
 }

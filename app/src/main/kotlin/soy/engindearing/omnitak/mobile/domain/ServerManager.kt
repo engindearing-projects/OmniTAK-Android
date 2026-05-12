@@ -44,6 +44,11 @@ class ServerManager(
     private val userPrefsStore: UserPrefsStore? = null,
     private val locationProvider: LocationProvider? = null,
     private val batteryProvider: () -> Int? = { null },
+    // Step 2 of unified identity. Supplies the operator's mesh-node fix
+    // when one is fresh and its callsign matches the TAK user. Wired by
+    // OmniTAKApp from MeshtasticManager.nodes; null in tests / setups
+    // without a mesh radio (PPLI then falls back to phone GPS as before).
+    private val selfMeshFix: (soy.engindearing.omnitak.mobile.data.UserPrefs) -> soy.engindearing.omnitak.mobile.data.SelfFix? = { null },
     // == S3:drawing-cot-receive BEGIN ==
     // Optional sink for incoming drawing CoT (u-d-* events). Wired by
     // OmniTAKApp so a peer's bullseye / line / polygon / circle lands
@@ -212,6 +217,7 @@ class ServerManager(
             sendCoT = { xml -> sendCoT(xml) },
             locationFix = fixFlow,
             batteryProvider = batteryProvider,
+            selfMeshFix = selfMeshFix,
         ).also { it.start() }
     }
 
