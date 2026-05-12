@@ -16,6 +16,10 @@ import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.PinDrop
 import androidx.compose.material.icons.filled.Navigation
+// == S1:imports BEGIN ==
+import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material.icons.filled.Stop
+// == S1:imports END ==
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Straighten
@@ -398,6 +402,37 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     toast("Marked $callsign")
                 },
             )
+            // == S1:track-record BEGIN ==
+            // One-tap breadcrumb recording. SAR handlers can drop a
+            // search leg without leaving the map. Long-form controls
+            // (pause / discard / export) live in Settings → Tracks.
+            val trackRecorderIsRecording by app.trackRecorder.isRecording.collectAsState()
+            MapControlFab(
+                icon = if (trackRecorderIsRecording) Icons.Filled.Stop else Icons.Filled.FiberManualRecord,
+                contentDescription = if (trackRecorderIsRecording) "Stop track recording" else "Start track recording",
+                tint = if (trackRecorderIsRecording) {
+                    androidx.compose.ui.graphics.Color(0xFFFF5252)
+                } else if (selfFix != null) TacticalAccent else androidx.compose.ui.graphics.Color.Gray,
+                enabled = selfFix != null || trackRecorderIsRecording,
+                onClick = {
+                    if (trackRecorderIsRecording) {
+                        val saved = app.trackRecorder.stop()
+                        toast(
+                            if (saved != null) "Track saved: ${saved.points.size} pts, " +
+                                GeoMath.formatDistance(saved.totalDistanceM)
+                            else "Stopped",
+                        )
+                    } else {
+                        if (selfFix == null) {
+                            toast("Need a GPS fix before recording")
+                        } else {
+                            app.trackRecorder.start()
+                            toast("Recording track")
+                        }
+                    }
+                },
+            )
+            // == S1:track-record END ==
         }
 
         RadialMenu(

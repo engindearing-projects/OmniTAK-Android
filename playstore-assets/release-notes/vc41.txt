@@ -1,0 +1,6 @@
+<en-US>
+What's new in 0.5.0 — SAR field tools:
+- Breadcrumb track recording. One-tap record FAB on the map; full pause/discard/export controls in Settings → Tracks. Export saved tracks as GPX (Garmin, OsmAnd) or KML (CalTopo, Google Earth) via share-sheet.
+- Offline map pre-fetch. Pick a radius around your current position + a zoom range; tiles are downloaded and served locally so the map keeps drawing when you drop off cell mid-search. Settings → Offline maps.
+- Closes K9Blue's TROP feedback (5/9/26): track recording was iOS-only; offline maps were iOS-only.
+</en-US>

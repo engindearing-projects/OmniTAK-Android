@@ -318,4 +318,16 @@ These are **not** in the 3-session plan. Filed for after:
 Items a session discovers it can't do without another's data —
 record them here and pick up post-merge.
 
-- _(empty — fill in during execution)_
+- **(S1, 2026-05-11)** `playstore-assets/build-release.sh` aborts on
+  `set -euo pipefail` when no prior AAB is staged in the worktree
+  (the `ls playstore-assets/*.aab 2>/dev/null | …` pipeline exits 1
+  on empty match). Workaround used in S1: ran `./gradlew bundleRelease`
+  directly and copied the AAB by hand. Fix the script during
+  integration: `shopt -s nullglob` before the glob, or `|| true` on
+  the assignment.
+- **(S1, 2026-05-11)** MapLibre 11.x ships without OkHttp by default;
+  S1 added `com.squareup.okhttp3:okhttp:4.12.0` to `app/build.gradle.kts`
+  and wires `HttpRequestUtil.setOkHttpClient(...)` reflectively in
+  `OmniTAKApp.wireOfflineTileCacheToMapLibre()`. If MapLibre's
+  `org.maplibre.gl:okhttp` module is added to deps later, the
+  reflection call still works — no migration needed.

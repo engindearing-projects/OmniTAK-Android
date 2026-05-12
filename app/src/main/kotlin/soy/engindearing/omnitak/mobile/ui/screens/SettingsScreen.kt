@@ -241,6 +241,16 @@ fun SettingsScreen() {
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
             )
 
+            // == S1:tracks BEGIN ==
+            SectionHeader("Tracks")
+            soy.engindearing.omnitak.mobile.ui.screens.settings.TracksSection()
+            // == S1:tracks END ==
+
+            // == S1:offline-maps BEGIN ==
+            SectionHeader("Offline maps")
+            soy.engindearing.omnitak.mobile.ui.screens.settings.OfflineMapsSection(prefs)
+            // == S1:offline-maps END ==
+
             Spacer(Modifier.height(8.dp))
         }
     }
