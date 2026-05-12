@@ -5,6 +5,7 @@ import org.json.JSONObject
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.style.sources.GeoJsonSource
 import soy.engindearing.omnitak.mobile.data.Drawing
+import soy.engindearing.omnitak.mobile.data.DrawingCoT
 import soy.engindearing.omnitak.mobile.data.DrawingKind
 import kotlin.math.cos
 import kotlin.math.sin
@@ -33,6 +34,9 @@ object DrawingLayer {
                 DrawingKind.LINE -> features.put(lineFeature(d))
                 DrawingKind.POLYGON -> features.put(polygonFeature(d))
                 DrawingKind.CIRCLE -> features.put(circleFeature(d))
+                // == S3:bullseye BEGIN ==
+                DrawingKind.BULLSEYE -> bullseyeFeatures(d).forEach { features.put(it) }
+                // == S3:bullseye END ==
             }
         }
         return JSONObject()
@@ -89,6 +93,43 @@ object DrawingLayer {
                 JSONObject().put("type", "Polygon").put("coordinates", ring)
             )
     }
+
+    // == S3:bullseye BEGIN ==
+    /**
+     * Render a bullseye as one polygon-feature per concentric ring.
+     * `points` holds only the centre; radii come from `radiiM` (defaults
+     * to the SAR-standard 100 m / 500 m / 1 km set). Metres → degrees
+     * uses the same coarse `1° lat ≈ 111 km` approximation [circleFeature]
+     * already relies on — accurate enough at the zoom levels SAR
+     * operators draw at.
+     */
+    private fun bullseyeFeatures(d: Drawing): List<JSONObject> {
+        val (lat0, lon0) = d.points.firstOrNull() ?: return emptyList()
+        val radii = (d.radiiM ?: DrawingCoT.DEFAULT_BULLSEYE_RADII_M)
+            .filter { it > 0.0 }
+            .sorted()
+        if (radii.isEmpty()) return emptyList()
+        val metersPerDegLat = 111_000.0
+        val cosLat = cos(Math.toRadians(lat0))
+        return radii.map { rM ->
+            val rLatDeg = rM / metersPerDegLat
+            val rLonDeg = rM / (metersPerDegLat * if (cosLat == 0.0) 1.0 else cosLat)
+            val coords = JSONArray()
+            val steps = 64
+            for (i in 0..steps) {
+                val t = 2.0 * Math.PI * i / steps
+                val lon = lon0 + rLonDeg * cos(t)
+                val lat = lat0 + rLatDeg * sin(t)
+                coords.put(JSONArray().put(lon).put(lat))
+            }
+            val ring = JSONArray().put(coords)
+            baseFeature(d, "polygon").put(
+                "geometry",
+                JSONObject().put("type", "Polygon").put("coordinates", ring),
+            )
+        }
+    }
+    // == S3:bullseye END ==
 
     private fun baseFeature(d: Drawing, kind: String): JSONObject = JSONObject()
         .put("type", "Feature")
