@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Storage
@@ -58,7 +59,7 @@ import soy.engindearing.omnitak.mobile.ui.theme.TacticalSurface
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ServersScreen(onAdd: () -> Unit) {
+fun ServersScreen(onAdd: () -> Unit, onQuickConnect: () -> Unit = {}) {
     val app = LocalContext.current.applicationContext as OmniTAKApp
     val manager = app.serverManager
     val servers by manager.servers.collectAsState()
@@ -71,6 +72,17 @@ fun ServersScreen(onAdd: () -> Unit) {
             TopAppBar(
                 title = {
                     Text("TAK Servers", color = MaterialTheme.colorScheme.onBackground)
+                },
+                actions = {
+                    // Quick Connect — request a client cert from the server's
+                    // enrollment endpoint instead of importing a pre-issued .p12
+                    IconButton(onClick = onQuickConnect) {
+                        Icon(
+                            Icons.Filled.Bolt,
+                            contentDescription = "Quick Connect (enroll)",
+                            tint = TacticalAccent,
+                        )
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = TacticalBackground,

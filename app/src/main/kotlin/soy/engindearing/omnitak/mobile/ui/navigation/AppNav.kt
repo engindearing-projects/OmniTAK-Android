@@ -33,6 +33,7 @@ import soy.engindearing.omnitak.mobile.ui.components.ToolsLauncherSheet
 import soy.engindearing.omnitak.mobile.ui.screens.AboutScreen
 import soy.engindearing.omnitak.mobile.ui.screens.AddServerScreen
 import soy.engindearing.omnitak.mobile.ui.screens.ChatScreen
+import soy.engindearing.omnitak.mobile.ui.screens.EnrollServerScreen
 import soy.engindearing.omnitak.mobile.ui.screens.MapScreen
 import soy.engindearing.omnitak.mobile.ui.screens.MeshDeviceSettingsScreen
 import soy.engindearing.omnitak.mobile.ui.screens.MeshTopologyScreen
@@ -103,10 +104,16 @@ fun AppNav() {
                 )
             }
             composable("servers") {
-                ServersScreen(onAdd = { nav.navigate("servers/add") })
+                ServersScreen(
+                    onAdd = { nav.navigate("servers/add") },
+                    onQuickConnect = { nav.navigate("servers/enroll") },
+                )
             }
             composable("servers/add") {
                 AddServerScreen(onDone = { nav.popBackStack() })
+            }
+            composable("servers/enroll") {
+                EnrollServerScreen(onDone = { nav.popBackStack() })
             }
             composable("chat") { ChatScreen() }
             composable(

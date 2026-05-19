@@ -93,7 +93,10 @@ android {
             excludes += setOf(
                 "META-INF/AL2.0",
                 "META-INF/LGPL2.1",
-                "/META-INF/{AL2.0,LGPL2.1}"
+                "/META-INF/{AL2.0,LGPL2.1}",
+                // BouncyCastle ships an OSGi MANIFEST in three jars
+                // (bcprov, bcpkix, bcutil) — pick first wins.
+                "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
             )
         }
     }
@@ -147,6 +150,12 @@ dependencies {
     // Bitmaps for the MapLibre Marker Icon pipeline. Apache-2.0, stable.
     // baseProfile="tiny" SVGs convert in under 2 ms each on a Pixel 6.
     implementation("com.caverock:androidsvg-aar:1.4")
+
+    // BouncyCastle — PKCS#10 CSR construction for TAK Server Quick Connect
+    // enrollment (GAP-081). Android's bundled BC provider is stripped and
+    // old, so we ship the full provider + PKIX. Used by CSRGenerator only.
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+    implementation("org.bouncycastle:bcpkix-jdk18on:1.78.1")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
