@@ -69,7 +69,7 @@ Tracked as a single checklist; tick off when both platforms match. Each item sho
 Features iOS has that Android doesn't yet. Triage which need parity vs which can wait.
 
 - [ ] **GAP-080** Data Package import (.zip) — iOS has, Android missing
-- [ ] **GAP-081** CSR enrollment (port 8446) — iOS has, Android missing
+- [x] **GAP-081** CSR enrollment (port 8446) — Quick Connect ships in 0.9.0 (vc52)
 - [ ] **GAP-082** Video feeds (HLS / RTSP / SRT) — iOS has, Android missing
 - [ ] **GAP-083** Photo attachments with EXIF — iOS has, Android missing
 - [ ] **GAP-084** Plugin system — iOS has, Android missing
