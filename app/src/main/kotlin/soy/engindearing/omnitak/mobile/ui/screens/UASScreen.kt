@@ -93,6 +93,9 @@ fun UASScreen(onDone: () -> Unit) {
     var udpPortText by remember(currentSource) {
         mutableStateOf(((currentSource as? VideoSource.RawH264Udp)?.port ?: 5000).toString())
     }
+    var tsUdpPortText by remember(currentSource) {
+        mutableStateOf(((currentSource as? VideoSource.MpegTsUdp)?.port ?: 5010).toString())
+    }
     // Picker mode is sticky to whatever source is active (or RTSP as a
     // default). Switching the chip rewrites uas.videoSource immediately
     // so the PIP re-binds without an explicit "apply".
@@ -100,6 +103,7 @@ fun UASScreen(onDone: () -> Unit) {
         mutableStateOf(
             when (currentSource) {
                 is VideoSource.RawH264Udp -> VideoMode.RawH264Udp
+                is VideoSource.MpegTsUdp -> VideoMode.MpegTsUdp
                 else -> VideoMode.Rtsp
             },
         )
@@ -273,6 +277,19 @@ fun UASScreen(onDone: () -> Unit) {
                         selectedLabelColor = TacticalBackground,
                     ),
                 )
+                FilterChip(
+                    selected = videoMode == VideoMode.MpegTsUdp,
+                    onClick = {
+                        videoMode = VideoMode.MpegTsUdp
+                        val port = tsUdpPortText.toIntOrNull() ?: 5010
+                        uas.setVideoSource(VideoSource.mpegTsUdp(port))
+                    },
+                    label = { Text("MPEG-TS UDP") },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = TacticalAccent,
+                        selectedLabelColor = TacticalBackground,
+                    ),
+                )
             }
 
             when (videoMode) {
@@ -330,6 +347,40 @@ fun UASScreen(onDone: () -> Unit) {
                             uas.setVideoSource(VideoSource.rawH264Udp(5000))
                         }) { Text("RubyFPV default (5000)") }
                         if (currentSource is VideoSource.RawH264Udp) {
+                            OutlinedButton(onClick = {
+                                uas.setVideoSource(VideoSource.None)
+                            }) { Text("Stop", color = HostileRed) }
+                        }
+                    }
+                }
+                VideoMode.MpegTsUdp -> {
+                    TextField(
+                        value = tsUdpPortText,
+                        onValueChange = {
+                            tsUdpPortText = it.filter(Char::isDigit).take(5)
+                            val port = tsUdpPortText.toIntOrNull() ?: 0
+                            uas.setVideoSource(VideoSource.mpegTsUdp(port))
+                        },
+                        label = { Text("UDP port") },
+                        placeholder = { Text("5010 — canonical RubyFPV/gst pipeline") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    )
+                    Text(
+                        "MPEG-TS over UDP. Same wire format ATAK UAS Tool accepts. " +
+                            "Use this with the canonical RubyFPV pipeline " +
+                            "(h264parse → mpegtsmux → udpsink). Decoded by ExoPlayer + " +
+                            "TsExtractor with non-IDR keyframe tolerance.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = {
+                            tsUdpPortText = "5010"
+                            uas.setVideoSource(VideoSource.mpegTsUdp(5010))
+                        }) { Text("ATAK/gst default (5010)") }
+                        if (currentSource is VideoSource.MpegTsUdp) {
                             OutlinedButton(onClick = {
                                 uas.setVideoSource(VideoSource.None)
                             }) { Text("Stop", color = HostileRed) }
@@ -464,5 +515,5 @@ private fun CommandBtn(
 /** UI-only picker state — what kind of video source the operator is
  *  currently editing. Mapped to [VideoSource] when the operator
  *  applies the chip / fills the field. */
-private enum class VideoMode { Rtsp, RawH264Udp }
+private enum class VideoMode { Rtsp, RawH264Udp, MpegTsUdp }
 

@@ -12,11 +12,17 @@ package soy.engindearing.omnitak.mobile.data.uas
  *    RubyFPV "Video Forward To USB Device: Raw (H264)" and any
  *    similar long-range FPV ground station that doesn't expose RTSP.
  *    Decoded by MediaCodec directly.
+ *  - [MpegTsUdp]: H264 elementary stream wrapped in MPEG-TS, delivered
+ *    as UDP datagrams to [port]. This is what ATAK UAS Tool consumes
+ *    and what RubyFPV operators produce via the canonical gstreamer
+ *    pipeline (h264parse → mpegtsmux → udpsink). Decoded by Media3
+ *    ExoPlayer + UdpDataSource + TsExtractor.
  */
 sealed class VideoSource {
     object None : VideoSource()
     data class Rtsp(val url: String) : VideoSource()
     data class RawH264Udp(val port: Int) : VideoSource()
+    data class MpegTsUdp(val port: Int) : VideoSource()
 
     val isActive: Boolean get() = this !is None
 
@@ -26,5 +32,8 @@ sealed class VideoSource {
 
         fun rawH264Udp(port: Int): VideoSource =
             if (port in 1..65535) RawH264Udp(port) else None
+
+        fun mpegTsUdp(port: Int): VideoSource =
+            if (port in 1..65535) MpegTsUdp(port) else None
     }
 }

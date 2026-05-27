@@ -43,8 +43,15 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.media3.common.MediaItem
+import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.UdpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.extractor.DefaultExtractorsFactory
+import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
+import androidx.media3.extractor.ts.TsExtractor
 import androidx.media3.ui.PlayerView
 import soy.engindearing.omnitak.mobile.data.uas.RawH264UdpPlayer
 import soy.engindearing.omnitak.mobile.data.uas.VideoSource
@@ -93,6 +100,7 @@ fun UasVideoPip(
         when (source) {
             is VideoSource.Rtsp -> RtspSurface(source.url, Modifier.fillMaxSize())
             is VideoSource.RawH264Udp -> RawH264UdpSurface(source.port, Modifier.fillMaxSize())
+            is VideoSource.MpegTsUdp -> MpegTsUdpSurface(source.port, Modifier.fillMaxSize())
             is VideoSource.None -> Unit
         }
 
@@ -296,4 +304,77 @@ private fun RawH264UdpSurface(port: Int, modifier: Modifier = Modifier) {
             }
         }
     }
+}
+
+/**
+ * MPEG-TS over UDP video receiver. Wraps Media3 ExoPlayer with a
+ * [UdpDataSource] data source and a [TsExtractor] so an ATAK-UAS-Tool /
+ * RubyFPV gstreamer pipeline ("h264parse → mpegtsmux → udpsink") plays
+ * directly with no glue on the operator's side.
+ *
+ * Load control is tightened from the ExoPlayer defaults — for a live
+ * UDP feed we want ~50 ms target buffer, not the 2 s default — so the
+ * end-to-end latency stays under 200 ms when the network is clean.
+ */
+@Composable
+private fun MpegTsUdpSurface(port: Int, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    val player = remember(port) {
+        val loadControl = DefaultLoadControl.Builder()
+            // (minBufferMs, maxBufferMs, bufferForPlaybackMs, bufferForPlaybackAfterRebufferMs)
+            // Aggressive low-latency tuning — drop frames over rebuffering.
+            .setBufferDurationsMs(50, 250, 50, 50)
+            .build()
+        val udpFactory = DataSource.Factory {
+            // UdpDataSource(maxPacketSize) — 4096 is enough for MPEG-TS
+            // packets (typically 188 × N per datagram, max 1500 MTU).
+            UdpDataSource(/* maxPacketSize = */ 4096)
+        }
+        val extractorsFactory = DefaultExtractorsFactory()
+            .setTsExtractorMode(TsExtractor.MODE_SINGLE_PMT)
+            // Allow non-IDR keyframes — RubyFPV / gst pipelines often
+            // emit MPEG-TS without strict IDR markers, and ExoPlayer's
+            // default behavior is to refuse to start playback until it
+            // sees one. With this flag it accepts any I-slice as the
+            // first decodable frame.
+            .setTsExtractorFlags(DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES)
+        val mediaSource = ProgressiveMediaSource.Factory(udpFactory, extractorsFactory)
+            .createMediaSource(MediaItem.fromUri("udp://0.0.0.0:$port"))
+        ExoPlayer.Builder(context)
+            .setLoadControl(loadControl)
+            .build()
+            .apply {
+                setMediaSource(mediaSource)
+                prepare()
+                playWhenReady = true
+            }
+    }
+
+    DisposableEffect(player) { onDispose { player.release() } }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_STOP -> player.pause()
+                Lifecycle.Event.ON_START -> player.play()
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    AndroidView(
+        modifier = modifier,
+        factory = { ctx ->
+            PlayerView(ctx).apply {
+                useController = false
+                setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+                this.player = player
+            }
+        },
+        update = { it.player = player },
+    )
 }

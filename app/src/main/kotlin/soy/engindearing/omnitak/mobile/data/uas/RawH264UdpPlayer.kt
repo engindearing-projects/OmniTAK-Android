@@ -146,6 +146,17 @@ class RawH264UdpPlayer(
                 // csd-0 and csd-1 must include the start code prefix.
                 setByteBuffer("csd-0", ByteBuffer.wrap(withStartCode(s)))
                 setByteBuffer("csd-1", ByteBuffer.wrap(withStartCode(p)))
+                // Low-latency hints. Hint 1: tell the codec to buy a
+                // single input buffer instead of the default 4–5,
+                // trading throughput for end-to-end latency — right
+                // call for live FPV. Some codecs honor KEY_LATENCY,
+                // some only honor KEY_LOW_LATENCY (API 30+); set both
+                // and let the decoder pick. Silently ignored by codec
+                // impls that don't support either, so no harm.
+                setInteger(MediaFormat.KEY_LATENCY, 1)
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                    setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+                }
             }
             val c = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
             c.configure(format, surface, null, 0)
