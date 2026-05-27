@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.OmniTAKApp
 import soy.engindearing.omnitak.mobile.data.uas.MavlinkConnection
+import soy.engindearing.omnitak.mobile.data.uas.VideoSource
 import soy.engindearing.omnitak.mobile.ui.theme.HostileRed
 import soy.engindearing.omnitak.mobile.ui.theme.NeutralYellow
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
@@ -85,8 +86,24 @@ fun UASScreen(onDone: () -> Unit) {
     var portText by remember { mutableStateOf("14550") }
     var callsign by remember { mutableStateOf("OmniTAK-UAS") }
 
-    val currentRtsp by uas.rtspUrl.collectAsState()
-    var rtspText by remember(currentRtsp) { mutableStateOf(currentRtsp) }
+    val currentSource by uas.videoSource.collectAsState()
+    var rtspText by remember(currentSource) {
+        mutableStateOf((currentSource as? VideoSource.Rtsp)?.url.orEmpty())
+    }
+    var udpPortText by remember(currentSource) {
+        mutableStateOf(((currentSource as? VideoSource.RawH264Udp)?.port ?: 5000).toString())
+    }
+    // Picker mode is sticky to whatever source is active (or RTSP as a
+    // default). Switching the chip rewrites uas.videoSource immediately
+    // so the PIP re-binds without an explicit "apply".
+    var videoMode by remember {
+        mutableStateOf(
+            when (currentSource) {
+                is VideoSource.RawH264Udp -> VideoMode.RawH264Udp
+                else -> VideoMode.Rtsp
+            },
+        )
+    }
     val currentGeofence by uas.geofenceMeters.collectAsState()
     var geofenceText by remember(currentGeofence) { mutableStateOf(currentGeofence.toString()) }
     val failsafes by uas.failsafeParams.collectAsState()
@@ -218,25 +235,106 @@ fun UASScreen(onDone: () -> Unit) {
             HorizontalDivider(color = TacticalSurface)
 
             // -------- Live video (optional) --------
-            TextField(
-                value = rtspText,
-                onValueChange = { rtspText = it.trim(); uas.setRtspUrl(rtspText) },
-                label = { Text("Video URL (RTSP)") },
-                placeholder = { Text("rtsp://10.0.2.2:8555/test  •  blank to hide") },
-                singleLine = true,
+            // Source picker. RTSP is the historical default; Raw H264
+            // UDP supports RubyFPV and similar long-range FPV ground
+            // stations that don't expose RTSP (issue #55).
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = {
-                    rtspText = "rtsp://10.0.2.2:8555/test"
-                    uas.setRtspUrl(rtspText)
-                }) { Text("Use SITL test stream") }
-                if (rtspText.isNotBlank()) {
-                    OutlinedButton(onClick = {
-                        rtspText = ""
-                        uas.setRtspUrl("")
-                    }) { Text("Clear", color = HostileRed) }
+            ) {
+                Text(
+                    "Video",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                )
+                FilterChip(
+                    selected = videoMode == VideoMode.Rtsp,
+                    onClick = {
+                        videoMode = VideoMode.Rtsp
+                        uas.setVideoSource(VideoSource.rtsp(rtspText))
+                    },
+                    label = { Text("RTSP") },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = TacticalAccent,
+                        selectedLabelColor = TacticalBackground,
+                    ),
+                )
+                FilterChip(
+                    selected = videoMode == VideoMode.RawH264Udp,
+                    onClick = {
+                        videoMode = VideoMode.RawH264Udp
+                        val port = udpPortText.toIntOrNull() ?: 5000
+                        uas.setVideoSource(VideoSource.rawH264Udp(port))
+                    },
+                    label = { Text("Raw H264 UDP") },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = TacticalAccent,
+                        selectedLabelColor = TacticalBackground,
+                    ),
+                )
+            }
+
+            when (videoMode) {
+                VideoMode.Rtsp -> {
+                    TextField(
+                        value = rtspText,
+                        onValueChange = {
+                            rtspText = it.trim()
+                            uas.setVideoSource(VideoSource.rtsp(rtspText))
+                        },
+                        label = { Text("Video URL (RTSP)") },
+                        placeholder = { Text("rtsp://10.0.2.2:8555/test  •  blank to hide") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = {
+                            rtspText = "rtsp://10.0.2.2:8555/test"
+                            uas.setVideoSource(VideoSource.rtsp(rtspText))
+                        }) { Text("Use SITL test stream") }
+                        if (rtspText.isNotBlank()) {
+                            OutlinedButton(onClick = {
+                                rtspText = ""
+                                uas.setVideoSource(VideoSource.None)
+                            }) { Text("Clear", color = HostileRed) }
+                        }
+                    }
+                }
+                VideoMode.RawH264Udp -> {
+                    TextField(
+                        value = udpPortText,
+                        onValueChange = {
+                            udpPortText = it.filter(Char::isDigit).take(5)
+                            val port = udpPortText.toIntOrNull() ?: 0
+                            uas.setVideoSource(VideoSource.rawH264Udp(port))
+                        },
+                        label = { Text("UDP port") },
+                        placeholder = { Text("5000 — RubyFPV default") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    )
+                    Text(
+                        "Raw H264 Annex B over UDP. Compatible with RubyFPV " +
+                            "\"Video Forward To USB Device: Raw (H264)\" and similar long-range " +
+                            "FPV ground stations. Bind to 0.0.0.0 on this port — USB tether, " +
+                            "Wi-Fi, and direct LAN all work.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = {
+                            udpPortText = "5000"
+                            uas.setVideoSource(VideoSource.rawH264Udp(5000))
+                        }) { Text("RubyFPV default (5000)") }
+                        if (currentSource is VideoSource.RawH264Udp) {
+                            OutlinedButton(onClick = {
+                                uas.setVideoSource(VideoSource.None)
+                            }) { Text("Stop", color = HostileRed) }
+                        }
+                    }
                 }
             }
 
@@ -362,3 +460,9 @@ private fun CommandBtn(
         ),
     ) { Text(label) }
 }
+
+/** UI-only picker state — what kind of video source the operator is
+ *  currently editing. Mapped to [VideoSource] when the operator
+ *  applies the chip / fills the field. */
+private enum class VideoMode { Rtsp, RawH264Udp }
+

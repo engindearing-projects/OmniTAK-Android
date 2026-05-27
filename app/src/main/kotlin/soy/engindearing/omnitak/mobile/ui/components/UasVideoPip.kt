@@ -1,14 +1,13 @@
 package soy.engindearing.omnitak.mobile.ui.components
 
-import android.view.View
+import android.view.SurfaceHolder
+import android.view.SurfaceView
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -28,7 +27,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,35 +43,34 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.media3.common.MediaItem
-import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import androidx.media3.ui.PlayerView
+import soy.engindearing.omnitak.mobile.data.uas.RawH264UdpPlayer
+import soy.engindearing.omnitak.mobile.data.uas.VideoSource
 
 /**
- * Picture-in-picture live video for the drone camera. RTSP via
- * Media3 ExoPlayer + the RtspMediaSource. The URL is operator-supplied
- * (Settings → UAS → Video URL or per-session field on the Quick
- * Connect screen).
+ * Picture-in-picture live video for the drone camera. Two source
+ * modes are supported (see [VideoSource]):
+ *
+ *  - **RTSP** (default): Media3 ExoPlayer + RtspMediaSource. URL is
+ *    operator-supplied. RTP-over-TCP forced — UDP/RTP works on a LAN
+ *    but breaks through SSH tunnels (no UDP forwarding) and through
+ *    many home routers (inter-VLAN UDP block); TCP is universally
+ *    compatible, ~10 ms more latency, fine for ops video.
+ *  - **Raw H264 UDP**: receives Annex B NAL units over a UDP port and
+ *    decodes via MediaCodec direct-to-Surface. Used by RubyFPV and
+ *    similar long-range FPV ground stations that don't speak RTSP.
  *
  * Layout:
  *  - Compact (default): 160 × 90 dp 16:9 box, bottom-right of the map.
  *  - Expanded: 320 × 180 dp. Tap fullscreen icon to toggle.
- *  - Close icon: tears down the player and dismisses the PIP for this
+ *  - Close icon tears down the player and dismisses the PIP for this
  *    session (caller is responsible for re-showing on URL change).
- *
- * Player is paused / released on the host's onStop and resumed on
- * onStart so the RTSP socket doesn't leak when the operator backgrounds
- * the app.
- *
- * NOTE: forces RTSP TCP transport. UDP/RTP works on a LAN but breaks
- * through SSH tunnels (no UDP forwarding) and through many home
- * routers (inter-VLAN UDP block) — TCP is the universally compatible
- * choice, ~10 ms more latency, fine for ops video.
  */
 @Composable
 fun UasVideoPip(
-    rtspUrl: String,
+    source: VideoSource,
     onDismiss: () -> Unit,
     onPhoto: () -> Unit = {},
     onToggleRecord: (Boolean) -> Unit = {},
@@ -81,47 +78,11 @@ fun UasVideoPip(
     onGimbalNadir: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    if (rtspUrl.isBlank()) return
-    val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
+    if (!source.isActive) return
     var expanded by remember { mutableStateOf(false) }
-
-    // Build the player once per URL; rebuild on URL change.
-    val player = remember(rtspUrl) {
-        ExoPlayer.Builder(context).build().apply {
-            val factory = RtspMediaSource.Factory()
-                .setForceUseRtpTcp(true) // see note above — TCP-only RTP
-                .setTimeoutMs(8_000)
-            val mediaSource = factory.createMediaSource(MediaItem.fromUri(rtspUrl))
-            setMediaSource(mediaSource)
-            prepare()
-            playWhenReady = true
-        }
-    }
-
-    // Release the player when the URL changes or the composable leaves
-    // the composition. ExoPlayer holds native resources — the leak
-    // shows up as a "Player still active in onCleared" log.
-    DisposableEffect(player) {
-        onDispose { player.release() }
-    }
-
-    // Pause when the host goes to background so the RTSP socket doesn't
-    // chew battery; resume on foreground.
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_STOP -> player.pause()
-                Lifecycle.Event.ON_START -> player.play()
-                else -> {}
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
-
     var recording by remember { mutableStateOf(false) }
     val widthDp = if (expanded) 320.dp else 160.dp
+
     Box(
         modifier = modifier
             .width(widthDp)
@@ -129,20 +90,12 @@ fun UasVideoPip(
             .clip(RoundedCornerShape(8.dp))
             .background(Color.Black),
     ) {
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { ctx ->
-                PlayerView(ctx).apply {
-                    useController = false
-                    setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
-                    this.player = player
-                }
-            },
-            update = { it.player = player },
-        )
+        when (source) {
+            is VideoSource.Rtsp -> RtspSurface(source.url, Modifier.fillMaxSize())
+            is VideoSource.RawH264Udp -> RawH264UdpSurface(source.port, Modifier.fillMaxSize())
+            is VideoSource.None -> Unit
+        }
 
-        // Live label (top-left) so the operator can tell at a glance
-        // that this is the drone camera vs a map inset.
         Box(
             modifier = Modifier
                 .align(Alignment.TopStart)
@@ -159,7 +112,6 @@ fun UasVideoPip(
             )
         }
 
-        // Recording dot indicator (top-left under LIVE) when recording.
         if (recording) {
             Box(
                 modifier = Modifier
@@ -170,7 +122,6 @@ fun UasVideoPip(
             )
         }
 
-        // Action row (top-right): expand/collapse, close.
         Row(
             modifier = Modifier.align(Alignment.TopEnd).padding(2.dp),
             horizontalArrangement = Arrangement.spacedBy(0.dp),
@@ -187,9 +138,6 @@ fun UasVideoPip(
             }
         }
 
-        // Camera / gimbal controls (bottom edge of PIP). Only show in
-        // expanded mode — the 160×90 compact size is too small for
-        // four reliable tap targets.
         if (expanded) {
             Row(
                 modifier = Modifier
@@ -222,6 +170,129 @@ fun UasVideoPip(
                 IconButton(onClick = onGimbalNadir, modifier = Modifier.size(32.dp)) {
                     Icon(Icons.Filled.PlayCircle, contentDescription = "Gimbal nadir (-90°)", tint = Color.White)
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RtspSurface(rtspUrl: String, modifier: Modifier = Modifier) {
+    if (rtspUrl.isBlank()) return
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    val player = remember(rtspUrl) {
+        ExoPlayer.Builder(context).build().apply {
+            val factory = RtspMediaSource.Factory()
+                .setForceUseRtpTcp(true)
+                .setTimeoutMs(8_000)
+            setMediaSource(factory.createMediaSource(MediaItem.fromUri(rtspUrl)))
+            prepare()
+            playWhenReady = true
+        }
+    }
+
+    DisposableEffect(player) { onDispose { player.release() } }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_STOP -> player.pause()
+                Lifecycle.Event.ON_START -> player.play()
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    AndroidView(
+        modifier = modifier,
+        factory = { ctx ->
+            PlayerView(ctx).apply {
+                useController = false
+                setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+                this.player = player
+            }
+        },
+        update = { it.player = player },
+    )
+}
+
+@Composable
+private fun RawH264UdpSurface(port: Int, modifier: Modifier = Modifier) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val playerHolder = remember(port) { arrayOfNulls<RawH264UdpPlayer>(1) }
+    var lastError by remember(port) { mutableStateOf<String?>(null) }
+
+    DisposableEffect(port) {
+        onDispose {
+            playerHolder[0]?.stop()
+            playerHolder[0] = null
+        }
+    }
+
+    DisposableEffect(lifecycleOwner, port) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_STOP -> {
+                    playerHolder[0]?.stop()
+                    playerHolder[0] = null
+                }
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    Box(modifier = modifier) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { ctx ->
+                SurfaceView(ctx).apply {
+                    // MapLibre owns the primary SurfaceView; additional
+                    // SurfaceViews go behind it by default. Z-order this
+                    // one as a media overlay so the video PIP composes
+                    // above the map.
+                    setZOrderMediaOverlay(true)
+                    holder.addCallback(object : SurfaceHolder.Callback {
+                        override fun surfaceCreated(holder: SurfaceHolder) {
+                            playerHolder[0]?.stop()
+                            val player = RawH264UdpPlayer(
+                                port = port,
+                                surface = holder.surface,
+                                onError = { e -> lastError = e.message ?: e::class.simpleName },
+                            )
+                            playerHolder[0] = player
+                            player.start()
+                        }
+
+                        override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
+
+                        override fun surfaceDestroyed(holder: SurfaceHolder) {
+                            playerHolder[0]?.stop()
+                            playerHolder[0] = null
+                        }
+                    })
+                }
+            },
+        )
+        val err = lastError
+        if (err != null) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(4.dp)
+                    .background(Color(0xCC000000), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 6.dp, vertical = 3.dp),
+            ) {
+                Text(
+                    text = "UDP $port — $err",
+                    color = Color(0xFFFF6B6B),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                )
             }
         }
     }

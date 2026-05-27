@@ -716,10 +716,10 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             )
         }
 
-        // -------- Live video PIP — bottom-right when RTSP URL set + connected --------
-        val rtspUrl by uas.rtspUrl.collectAsState()
+        // -------- Live video PIP — bottom-right when a video source is set + connected --------
+        val videoSource by uas.videoSource.collectAsState()
         var videoVisible by remember { mutableStateOf(true) }
-        if (droneState.isConnected() && rtspUrl.isNotBlank() && videoVisible) {
+        if (droneState.isConnected() && videoSource.isActive && videoVisible) {
             androidx.compose.foundation.layout.Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -727,7 +727,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 contentAlignment = Alignment.BottomEnd,
             ) {
                 soy.engindearing.omnitak.mobile.ui.components.UasVideoPip(
-                    rtspUrl = rtspUrl,
+                    source = videoSource,
                     onDismiss = { videoVisible = false },
                     onPhoto = {
                         scope.launch { uas.takePhoto() }

@@ -25,6 +25,7 @@ import soy.engindearing.omnitak.mobile.data.uas.CruiseAltitude
 import soy.engindearing.omnitak.mobile.data.uas.DroneState
 import soy.engindearing.omnitak.mobile.data.uas.MavlinkConnection
 import soy.engindearing.omnitak.mobile.data.uas.MissionPhase
+import soy.engindearing.omnitak.mobile.data.uas.VideoSource
 import soy.engindearing.omnitak.mobile.data.uas.MissionStore
 import soy.engindearing.omnitak.mobile.data.uas.TerrainSampler
 import soy.engindearing.omnitak.mobile.data.uas.WaypointMission
@@ -104,11 +105,20 @@ class UASManager(
     private val _followMeActive = MutableStateFlow(false)
     val followMeActive: StateFlow<Boolean> = _followMeActive.asStateFlow()
 
-    /** Operator-supplied RTSP URL for the drone's camera. Blank = no
-     *  video PIP rendered. Set from UAS Quick Connect screen. */
-    private val _rtspUrl = MutableStateFlow("")
-    val rtspUrl: StateFlow<String> = _rtspUrl.asStateFlow()
-    fun setRtspUrl(url: String) { _rtspUrl.value = url.trim() }
+    /** Where the drone's live camera stream comes from. [VideoSource.None]
+     *  = no video PIP rendered. Set from UAS Quick Connect screen.
+     *
+     *  Two modes today:
+     *   - RTSP (operator URL) — common with off-the-shelf vehicles.
+     *   - Raw H264 UDP (port) — RubyFPV / long-range FPV ground
+     *     stations that deliver Annex B NAL units over UDP. */
+    private val _videoSource = MutableStateFlow<VideoSource>(VideoSource.None)
+    val videoSource: StateFlow<VideoSource> = _videoSource.asStateFlow()
+    fun setVideoSource(source: VideoSource) { _videoSource.value = source }
+
+    /** Convenience setter for the common RTSP case (used by the Quick
+     *  Connect screen's preset/clear buttons). */
+    fun setRtspUrl(url: String) { setVideoSource(VideoSource.rtsp(url)) }
 
     /** Soft geofence radius (meters from home) — fly-here, pursue, and
      *  missions reject targets outside this radius. 0 = disabled. Set
