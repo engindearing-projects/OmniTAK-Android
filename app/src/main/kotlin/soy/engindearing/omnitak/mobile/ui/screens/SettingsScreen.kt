@@ -57,6 +57,7 @@ import soy.engindearing.omnitak.mobile.data.CoordFormat
 import soy.engindearing.omnitak.mobile.data.DistanceUnit
 import soy.engindearing.omnitak.mobile.data.MapProvider
 import soy.engindearing.omnitak.mobile.data.UserPrefs
+import soy.engindearing.omnitak.mobile.domain.ConnectionState
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalBackground
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalSurface
@@ -289,6 +290,15 @@ fun SettingsScreen() {
                 )
             }
 
+            Spacer(Modifier.height(12.dp))
+
+            // External gyb_detect sensor — WiFi-beacon Remote ID over BLE GATT.
+            GybDetectorSection(
+                app = app,
+                enabled = prefs.gybDetectorEnabled,
+                onToggle = { v -> mutate { it.copy(gybDetectorEnabled = v) } },
+            )
+
             Spacer(Modifier.height(8.dp))
         }
     }
@@ -304,6 +314,136 @@ private fun SectionHeader(text: String) {
         style = MaterialTheme.typography.labelLarge,
         modifier = Modifier.padding(top = 6.dp, bottom = 2.dp),
     )
+}
+
+/**
+ * External gyb_detect sensor controls — toggle + an in-app scan/connect list
+ * (the omni-COT dashboard flow, but over BLE GATT instead of Classic SPP, so
+ * no trip to system Bluetooth settings). Shows live connection status, battery
+ * and drone count once connected.
+ */
+@Composable
+private fun GybDetectorSection(
+    app: OmniTAKApp,
+    enabled: Boolean,
+    onToggle: (Boolean) -> Unit,
+) {
+    val context = LocalContext.current
+    val needsRuntimePerm = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    var permGranted by remember {
+        mutableStateOf(
+            !needsRuntimePerm ||
+                ContextCompat.checkSelfPermission(
+                    context, Manifest.permission.BLUETOOTH_CONNECT,
+                ) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val permLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { result ->
+        permGranted = result[Manifest.permission.BLUETOOTH_CONNECT] == true &&
+            result[Manifest.permission.BLUETOOTH_SCAN] == true
+        if (!permGranted) onToggle(false)
+    }
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                "External gyb detector",
+                color = MaterialTheme.colorScheme.onBackground,
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Text(
+                "Catches WiFi-beacon Remote ID via a gyb sensor and streams it over Bluetooth — the drones your phone can't see on its own. They merge with on-device Remote ID into one marker.",
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        Switch(
+            checked = enabled && permGranted,
+            onCheckedChange = { v ->
+                if (!v) {
+                    onToggle(false)
+                } else if (permGranted) {
+                    onToggle(true)
+                } else {
+                    onToggle(true)
+                    permLauncher.launch(
+                        arrayOf(
+                            Manifest.permission.BLUETOOTH_SCAN,
+                            Manifest.permission.BLUETOOTH_CONNECT,
+                        )
+                    )
+                }
+            },
+        )
+    }
+
+    if (enabled && permGranted) {
+        val conn by app.gybManager.connectionState.collectAsState()
+        val battery by app.gybManager.batteryLevel.collectAsState()
+        val droneCount by app.gybManager.droneCount.collectAsState()
+        val devices by app.gybManager.scanResults.collectAsState()
+
+        val statusText = when (conn) {
+            is ConnectionState.Connected -> "Connected"
+            is ConnectionState.Connecting -> "Connecting…"
+            is ConnectionState.Failed -> "Connection failed"
+            else -> "Disconnected"
+        }
+        val isConnected = conn is ConnectionState.Connected
+
+        Spacer(Modifier.height(6.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text(
+                statusText,
+                color = if (isConnected) TacticalAccent else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f),
+            )
+            if (isConnected) {
+                Text(
+                    buildString {
+                        battery?.let { append("${(it * 100).toInt()}%  ") }
+                        append("$droneCount drones")
+                    },
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+
+        Spacer(Modifier.height(4.dp))
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Text(
+                if (isConnected) "Disconnect" else "Scan for detectors",
+                color = TacticalAccent,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier
+                    .clickable {
+                        if (isConnected) app.gybManager.disconnect() else app.gybManager.scan()
+                    }
+                    .padding(vertical = 6.dp),
+            )
+        }
+
+        if (!isConnected) {
+            devices.forEach { device ->
+                Text(
+                    (device.name ?: device.address) + "  ·  ${device.rssi} dBm",
+                    color = MaterialTheme.colorScheme.onBackground,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { app.gybManager.connect(device.address) }
+                        .padding(vertical = 8.dp),
+                )
+            }
+        }
+    }
 }
 
 @Composable

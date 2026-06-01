@@ -130,6 +130,20 @@ class OmniTAKApp : Application() {
                 }
             }
         }
+
+        // Phase 3 — external gyb_detect sensor. When enabled, the manager's
+        // collectors run and parsed drones flow gyb → RemoteIdTrackStore →
+        // RemoteIdToCoTConverter → ContactStore, sharing the `RID-` UID with
+        // the on-device scanner so the same drone never double-plots. Actual
+        // BLE connect/disconnect is driven from Settings.
+        appScope.launch {
+            userPrefsStore.prefs
+                .map { it.gybDetectorEnabled }
+                .distinctUntilChanged()
+                .collect { enabled ->
+                    if (enabled) gybManager.start() else gybManager.stop()
+                }
+        }
     }
 
     // Application-scoped singletons. Screens reach these via
@@ -215,6 +229,20 @@ class OmniTAKApp : Application() {
      *  from a coroutine in [onCreate] driven by `remoteIdScanEnabled`. */
     val remoteIdScanner: soy.engindearing.omnitak.mobile.data.remoteid.RemoteIdScanner by lazy {
         soy.engindearing.omnitak.mobile.data.remoteid.RemoteIdScanner(this)
+    }
+
+    /** External gyb_detect sensor over BLE GATT (Phase 3 of the gy6 plan).
+     *  Catches WiFi-beacon Remote ID the phone can't see and streams it over
+     *  Bluetooth; detections merge with on-device BLE Remote ID into one
+     *  `RID-` contact. Connect/disconnect driven from the UI; enabled state
+     *  driven by `gybDetectorEnabled` in [onCreate]. */
+    val gybManager: soy.engindearing.omnitak.mobile.domain.GybManager by lazy {
+        soy.engindearing.omnitak.mobile.domain.GybManager(
+            context = this,
+            cotSink = { event -> contactStore.ingest(event) },
+            cotRemove = { uid -> contactStore.remove(uid) },
+            scope = appScope,
+        )
     }
     val certVault: CertVault by lazy { CertVault(this) }
     val locationProvider: LocationProvider by lazy { LocationProvider(this) }

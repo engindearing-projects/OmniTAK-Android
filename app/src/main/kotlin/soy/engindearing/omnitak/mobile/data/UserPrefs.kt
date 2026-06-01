@@ -72,6 +72,11 @@ data class UserPrefs(
      *  appear on the map as unknown-air UAS contacts. Default off — opt-in
      *  because BLE scanning has a battery cost. */
     val remoteIdScanEnabled: Boolean = false,
+    /** Connect to an external gyb_detect sensor over BLE GATT. It catches the
+     *  WiFi-beacon Remote ID the phone can't see on its own and streams it
+     *  over Bluetooth, keeping the sensor's WiFi radio free for scanning.
+     *  Detections merge with on-device BLE Remote ID into one `RID-` marker. */
+    val gybDetectorEnabled: Boolean = false,
     /** 3D terrain map mode — tilts the camera and renders DEM relief
      *  (AWS Terrarium tiles). Parity with the iOS Cesium 3D globe
      *  toggle. Default off — 2D top-down is the tactical default. */
@@ -117,6 +122,7 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_FOLLOW_ME = booleanPreferencesKey("follow_me_active")
     private val KEY_MIL_STD_SELF = booleanPreferencesKey("use_milstd_self_symbol")
     private val KEY_REMOTE_ID_SCAN = booleanPreferencesKey("remote_id_scan_enabled")
+    private val KEY_GYB_DETECTOR = booleanPreferencesKey("gyb_detector_enabled")
     private val KEY_MAP_3D = booleanPreferencesKey("map_3d_enabled")
     private val KEY_CESIUM_GLOBE = booleanPreferencesKey("cesium_globe_enabled")
     private val KEY_TOOLBAR_ITEMS = stringPreferencesKey("toolbar_item_ids")
@@ -150,6 +156,7 @@ class UserPrefsStore(private val context: Context) {
             p[KEY_FOLLOW_ME] = next.followMeActive
             p[KEY_MIL_STD_SELF] = next.useMilStdSelfSymbol
             p[KEY_REMOTE_ID_SCAN] = next.remoteIdScanEnabled
+            p[KEY_GYB_DETECTOR] = next.gybDetectorEnabled
             p[KEY_MAP_3D] = next.map3dEnabled
             p[KEY_CESIUM_GLOBE] = next.cesiumGlobeEnabled
             p[KEY_TOOLBAR_ITEMS] = next.toolbarItemIds.joinToString(",")
@@ -229,6 +236,7 @@ class UserPrefsStore(private val context: Context) {
         followMeActive = p[KEY_FOLLOW_ME] ?: false,
         useMilStdSelfSymbol = p[KEY_MIL_STD_SELF] ?: true,
         remoteIdScanEnabled = p[KEY_REMOTE_ID_SCAN] ?: false,
+        gybDetectorEnabled = p[KEY_GYB_DETECTOR] ?: false,
         map3dEnabled = p[KEY_MAP_3D] ?: false,
         cesiumGlobeEnabled = p[KEY_CESIUM_GLOBE] ?: false,
         toolbarItemIds = p[KEY_TOOLBAR_ITEMS]?.split(",")?.filter { it.isNotBlank() } ?: emptyList(),
