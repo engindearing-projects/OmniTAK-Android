@@ -236,6 +236,41 @@ fun TacticalMap(
                     }
                 }
             }
+            // Issue #80 — re-anchor drawing (and all other overlay) layers on
+            // EVERY style reload, regardless of the trigger.
+            //
+            // Root cause: MapLibre-Android wipes ALL GeoJSON source data when a
+            // new style is loaded. The explicit setStyle callbacks above re-push
+            // data for Compose-driven reloads (basemap swap, terrain toggle), but
+            // those callbacks are one-shot — they fire only for the specific
+            // setStyle call they are attached to. Any reload MapLibre triggers
+            // internally (tile-source retry, GL context loss, recovery from a
+            // failed style parse) is not covered, leaving the sources empty and
+            // all overlay layers invisible.
+            //
+            // addOnDidFinishLoadingStyleListener fires on the MAIN thread after
+            // every successful style load — both app-initiated and internal. Re-
+            // pushing here is idempotent (setGeoJson replaces source data in-
+            // place), so the explicit callbacks above are kept for their side-
+            // effects (LocationComponent re-apply, camera tilt, onStyleReady
+            // delegation); this listener is a universal safety net that closes the
+            // intermittent gap.
+            //
+            // iOS is immune to this class of bug because Mapbox v11
+            // AnnotationManagers survive style swaps natively — Android's hand-
+            // inserted style layers do not.
+            addOnDidFinishLoadingStyleListener {
+                getMapAsync { map ->
+                    map.getStyle { style ->
+                        ContactLayer.update(map, context, currentContacts)
+                        contactSymbolLayer.installInto(style, context)
+                        contactSymbolLayer.update(map, context, currentContacts)
+                        MeasurementLayer.update(map, currentMeasurementPoints)
+                        DrawingLayer.update(map, currentDrawings)
+                        currentGridCenter?.let { GridLayer.update(map, it) }
+                    }
+                }
+            }
         }
     }
 
