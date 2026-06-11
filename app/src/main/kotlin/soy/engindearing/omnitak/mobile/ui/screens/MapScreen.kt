@@ -373,9 +373,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             }
         )
     }
-    val handleCameraChanged: (LatLng, Double) -> Unit = { target, zoom ->
+    val handleCameraChanged: (LatLng, Double, Double) -> Unit = { target, zoom, bearing ->
         cameraTarget = target
-        app.mapCameraStore.update(target.latitude, target.longitude, zoom)
+        app.mapCameraStore.update(target.latitude, target.longitude, zoom, bearing)
     }
     // Keep the ADSB query box following the viewport — significant pans
     // move the box, the next 15s poll picks it up. Routed through the plugin;
@@ -402,6 +402,34 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             .background(MaterialTheme.colorScheme.background),
     ) {
         if (userPrefs.cesiumGlobeEnabled) {
+        // #78 — 2D→3D viewport handoff, captured once per globe activation
+        // (the `remember` is forgotten when the 3D branch leaves
+        // composition, so every switch re-reads the latest camera).
+        // Priority mirrors TacticalMap's cold-start chain below:
+        //   1. Last camera (live this session, or persisted) — the operator
+        //      was looking somewhere; the globe must open there.
+        //   2. Self-fix at zoom 12 — cold start straight into 3D with no
+        //      meaningful camera yet (parity with the 2D GPS start).
+        //   3. null — nothing to inherit; the scene keeps its legacy (0,0)
+        //      world intro flight.
+        val cesiumSeed = remember {
+            val store = app.mapCameraStore
+            val storeLat = store.lastTargetLat
+            val storeLon = store.lastTargetLon
+            val storeZoom = store.lastZoom
+            val fix = selfFix
+            when {
+                storeLat != null && storeLon != null && storeZoom != null ->
+                    soy.engindearing.omnitak.mobile.ui.components.CesiumCameraSeed(
+                        storeLat, storeLon, storeZoom, store.lastBearing ?: 0.0,
+                    )
+                fix != null ->
+                    soy.engindearing.omnitak.mobile.ui.components.CesiumCameraSeed(
+                        fix.lat, fix.lon, 12.0, 0.0,
+                    )
+                else -> null
+            }
+        }
         // 3D Globe — photoreal Cesium WebView engine. Contacts (incl. dropped
         // pins) + self render as entities; long-press surfaces the same radial
         // menu the 2D/terrain engines use, tapping a contact opens its sheet.
@@ -414,6 +442,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             onLongPress = handleMapLongPress,
             onContactTap = handleContactTap,
             onCameraChanged = handleCameraChanged,
+            initialCamera = cesiumSeed,
             // Same control ticks the 2D map uses — make +/- and "center on
             // me" drive the globe (VC 77: buttons did nothing on 3D).
             zoomInTrigger = zoomInTick,
@@ -453,6 +482,10 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             },
             initialZoom = app.mapCameraStore.lastZoom
                 ?: if (selfFix != null) 12.0 else FALLBACK_GLOBAL_ZOOM,
+            // #78 — 3D→2D handoff: restore the rotation the globe (or the
+            // prior 2D view this session) had. Session-memory only, so
+            // cold start stays north-up exactly as before.
+            initialBearing = app.mapCameraStore.lastBearing ?: 0.0,
             onCameraIdle = handleCameraChanged,
             onMapReady = { map -> mapboxMap = map },
             // GAP-101 / GAP-107 — react to the basemap selection from Settings.
