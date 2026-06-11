@@ -281,6 +281,11 @@ fun AppNav() {
                 navigateTo("map")
                 showKmlOverlays = true
             },
+            onGoToCoordinate = {
+                showToolsLauncher = false
+                navigateTo("map")
+                soy.engindearing.omnitak.mobile.ui.components.CoordinateEntryEvents.requestOpen()
+            },
             map3dEnabled = prefs.map3dEnabled,
             cesiumGlobeEnabled = prefs.cesiumGlobeEnabled,
             onToggleTerrain3D = {

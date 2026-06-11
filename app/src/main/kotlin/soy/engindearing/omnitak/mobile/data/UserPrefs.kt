@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.map
 private val Context.userPrefsDataStore by preferencesDataStore(name = "user_prefs")
 
 enum class DistanceUnit { METRIC, IMPERIAL }
-enum class CoordFormat { LATLON_DECIMAL, LATLON_DMS, MGRS, UTM }
+enum class CoordFormat { LATLON_DECIMAL, LATLON_DMS, MGRS, UTM, TWD97 }
 enum class MapProvider { OSM_RASTER, SATELLITE_HINT, TOPO_HINT, WMTS_CUSTOM }
 
 /**

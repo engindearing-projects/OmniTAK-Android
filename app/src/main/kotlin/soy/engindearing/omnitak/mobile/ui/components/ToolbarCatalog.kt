@@ -125,3 +125,19 @@ object ToolbarEditBus {
         _editGeneration.value = _editGeneration.value + 1
     }
 }
+
+/**
+ * Lets the Tools popup (hosted in AppNav) ask the map (hosted in MapScreen)
+ * to open the "Go to Coordinate" sheet. Same activation-counter pattern as
+ * [ToolbarEditBus] — MapScreen collects via collectAsState, sidestepping the
+ * SharedFlow subscribe-timing race when AppNav navigates to map and requests
+ * the sheet in the same frame.
+ */
+object CoordinateEntryEvents {
+    private val _openGeneration = MutableStateFlow(0L)
+    val openGeneration: StateFlow<Long> = _openGeneration.asStateFlow()
+
+    fun requestOpen() {
+        _openGeneration.value = _openGeneration.value + 1
+    }
+}

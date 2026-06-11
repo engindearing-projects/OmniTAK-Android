@@ -157,6 +157,7 @@ fun SettingsScreen() {
                     CoordFormat.LATLON_DMS to Loc.t("settings.coord.dms"),
                     CoordFormat.MGRS to Loc.t("settings.coord.mgrs"),
                     CoordFormat.UTM to Loc.t("settings.coord.utm"),
+                    CoordFormat.TWD97 to Loc.t("settings.coord.twd97"),
                 ),
                 selected = prefs.coordFormat,
                 onSelect = { v -> mutate { it.copy(coordFormat = v) } },

@@ -35,6 +35,13 @@ object CoordFormatter {
                 .getOrElse { if (u.hemisphere.name == "NORTH") "N" else "S" }
             "%d%s %.0fmE %.0fmN".format(u.zone, band, u.easting, u.northing)
         }.getOrElse { latLonDecimal(lat, lon) }
+        // TWD97 / TM2 zone 121 (Taiwan). Full 7+7 absolute readout matches
+        // iOS. Outside the Taiwan zone the converter returns a sentinel, so
+        // fall back to plain decimal lat/lon there.
+        CoordFormat.TWD97 ->
+            if (Twd97Converter.isWithinBounds(lat, lon))
+                "TWD97 ${Twd97Converter.formatTwd97(lat, lon, Twd97Converter.DigitMode.FULL7)}"
+            else latLonDecimal(lat, lon)
     }
 
     fun altitude(meters: Double, unit: DistanceUnit): String = when (unit) {

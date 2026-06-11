@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.FlightTakeoff
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Terrain
 import androidx.compose.material.icons.filled.Tune
@@ -36,6 +37,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import soy.engindearing.omnitak.mobile.i18n.Loc
 
 /**
  * Tools tab popup — mirrors the iOS ToolsLauncherSheet. A short
@@ -59,6 +61,7 @@ fun ToolsLauncherSheet(
     onFullTools: () -> Unit,
     onUAS: () -> Unit = {},
     onOnvifCamera: () -> Unit = {},
+    onGoToCoordinate: () -> Unit = {},
     onCustomize: () -> Unit = {},
     onMapOverlays: () -> Unit = {},
     map3dEnabled: Boolean = false,
@@ -155,6 +158,18 @@ fun ToolsLauncherSheet(
                 title = "Map Overlays",
                 subtitle = "Import & toggle KML/KMZ overlays (handles huge files)",
                 onClick = onMapOverlays,
+            )
+
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 76.dp),
+                color = Color.White.copy(alpha = 0.08f),
+            )
+
+            ToolsRow(
+                icon = { Icon(Icons.Filled.MyLocation, contentDescription = null, tint = Color(0xFF66D9A0)) },
+                title = Loc.t("tools.gotoCoordinate"),
+                subtitle = Loc.t("tools.gotoCoordinate.desc"),
+                onClick = onGoToCoordinate,
             )
 
             HorizontalDivider(

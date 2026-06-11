@@ -183,6 +183,14 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     var teamsPanelOpen by remember { mutableStateOf(false) }
     var panTarget by remember { mutableStateOf<LatLng?>(null) }
     var panTargetTick by remember { mutableStateOf(0) }
+    // "Go to Coordinate" sheet (TWD97 / MGRS / Lat-Lon). Opened from the
+    // Tools popup via CoordinateEntryEvents; reference coord = map centre
+    // so 5+5 TWD97 grid input recovers the right 100 km cell.
+    var coordEntryOpen by remember { mutableStateOf(false) }
+    val coordEntryGen by soy.engindearing.omnitak.mobile.ui.components.CoordinateEntryEvents.openGeneration.collectAsState()
+    LaunchedEffect(coordEntryGen) {
+        if (coordEntryGen > 0L) coordEntryOpen = true
+    }
     val adsbService = remember { soy.engindearing.omnitak.mobile.data.AdsbService() }
     val rawAircraft by adsbService.aircraft.collectAsState()
     val adsbActive by adsbService.active.collectAsState()
@@ -1362,6 +1370,40 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 editingMarker = null
             },
         )
+
+        // "Go to Coordinate" — TWD97 (7+7 / 5+5) / MGRS / Lat-Lon entry.
+        if (coordEntryOpen) {
+            soy.engindearing.omnitak.mobile.ui.components.CoordinateEntrySheet(
+                // Reference for 5+5 TWD97: last camera centre, else self-fix.
+                refLat = app.mapCameraStore.lastTargetLat ?: selfFix?.lat,
+                refLon = app.mapCameraStore.lastTargetLon ?: selfFix?.lon,
+                onGo = { lat, lon, drop ->
+                    coordEntryOpen = false
+                    panTarget = LatLng(lat, lon)
+                    panTargetTick += 1
+                    if (followMeActive) mutatePref { it.copy(followMeActive = false) }
+                    if (drop) {
+                        val uid = "local-${System.currentTimeMillis()}"
+                        app.contactStore.ingest(
+                            CoTEvent(
+                                uid = uid,
+                                type = "a-f-G-U-C",
+                                lat = lat,
+                                lon = lon,
+                                hae = 0.0,
+                                callsign = "Marker ${contacts.size + 1}",
+                                remarks = "",
+                            )
+                        )
+                    }
+                    toast(
+                        if (drop) "Dropped marker at %.5f, %.5f".format(lat, lon)
+                        else "Panning to %.5f, %.5f".format(lat, lon)
+                    )
+                },
+                onDismiss = { coordEntryOpen = false },
+            )
+        }
 
         soy.engindearing.omnitak.mobile.ui.components.FemaMarkerPaletteSheet(
             visible = femaPaletteLatLng != null,
