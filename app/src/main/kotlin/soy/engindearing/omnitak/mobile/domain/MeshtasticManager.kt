@@ -31,6 +31,8 @@ import java.util.Locale
 import java.util.TimeZone
 import soy.engindearing.omnitak.mobile.data.AtakPluginSerializer
 import soy.engindearing.omnitak.mobile.data.CoTEvent
+import soy.engindearing.omnitak.mobile.data.TakPacketParser
+import soy.engindearing.omnitak.mobile.data.TakPacketSerializer
 import soy.engindearing.omnitak.mobile.data.FromRadioFrame
 import soy.engindearing.omnitak.mobile.data.MeshConnectionType
 import soy.engindearing.omnitak.mobile.data.MeshNode
@@ -304,18 +306,22 @@ class MeshtasticManager(private val context: Context? = null) {
                 }
             }
             PORTNUM_ATAK_PLUGIN, PORTNUM_ATAK_FORWARDER -> {
-                val event = AtakPluginParser.parse(packet.payload)
+                // Phase 2: try TAKPacket (atak.proto) first for interop with stock
+                // Meshtastic ATAK Plugin / gateway. Fall back to Phase-1 TAKMessage
+                // parser for OmniTAK-to-OmniTAK links and older clients.
+                val event = TakPacketParser.parse(packet.payload, packet.from)
+                    ?: AtakPluginParser.parse(packet.payload)
                 if (event != null) {
                     runCatching { cotSink?.invoke(event) }
                         .onFailure { Log.w(TAG, "cotSink failed for ATAK plugin event: ${it.message}") }
                     Log.i(
                         TAG,
-                        "RX ATAK plugin from ${packet.from.toString(16)} -> CoT ${event.uid} ($PORTNUM_ATAK_PLUGIN bytes=${packet.payload.size})",
+                        "RX ATAK plugin from ${packet.from.toString(16)} -> CoT ${event.uid} (bytes=${packet.payload.size})",
                     )
                 } else {
                     Log.w(
                         TAG,
-                        "RX ATAK plugin from ${packet.from.toString(16)} unparseable, ${packet.payload.size}B",
+                        "RX ATAK plugin from ${packet.from.toString(16)} unparseable (tried TAKPacket+TAKMessage), ${packet.payload.size}B",
                     )
                 }
             }
@@ -530,7 +536,14 @@ class MeshtasticManager(private val context: Context? = null) {
      * [MeshtasticBleClient.sendToRadio] (chunked at the negotiated MTU).
      */
     suspend fun sendCoTOverMesh(event: CoTEvent, channelIndex: UInt = 0u): Boolean {
-        val payload = AtakPluginSerializer.serialize(event)
+        // Phase 2: Emit standard TAKPacket (atak.proto) for interop with stock
+        // Meshtastic ATAK Plugin, Meshtastic phone-app TAK role, and the
+        // TAK_Meshtastic_Gateway. The MeshPacket wrapper still uses
+        // AtakPluginSerializer.buildToRadio (portnum 72 framing).
+        val payload = when {
+            event.type == "b-t-f" -> TakPacketSerializer.serializeChat(event)
+            else -> TakPacketSerializer.serializePli(event)
+        }
         val toRadio = AtakPluginSerializer.buildToRadio(
             payloadBytes = payload,
             channelIndex = channelIndex,

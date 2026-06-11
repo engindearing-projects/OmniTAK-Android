@@ -125,6 +125,7 @@ OmniTAK-Android uses the following open-source components:
 - [AndroidX](https://developer.android.com/jetpack/androidx) — Apache 2.0
 - [kotlinx.serialization](https://github.com/Kotlin/kotlinx.serialization) — Apache 2.0
 - [Jetpack Compose](https://developer.android.com/jetpack/compose) — Apache 2.0
+- [Unishox2](https://github.com/siara-cc/Unishox2) (siara-cc) — Apache 2.0 — pure-Kotlin port for Meshtastic TAKPacket string compression
 
 ## Acknowledgments
 
