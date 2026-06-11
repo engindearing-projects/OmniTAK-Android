@@ -42,8 +42,16 @@ fun CesiumMapView(
     selfCallsign: String,
     onLongPress: (LatLng, Offset) -> Unit,
     onContactTap: (CoTEvent) -> Unit,
-    onCameraChanged: (LatLng, Double) -> Unit,
+    // Camera events from the scene: target, web-mercator zoom, heading
+    // (degrees clockwise from north — MapLibre's bearing convention).
+    // Heading rides along so the 3D→2D switch keeps the rotation (#78).
+    onCameraChanged: (LatLng, Double, Double) -> Unit,
     modifier: Modifier = Modifier,
+    // #78 — 2D→3D engine-switch handoff. When non-null (the operator was
+    // looking somewhere on the 2D engine), the globe opens at this
+    // viewport instead of the scene's legacy (0,0) world intro flight.
+    // Captured once per activation by MapScreen; seeded on bridge-ready.
+    initialCamera: CesiumCameraSeed? = null,
     // Tick counters from the on-screen map controls. Incrementing one fires
     // the matching camera command on the globe. Mirror the TacticalMap
     // (2D) wiring so the +/- zoom and "center on me" buttons work on 3D too.
@@ -79,6 +87,23 @@ fun CesiumMapView(
         wv.evaluateJavascript("window.OmniBridge.setEntities($json);", null)
     }
 
+    // #78 — seed the globe camera from the 2D engine's viewport on
+    // bridge-ready. Zoom → height via CesiumCameraMath (the exact inverse
+    // of the scene's _zoomFromHeight, so toggling engines never
+    // zoom-creeps). Fields are validated finite before being
+    // interpolated into JS source.
+    fun seedInheritedCamera() {
+        val wv = webViewRef.value ?: return
+        val seed = initialCamera
+        if (seed == null || !seed.isValid) return
+        val height = CesiumCameraMath.heightForZoom(seed.zoom, seed.lat)
+        wv.evaluateJavascript(
+            "window.OmniBridge.setCamera(" +
+                "{lat:${seed.lat},lon:${seed.lon},height:$height,heading:${seed.bearing}});",
+            null,
+        )
+    }
+
     AndroidView(
         modifier = modifier,
         factory = { ctx ->
@@ -95,6 +120,10 @@ fun CesiumMapView(
                         fun onReady() {
                             mainHandler.post {
                                 ready.value = true
+                                // Inherit the 2D viewport before the first
+                                // entity push so the scene opens where the
+                                // operator was looking (#78).
+                                seedInheritedCamera()
                                 pushEntities()
                             }
                         }
@@ -121,7 +150,11 @@ fun CesiumMapView(
                                         onLongPressState.value(LatLng(lat, lon), Offset(sx, sy))
                                     }
                                     "camerachanged" -> {
-                                        onCameraState.value(LatLng(lat, lon), o.optDouble("zoom", 11.0))
+                                        onCameraState.value(
+                                            LatLng(lat, lon),
+                                            o.optDouble("zoom", 11.0),
+                                            o.optDouble("heading", 0.0),
+                                        )
                                     }
                                 }
                             }

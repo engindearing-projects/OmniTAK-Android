@@ -30,6 +30,12 @@ class MapCameraStore(private val userPrefsStore: UserPrefsStore) {
         private set
     var lastZoom: Double? = null
         private set
+    // Bearing (degrees clockwise from north) is session-memory ONLY — it
+    // is not persisted with the lat/lon/zoom triple because the 2D map
+    // intentionally cold-starts north-up. It exists so the 2D↔3D engine
+    // switch can hand the rotation across within a session (#78).
+    var lastBearing: Double? = null
+        private set
 
     private val scope = CoroutineScope(Dispatchers.IO)
     private var debounceJob: Job? = null
@@ -54,10 +60,11 @@ class MapCameraStore(private val userPrefsStore: UserPrefsStore) {
      * immediately and debounce-persists to DataStore after 500 ms so
      * rapid pan/zoom gestures coalesce into a single write.
      */
-    fun update(lat: Double, lon: Double, zoom: Double) {
+    fun update(lat: Double, lon: Double, zoom: Double, bearing: Double = 0.0) {
         lastTargetLat = lat
         lastTargetLon = lon
         lastZoom      = zoom
+        lastBearing   = bearing
 
         debounceJob?.cancel()
         debounceJob = scope.launch {

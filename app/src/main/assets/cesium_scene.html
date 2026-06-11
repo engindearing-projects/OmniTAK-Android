@@ -125,6 +125,18 @@
       v.camera.lookAt(target,new Cesium.HeadingPitchRange(heading,pitch,range));
       v.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);_postCameraChanged(v);
     },
+    // #78 (Android) / #62 (iOS) — engine-switch viewport handoff. Native
+    // calls this once on bridge-ready with the 2D engine's last camera;
+    // cancels the (0,0) bootstrap flight and jumps straight to the
+    // inherited view, top-down like the 2D map. `height` is precomputed
+    // natively from the web-mercator zoom (CesiumCameraMath is the exact
+    // inverse of _zoomFromHeight above). Optional pitch (deg, default -90)
+    // keeps the method reusable for pose restores. No call = legacy intro.
+    setCamera(arg){const e=_parse(arg);if(!e||typeof e.lat!=='number'||typeof e.lon!=='number'||typeof e.height!=='number')return;const v=_state.viewer;if(!v)return;
+      v.camera.cancelFlight();
+      v.camera.setView({destination:Cesium.Cartesian3.fromDegrees(e.lon,e.lat,e.height),orientation:{heading:Cesium.Math.toRadians(e.heading||0),pitch:Cesium.Math.toRadians(typeof e.pitch==='number'?e.pitch:-90),roll:0}});
+      _hideLoading();_postCameraChanged(v);
+    },
     ping(){return _state.ready?'pong':'loading'},
     upsertDrawing(arg){const d=_parse(arg);if(!d||!d.uid||!d.kind||!Array.isArray(d.coords)||d.coords.length===0)return;const v=_state.viewer;if(!v)return;
       const color=_drawColor(d.color,0.85),fillC=_drawColor(d.color,0.25),width=typeof d.width==='number'?d.width:3;

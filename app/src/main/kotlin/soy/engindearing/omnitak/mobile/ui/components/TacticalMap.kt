@@ -47,6 +47,11 @@ import soy.engindearing.omnitak.mobile.data.TakTeamColor
 fun TacticalMap(
     initialCenter: LatLng = LatLng(0.0, 0.0),  // neutral world default — callers should pass a real center
     initialZoom: Double = 2.0,
+    /** Initial camera rotation (degrees clockwise from north). #78 — the
+     *  3D→2D engine switch hands the globe's heading back through this so
+     *  the rotation survives the swap; cold start keeps the north-up
+     *  default. */
+    initialBearing: Double = 0.0,
     styleJson: String = TACTICAL_STYLE_DARK_MATTER,
     onMapLongPress: ((LatLng, Offset) -> Unit)? = null,
     onContactTap: ((CoTEvent) -> Unit)? = null,
@@ -81,7 +86,9 @@ fun TacticalMap(
      *  fall back to cyan (0xFF00FFFF) to match CivTAK's default for
      *  unaffiliated friendlies. Sourced from [soy.engindearing.omnitak.mobile.data.UserPrefs.team]. */
     selfTeamColor: String = "Cyan",
-    onCameraIdle: ((LatLng, Double) -> Unit)? = null,
+    /** Camera idle: target, zoom, bearing (degrees clockwise from north).
+     *  Bearing feeds the #78 engine-switch viewport handoff. */
+    onCameraIdle: ((LatLng, Double, Double) -> Unit)? = null,
     /** Fired once the MapLibre map is ready. Issue #16 — lasso uses
      *  this to grab the [MapLibreMap] reference for screen↔geo
      *  projection during freehand selection. */
@@ -126,6 +133,7 @@ fun TacticalMap(
                 map.cameraPosition = CameraPosition.Builder()
                     .target(initialCenter)
                     .zoom(initialZoom)
+                    .bearing(initialBearing)
                     .build()
                 map.setStyle(Style.Builder().fromJson(styleJson)) { style ->
                     ContactLayer.update(map, context, currentContacts)
@@ -164,7 +172,7 @@ fun TacticalMap(
                 map.addOnCameraIdleListener {
                     val pos = map.cameraPosition
                     val target = pos.target ?: return@addOnCameraIdleListener
-                    currentCameraIdle?.invoke(target, pos.zoom)
+                    currentCameraIdle?.invoke(target, pos.zoom, pos.bearing)
                 }
                 map.addOnMapLongClickListener { latLng ->
                     val screen = map.projection.toScreenLocation(latLng)
