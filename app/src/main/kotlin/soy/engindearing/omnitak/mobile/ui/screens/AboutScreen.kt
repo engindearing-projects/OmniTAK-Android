@@ -23,7 +23,7 @@ fun AboutScreen() {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("OmniTAK Mobile", style = MaterialTheme.typography.titleLarge, color = TacticalAccent)
+        Text("OmniTAK", style = MaterialTheme.typography.titleLarge, color = TacticalAccent)
         Spacer(Modifier.height(8.dp))
         Text("By Engindearing", style = MaterialTheme.typography.bodyLarge)
         Spacer(Modifier.height(16.dp))
