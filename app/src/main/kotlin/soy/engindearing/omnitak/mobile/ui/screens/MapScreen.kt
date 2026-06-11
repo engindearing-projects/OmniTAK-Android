@@ -526,6 +526,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             followMeActive = followMeActive,
             useMilStdSelfSymbol = userPrefs.useMilStdSelfSymbol,
             selfTeamColor = userPrefs.team,
+            // Issue #75 — feeds the puck so a restored fix renders
+            // immediately on cold start (dimmed when stale) and the
+            // forced foreground-resume fix lands without waiting on the
+            // LocationComponent's internal engine.
+            selfFix = selfFix,
             onStyleReady = { _, style ->
                 soy.engindearing.omnitak.mobile.ui.components.KmlOverlayRenderer
                     .apply(style, kmlOverlays, app.kmlOverlayStore)

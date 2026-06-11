@@ -53,11 +53,18 @@ class MainActivity : ComponentActivity() {
         // standby, network swap). Cold-launch reconnect lives in
         // ServerManager.hydrate; this hook handles foreground-resume.
         // Issue #6.
+        //
+        // Issue #75 — also force an immediate location refresh on resume
+        // (fused cache + active single-shot) instead of waiting for the
+        // next passive interval tick, so the self-marker snaps back to a
+        // live position right after screen-on. Foreground-only; no
+        // background-location permission involved.
         val app = applicationContext as OmniTAKApp
         lifecycle.addObserver(
             LifecycleEventObserver { _, event ->
                 if (event == Lifecycle.Event.ON_RESUME) {
                     app.serverManager.reconnectIfNeeded()
+                    app.locationProvider.requestImmediateFix()
                 }
             },
         )

@@ -145,9 +145,13 @@ class SelfPositionBroadcaster internal constructor(
             Log.d(TAG, "PPLI suppressed — no GPS fix yet")
             return
         } else {
+            // Issue #75 — selfLat/selfLon (+ selfHae) are now actually
+            // written: OmniTAKApp persists every real fix (throttled), so
+            // this fallback broadcasts the last known position with an
+            // honest "unknown" circular error instead of going silent.
             lat = prefs.selfLat
             lon = prefs.selfLon
-            hae = 0.0
+            hae = if (prefs.selfHae.isNaN()) 0.0 else prefs.selfHae
             speedKmh = 0.0
             ce = 9999999.0
         }

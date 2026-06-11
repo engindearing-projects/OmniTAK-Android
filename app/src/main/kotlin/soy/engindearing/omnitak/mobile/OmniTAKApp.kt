@@ -18,6 +18,7 @@ import soy.engindearing.omnitak.mobile.data.AdminResponse
 import soy.engindearing.omnitak.mobile.data.CertVault
 import soy.engindearing.omnitak.mobile.data.LocationProvider
 import soy.engindearing.omnitak.mobile.data.MeshDeviceConfigStore
+import soy.engindearing.omnitak.mobile.data.SelfFixPersistence
 import soy.engindearing.omnitak.mobile.data.TAKServerStore
 import soy.engindearing.omnitak.mobile.data.UserPrefsStore
 import soy.engindearing.omnitak.mobile.domain.ChatStore
@@ -111,6 +112,31 @@ class OmniTAKApp : Application() {
         appScope.launch {
             val saved = userPrefsStore.prefs.first()
             mapCameraStore.seedFromPrefs(saved)
+        }
+
+        // Issue #75 — self-marker persistence across screen-off + process
+        // death. Seed the in-memory fix from the persisted one so every
+        // consumer (2D puck, Cesium self entity, HUD card, PPLI
+        // prefs-fallback) renders immediately on cold start — stale-marked
+        // downstream via SelfFix.timeMs — then persist real fixes
+        // (throttled) so the NEXT cold start has them. Seed-then-collect
+        // in one coroutine: the collector starts only after the seed is
+        // applied, and the seeded fix never re-persists itself because
+        // shouldPersist requires a strictly newer timestamp.
+        appScope.launch {
+            val saved = userPrefsStore.prefs.first()
+            SelfFixPersistence.restoredFixOrNull(saved)?.let {
+                locationProvider.seedFromPersisted(it)
+            }
+            var lastPersistedMs = saved.selfFixTimeMs
+            locationProvider.fix.collect { fix ->
+                if (fix != null &&
+                    SelfFixPersistence.shouldPersist(fix.timeMs, lastPersistedMs)
+                ) {
+                    lastPersistedMs = fix.timeMs
+                    userPrefsStore.setLastSelfFix(fix)
+                }
+            }
         }
 
         // Off-grid mesh plan Step 1b — broadcaster is now owned here so it

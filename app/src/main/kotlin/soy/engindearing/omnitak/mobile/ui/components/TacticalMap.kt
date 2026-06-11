@@ -27,6 +27,8 @@ import org.maplibre.android.maps.Style
 import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.Drawing
 import soy.engindearing.omnitak.mobile.data.MapProvider
+import soy.engindearing.omnitak.mobile.data.SelfFix
+import soy.engindearing.omnitak.mobile.data.SelfFixPersistence
 import soy.engindearing.omnitak.mobile.data.TakTeamColor
 
 /**
@@ -81,6 +83,13 @@ fun TacticalMap(
      *  fall back to cyan (0xFF00FFFF) to match CivTAK's default for
      *  unaffiliated friendlies. Sourced from [soy.engindearing.omnitak.mobile.data.UserPrefs.team]. */
     selfTeamColor: String = "Cyan",
+    /** Issue #75 — the operator's current/last-known fix from
+     *  [soy.engindearing.omnitak.mobile.data.LocationProvider]. Forwarded
+     *  into the LocationComponent so the self-marker renders immediately
+     *  from a restored fix on cold start (dimmed when stale) and snaps to
+     *  the forced foreground-resume fix without waiting on the
+     *  component's internal engine interval. */
+    selfFix: SelfFix? = null,
     onCameraIdle: ((LatLng, Double) -> Unit)? = null,
     /** Fired once the MapLibre map is ready. Issue #16 — lasso uses
      *  this to grab the [MapLibreMap] reference for screen↔geo
@@ -106,6 +115,14 @@ fun TacticalMap(
     val currentMapReady by rememberUpdatedState(onMapReady)
     val currentStyleReady by rememberUpdatedState(onStyleReady)
     val currentTerrain3d by rememberUpdatedState(terrain3d)
+    val currentSelfFix by rememberUpdatedState(selfFix)
+    val currentFollowMe by rememberUpdatedState(followMeActive)
+    val currentUseMilStd by rememberUpdatedState(useMilStdSelfSymbol)
+    val currentTeamColor by rememberUpdatedState(selfTeamColor)
+    // Issue #75 — whether the puck is currently rendered dimmed (stale
+    // restored fix). Plain holder, not MutableState: nothing recomposes
+    // off it; the effects below read/write it imperatively.
+    val puckAppearance = remember { PuckAppearance() }
 
     // ContactSymbolLayer uses Style.addImage (bitmap) + SymbolLayer — the path
     // LocationComponent uses and that renders on Adreno 610 / SwiftShader when
@@ -142,7 +159,10 @@ fun TacticalMap(
                     // the live map handle — not from here. The `aircraft-src`
                     // source stays empty until the plugin pushes into it.
                     if (currentLocationEnabled) {
-                        activateLocation(map, style, context, useMilStdSelfSymbol, selfTeamColor)
+                        activateLocation(
+                            map, style, context, currentUseMilStd, currentTeamColor,
+                            seedFix = currentSelfFix, puck = puckAppearance,
+                        )
                     }
                     // Cold-start 3D: if the persisted pref has terrain on,
                     // apply the tilt once the style (+ terrain source) is
@@ -210,10 +230,44 @@ fun TacticalMap(
             mapView.getMapAsync { map ->
                 val style = map.style
                 if (style != null && !map.locationComponent.isLocationComponentActivated) {
-                    activateLocation(map, style, context, useMilStdSelfSymbol, selfTeamColor)
+                    activateLocation(
+                        map, style, context, currentUseMilStd, currentTeamColor,
+                        seedFix = currentSelfFix, puck = puckAppearance,
+                    )
                 }
                 if (map.locationComponent.isLocationComponentActivated) {
                     safeEnableLocation(map)
+                }
+            }
+        }
+        onDispose { }
+    }
+
+    // Issue #75 — drive the puck from LocationProvider's fix alongside
+    // the component's internal engine. This renders the restored fix the
+    // instant the map is up (cold start) and snaps the marker to the
+    // forced foreground-resume fix; the provider's newer-wins gate
+    // guarantees this flow never regresses the position. Also keeps the
+    // dimmed/stale appearance in sync: dim when all we have is an old
+    // restored fix, restore full opacity once a fresh fix lands.
+    DisposableEffect(mapView, selfFix) {
+        val fix = selfFix
+        if (fix != null && locationEnabled) {
+            mapView.getMapAsync { map ->
+                val style = map.style
+                if (style != null && map.locationComponent.isLocationComponentActivated) {
+                    map.locationComponent.forceLocationUpdate(fix.toLocation())
+                    val staleNow =
+                        SelfFixPersistence.isStale(fix.timeMs, System.currentTimeMillis())
+                    if (puckAppearance.dimmed != staleNow) {
+                        map.locationComponent.applyStyle(
+                            buildPuckOptions(
+                                context, style, currentUseMilStd, currentTeamColor,
+                                dimmed = staleNow,
+                            ),
+                        )
+                        puckAppearance.dimmed = staleNow
+                    }
                 }
             }
         }
@@ -304,6 +358,18 @@ fun TacticalMap(
                     // ADS-B re-push after a style reload is handled by the
                     // plugin overlay's LaunchedEffect(map, …), which re-runs
                     // when the new MapLibreMap/style lands. Nothing to do here.
+                    // Issue #75 — the self-marker bitmaps live on the style,
+                    // so a basemap swap wipes them. Re-register + re-apply so
+                    // the puck survives style reloads with its current
+                    // (dimmed or live) appearance.
+                    if (currentLocationEnabled && map.locationComponent.isLocationComponentActivated) {
+                        map.locationComponent.applyStyle(
+                            buildPuckOptions(
+                                context, style, currentUseMilStd, currentTeamColor,
+                                dimmed = puckAppearance.dimmed,
+                            ),
+                        )
+                    }
                     currentStyleReady?.invoke(map, style)
                     // Apply 3D tilt AFTER the style (which carries the
                     // terrain source) finishes loading — deterministic vs
@@ -388,7 +454,28 @@ fun TacticalMap(
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_START -> mapView.onStart()
-                Lifecycle.Event.ON_RESUME -> mapView.onResume()
+                Lifecycle.Event.ON_RESUME -> {
+                    mapView.onResume()
+                    // Issue #75 (root cause) — ON_PAUSE below silences the
+                    // LocationComponent to kill its compass animator, but
+                    // nothing ever re-enabled it: after screen-off/on the
+                    // self-marker stayed hidden until the composable was
+                    // rebuilt. Re-enable on every resume, restoring the
+                    // camera mode follow-me expects.
+                    if (currentLocationEnabled) {
+                        runCatching {
+                            mapView.getMapAsync { map ->
+                                if (map.locationComponent.isLocationComponentActivated) {
+                                    map.locationComponent.isLocationComponentEnabled = true
+                                    map.locationComponent.renderMode = RenderMode.COMPASS
+                                    map.locationComponent.cameraMode =
+                                        if (currentFollowMe) CameraMode.TRACKING_COMPASS
+                                        else CameraMode.NONE
+                                }
+                            }
+                        }
+                    }
+                }
                 Lifecycle.Event.ON_PAUSE -> {
                     // Silence the LocationComponent on pause — its compass
                     // animator keeps firing across lifecycle transitions
@@ -431,6 +518,13 @@ fun TacticalMap(
     AndroidView(factory = { mapView }, modifier = modifier)
 }
 
+/** Issue #75 — imperative holder for the self-marker's current dim state
+ *  (stale restored fix vs live GPS). Shared between the activation path,
+ *  the selfFix forwarding effect, and the style-reload re-apply. */
+internal class PuckAppearance {
+    @Volatile var dimmed: Boolean = false
+}
+
 @SuppressLint("MissingPermission")
 private fun activateLocation(
     map: org.maplibre.android.maps.MapLibreMap,
@@ -438,7 +532,50 @@ private fun activateLocation(
     context: android.content.Context,
     useMilStdSelfSymbol: Boolean,
     selfTeamColor: String = "Cyan",
+    seedFix: SelfFix? = null,
+    puck: PuckAppearance = PuckAppearance(),
 ) {
+    // Issue #75 — when the best position available at activation is a
+    // restored (persisted) fix that is already old, start the puck dimmed
+    // so a last-known position can't masquerade as live GPS.
+    val dimmed = seedFix != null &&
+        SelfFixPersistence.isStale(seedFix.timeMs, System.currentTimeMillis())
+    puck.dimmed = dimmed
+
+    val options = LocationComponentActivationOptions.builder(context, style)
+        .useDefaultLocationEngine(true)
+        .locationComponentOptions(
+            buildPuckOptions(context, style, useMilStdSelfSymbol, selfTeamColor, dimmed),
+        )
+        .build()
+    map.locationComponent.activateLocationComponent(options)
+    safeEnableLocation(map)
+
+    // Issue #75 — render the restored fix immediately instead of leaving
+    // the marker invisible until the engine's first delivery (the
+    // "disappears until GPS reacquires" bug). Live engine updates and the
+    // forced foreground-resume fix take over from here via newer-wins.
+    if (seedFix != null) {
+        map.locationComponent.forceLocationUpdate(seedFix.toLocation())
+    }
+}
+
+/**
+ * Issue #75 — build (and register the marker images for) the puck's
+ * styling options. [dimmed] renders the self-marker at reduced opacity —
+ * used while the only position available is a restored fix older than
+ * [SelfFixPersistence.STALE_AFTER_MS]. The stale variants are always
+ * registered/configured so MapLibre's own stale-state machinery (no
+ * location update for the same 30 s — e.g. GPS loss indoors) dims the
+ * puck identically.
+ */
+private fun buildPuckOptions(
+    context: android.content.Context,
+    style: Style,
+    useMilStdSelfSymbol: Boolean,
+    selfTeamColor: String,
+    dimmed: Boolean,
+): LocationComponentOptions {
     // Resolve the ARGB tint from the operator's configured TAK team name
     // ("Cyan", "Red", "Orange", …). Falls back to cyan — CivTAK default
     // for unaffiliated friendlies — when the name isn't in the palette.
@@ -453,39 +590,29 @@ private fun activateLocation(
     // tinted-disc drawable.
     val selfBitmap: android.graphics.Bitmap? = if (useMilStdSelfSymbol) {
         soy.engindearing.omnitak.mobile.data.symbology.MilStdIconCache
-            .bitmapFor(context, cotType = "a-f-G-U-C", sizePx = 96)?.let { raw ->
-                // Tint the MIL-STD SVG bitmap with the team color by
-                // drawing it through a SRC_IN PorterDuff color filter.
-                // The SVG renders as a transparent-background ARGB bitmap
-                // so SRC_IN recolors only the opaque glyph pixels —
-                // equivalent to the iOS UIImage.withTintColor approach.
-                val tinted = android.graphics.Bitmap.createBitmap(
-                    raw.width, raw.height, android.graphics.Bitmap.Config.ARGB_8888
-                )
-                val canvas = android.graphics.Canvas(tinted)
-                val paint = android.graphics.Paint().apply {
-                    colorFilter = android.graphics.PorterDuffColorFilter(
-                        teamArgb,
-                        android.graphics.PorterDuff.Mode.SRC_IN,
-                    )
-                }
-                canvas.drawBitmap(raw, 0f, 0f, paint)
-                tinted
-            }
+            .bitmapFor(context, cotType = "a-f-G-U-C", sizePx = 96)
+            ?.let { raw -> tintBitmap(raw, teamArgb) }
     } else {
         null
     }
 
     val markerOptionsBuilder = LocationComponentOptions.builder(context)
-        .pulseEnabled(true)
+        // No pulse on a dimmed marker — the pulse animation overstates
+        // liveness when all we have is a last-known position.
+        .pulseEnabled(!dimmed)
         .pulseColor(teamArgb)
         .pulseSingleDuration(2200f)
         .accuracyColor(teamArgb)
         .accuracyAlpha(0.18f)
+        // Issue #75 — let MapLibre dim the puck on its own when no update
+        // arrives for STALE_AFTER_MS (same threshold as restored-fix
+        // staleness, so both paths look identical).
+        .enableStaleState(true)
+        .staleStateTimeout(SelfFixPersistence.STALE_AFTER_MS)
 
     if (selfBitmap != null) {
-        // Register the bitmap with the style so LocationComponent can
-        // reference it by name — MapLibre's LocationComponentOptions
+        // Register the bitmaps with the style so LocationComponent can
+        // reference them by name — MapLibre's LocationComponentOptions
         // builder accepts resource IDs or names, not direct bitmaps.
         // Using the same bitmap for foreground and bearing keeps the
         // symbol upright regardless of heading; the bearing-arrow
@@ -493,28 +620,78 @@ private fun activateLocation(
         // symbol bodies aren't meant to rotate. Operator heading is
         // still surfaced numerically in the SelfPositionCard.
         style.addImage(SELF_FOREGROUND_IMAGE, selfBitmap)
+        style.addImage(SELF_FOREGROUND_STALE_IMAGE, fadeBitmap(selfBitmap, STALE_MARKER_ALPHA))
+        val foreground = if (dimmed) SELF_FOREGROUND_STALE_IMAGE else SELF_FOREGROUND_IMAGE
         markerOptionsBuilder
-            .foregroundName(SELF_FOREGROUND_IMAGE)
-            .bearingName(SELF_FOREGROUND_IMAGE)
+            .foregroundName(foreground)
+            .bearingName(foreground)
+            .foregroundStaleName(SELF_FOREGROUND_STALE_IMAGE)
     } else {
         // Legacy tinted-disc fallback — apply the team color as a tint
         // on the vector drawable so the disc still reflects team identity.
+        val tint = if (dimmed) fadeArgb(teamArgb, STALE_MARKER_ALPHA) else teamArgb
         markerOptionsBuilder
             .foregroundDrawable(R.drawable.ic_self_marker)
             .bearingDrawable(R.drawable.ic_self_marker_bearing)
-            .foregroundTintColor(teamArgb)
-            .bearingTintColor(teamArgb)
+            .foregroundTintColor(tint)
+            .bearingTintColor(tint)
+            .foregroundStaleTintColor(fadeArgb(teamArgb, STALE_MARKER_ALPHA))
     }
-
-    val options = LocationComponentActivationOptions.builder(context, style)
-        .useDefaultLocationEngine(true)
-        .locationComponentOptions(markerOptionsBuilder.build())
-        .build()
-    map.locationComponent.activateLocationComponent(options)
-    safeEnableLocation(map)
+    return markerOptionsBuilder.build()
 }
 
+/** Tint an ARGB bitmap's opaque pixels via a SRC_IN PorterDuff filter.
+ *  The SVG renders as a transparent-background ARGB bitmap so SRC_IN
+ *  recolors only the opaque glyph pixels — equivalent to the iOS
+ *  UIImage.withTintColor approach. */
+private fun tintBitmap(raw: android.graphics.Bitmap, argb: Int): android.graphics.Bitmap {
+    val tinted = android.graphics.Bitmap.createBitmap(
+        raw.width, raw.height, android.graphics.Bitmap.Config.ARGB_8888
+    )
+    val canvas = android.graphics.Canvas(tinted)
+    val paint = android.graphics.Paint().apply {
+        colorFilter = android.graphics.PorterDuffColorFilter(
+            argb,
+            android.graphics.PorterDuff.Mode.SRC_IN,
+        )
+    }
+    canvas.drawBitmap(raw, 0f, 0f, paint)
+    return tinted
+}
+
+/** Issue #75 — a translucent copy of [src] for the stale self-marker. */
+private fun fadeBitmap(src: android.graphics.Bitmap, alpha: Int): android.graphics.Bitmap {
+    val faded = android.graphics.Bitmap.createBitmap(
+        src.width, src.height, android.graphics.Bitmap.Config.ARGB_8888
+    )
+    val canvas = android.graphics.Canvas(faded)
+    val paint = android.graphics.Paint().apply { this.alpha = alpha }
+    canvas.drawBitmap(src, 0f, 0f, paint)
+    return faded
+}
+
+/** Issue #75 — [argb] with its alpha channel replaced by [alpha]. */
+private fun fadeArgb(argb: Int, alpha: Int): Int =
+    (argb and 0x00FFFFFF) or (alpha shl 24)
+
+/** Issue #75 — adapt a [SelfFix] for LocationComponent.forceLocationUpdate.
+ *  NaN accuracy (restored fixes) is simply omitted. */
+private fun SelfFix.toLocation(): android.location.Location =
+    android.location.Location("omnitak-selffix").apply {
+        latitude = lat
+        longitude = lon
+        altitude = altitudeM
+        time = timeMs
+        if (!accuracyM.isNaN()) accuracy = accuracyM
+        if (speedKmh > 0.0) speed = (speedKmh / 3.6).toFloat()
+    }
+
 private const val SELF_FOREGROUND_IMAGE = "omnitak-self-milstd-foreground"
+private const val SELF_FOREGROUND_STALE_IMAGE = "omnitak-self-milstd-foreground-stale"
+
+/** Stale self-marker opacity (0–255). ~45% — subtle, but unmistakably
+ *  dimmer than the live marker (issue #75). */
+private const val STALE_MARKER_ALPHA = 115
 
 @SuppressLint("MissingPermission")
 private fun safeEnableLocation(map: org.maplibre.android.maps.MapLibreMap) {

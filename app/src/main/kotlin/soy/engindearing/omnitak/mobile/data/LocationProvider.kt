@@ -33,7 +33,7 @@ class LocationProvider(private val context: Context) {
 
     private val callback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
-            result.lastLocation?.let { _fix.value = it.toSelfFix() }
+            result.lastLocation?.let { offerFix(it.toSelfFix()) }
         }
     }
 
@@ -49,10 +49,11 @@ class LocationProvider(private val context: Context) {
         client.requestLocationUpdates(req, callback, Looper.getMainLooper())
         client.lastLocation.addOnSuccessListener { loc ->
             // Suppress fixes older than 5 minutes — better to wait for a fresh
-            // one than show last-week's location on cold start.
-            if (loc != null && _fix.value == null &&
-                System.currentTimeMillis() - loc.time < 5 * 60_000L) {
-                _fix.value = loc.toSelfFix()
+            // one than show last-week's location as LIVE on cold start. (The
+            // persisted-fix seed handles older positions, rendered stale —
+            // issue #75.)
+            if (loc != null && System.currentTimeMillis() - loc.time < 5 * 60_000L) {
+                offerFix(loc.toSelfFix())
             }
         }
         started = true
@@ -63,6 +64,49 @@ class LocationProvider(private val context: Context) {
         if (!started) return
         client.removeLocationUpdates(callback)
         started = false
+    }
+
+    /**
+     * Issue #75 — seed the in-memory fix from the persisted one so the
+     * self-marker renders immediately on cold start instead of vanishing
+     * until GPS reacquires. Newer-wins: a live fix that has already
+     * arrived is never replaced by the (older) persisted seed. No
+     * permission required — this only replays a position we recorded.
+     */
+    fun seedFromPersisted(persisted: SelfFix) {
+        offerFix(persisted)
+    }
+
+    /**
+     * Issue #75 — force a location refresh the moment the app regains
+     * foreground instead of waiting for the next passive interval tick:
+     *  - fused cache ([com.google.android.gms.location.FusedLocationProviderClient.getLastLocation])
+     *    for an instant (≤5 min old) answer,
+     *  - an active single-shot
+     *    [com.google.android.gms.location.FusedLocationProviderClient.getCurrentLocation]
+     *    for a fresh fix.
+     * Both funnel through the newer-wins gate, so out-of-order results
+     * can't regress the marker. Safe no-op without permission.
+     */
+    @SuppressLint("MissingPermission")
+    fun requestImmediateFix(): Boolean {
+        if (!hasPermission()) return false
+        client.lastLocation.addOnSuccessListener { loc ->
+            if (loc != null && System.currentTimeMillis() - loc.time < 5 * 60_000L) {
+                offerFix(loc.toSelfFix())
+            }
+        }
+        client.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
+            .addOnSuccessListener { loc ->
+                if (loc != null) offerFix(loc.toSelfFix())
+            }
+        return true
+    }
+
+    /** Single write gate for [_fix]: an incoming fix only lands if it is
+     *  at least as recent as the current one (issue #75 newer-wins). */
+    private fun offerFix(candidate: SelfFix) {
+        _fix.value = SelfFixPersistence.newerOf(_fix.value, candidate)
     }
 
     private fun hasPermission(): Boolean {

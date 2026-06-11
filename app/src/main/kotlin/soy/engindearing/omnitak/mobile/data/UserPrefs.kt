@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -45,6 +46,13 @@ data class UserPrefs(
     // real fix arrives, fixing issue #10 (HUD showing San Francisco).
     val selfLat: Double = Double.NaN,
     val selfLon: Double = Double.NaN,
+    // Issue #75 — the rest of the persisted self-fix. Together with
+    // selfLat/selfLon this lets the self-marker render immediately on
+    // cold start (stale-marked when the fix is old) instead of
+    // disappearing until GPS reacquires. Written (throttled) by the
+    // OmniTAKApp fix collector; restored via SelfFixPersistence.
+    val selfHae: Double = Double.NaN,
+    val selfFixTimeMs: Long = 0L,
     val distanceUnit: DistanceUnit = DistanceUnit.METRIC,
     val coordFormat: CoordFormat = CoordFormat.LATLON_DECIMAL,
     val mapProvider: MapProvider = MapProvider.TOPO_HINT,
@@ -121,6 +129,9 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_SELF_UID = stringPreferencesKey("self_uid")
     private val KEY_SELF_LAT = stringPreferencesKey("self_lat")
     private val KEY_SELF_LON = stringPreferencesKey("self_lon")
+    // Issue #75 — persisted self-fix altitude + fix wall-clock time.
+    private val KEY_SELF_HAE = stringPreferencesKey("self_hae")
+    private val KEY_SELF_FIX_TIME = longPreferencesKey("self_fix_time_ms")
     private val KEY_DIST = stringPreferencesKey("distance_unit")
     private val KEY_COORD = stringPreferencesKey("coord_format")
     private val KEY_MAP = stringPreferencesKey("map_provider")
@@ -159,6 +170,8 @@ class UserPrefsStore(private val context: Context) {
             p[KEY_SELF_UID] = next.selfUid
             p[KEY_SELF_LAT] = next.selfLat.toString()
             p[KEY_SELF_LON] = next.selfLon.toString()
+            p[KEY_SELF_HAE] = next.selfHae.toString()
+            p[KEY_SELF_FIX_TIME] = next.selfFixTimeMs
             p[KEY_DIST] = next.distanceUnit.name
             p[KEY_COORD] = next.coordFormat.name
             p[KEY_MAP] = next.mapProvider.name
@@ -202,6 +215,22 @@ class UserPrefsStore(private val context: Context) {
     /** Persist the last camera view so it survives cold starts. */
     suspend fun setLastCamera(lat: Double, lon: Double, zoom: Double) {
         update { it.copy(lastCameraLat = lat, lastCameraLon = lon, lastCameraZoom = zoom) }
+    }
+
+    /** Issue #75 — persist the last real GPS fix so the self-marker can
+     *  render immediately on the next cold start (stale-marked when old)
+     *  instead of disappearing until GPS reacquires. Speed/accuracy are
+     *  deliberately NOT stored: a restored fix must not masquerade as a
+     *  live one (see [SelfFixPersistence.restoredFixOrNull]). */
+    suspend fun setLastSelfFix(fix: SelfFix) {
+        update {
+            it.copy(
+                selfLat = fix.lat,
+                selfLon = fix.lon,
+                selfHae = fix.altitudeM,
+                selfFixTimeMs = fix.timeMs,
+            )
+        }
     }
 
     /** Convenience writer for the Meshtastic auto-publish toggle so the
@@ -249,6 +278,8 @@ class UserPrefsStore(private val context: Context) {
         selfUid = p[KEY_SELF_UID] ?: "",
         selfLat = p[KEY_SELF_LAT]?.toDoubleOrNull() ?: Double.NaN,
         selfLon = p[KEY_SELF_LON]?.toDoubleOrNull() ?: Double.NaN,
+        selfHae = p[KEY_SELF_HAE]?.toDoubleOrNull() ?: Double.NaN,
+        selfFixTimeMs = p[KEY_SELF_FIX_TIME] ?: 0L,
         distanceUnit = p[KEY_DIST]?.let { runCatching { DistanceUnit.valueOf(it) }.getOrNull() }
             ?: DistanceUnit.METRIC,
         coordFormat = p[KEY_COORD]?.let { runCatching { CoordFormat.valueOf(it) }.getOrNull() }

@@ -62,6 +62,29 @@ class SelfPositionBroadcasterFixSourcingTest {
         assertFalse("must not contain SF lon", xml.contains("-122.4"))
     }
 
+    @Test fun broadcasts_persisted_position_when_fix_null() = runTest {
+        // Issue #75 — the prefs fallback is now actually reachable:
+        // OmniTAKApp persists every real fix (throttled), so after process
+        // death the broadcaster keeps reporting the last known position
+        // with an honest unknown circular error instead of going silent.
+        val fixFlow = MutableStateFlow<SelfFix?>(null)
+        val sent = mutableListOf<String>()
+        val prefs = UserPrefs(
+            selfUid = "ANDROID-test",
+            selfLat = 47.6062,
+            selfLon = -117.4194,
+            selfHae = 562.0,
+            selfFixTimeMs = 1_700_000_000_000L,
+        )
+        broadcaster(fixFlow, sent, prefs).broadcastOnce(prefs)
+        assertTrue("expected one PPLI from persisted prefs", sent.size == 1)
+        val xml = sent.single()
+        assertTrue("persisted lat in XML, was: $xml", xml.contains("lat=\"47.6062\""))
+        assertTrue("persisted lon in XML, was: $xml", xml.contains("lon=\"-117.4194\""))
+        assertTrue("persisted hae in XML, was: $xml", xml.contains("hae=\"562.0\""))
+        assertTrue("unknown CE for a persisted position, was: $xml", xml.contains("ce=\"9999999.0\""))
+    }
+
     @Test fun never_broadcasts_san_francisco_when_fix_null() = runTest {
         val fixFlow = MutableStateFlow<SelfFix?>(null)
         val sent = mutableListOf<String>()
