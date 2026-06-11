@@ -185,6 +185,14 @@ fun TacticalMap(
                     isCompassEnabled = true
                     isLogoEnabled = false
                     isAttributionEnabled = true
+                    // Issue #81 — push the compass below the ATAKStatusBar.
+                    // setCompassMargins(left, top, right, bottom) takes raw
+                    // pixels; 4 dp matches MapLibre's built-in side defaults
+                    // so only the top changes.
+                    val density = context.resources.displayMetrics.density
+                    val compassTopPx = (COMPASS_TOP_MARGIN_DP * density + 0.5f).toInt()
+                    val sideMarginPx = (4 * density + 0.5f).toInt()
+                    setCompassMargins(sideMarginPx, compassTopPx, sideMarginPx, sideMarginPx)
                 }
                 // Persist camera state on idle so bottom-nav switches
                 // (Map → Settings → Map etc.) don't reset the operator's
@@ -525,6 +533,26 @@ fun TacticalMap(
 
     AndroidView(factory = { mapView }, modifier = modifier)
 }
+
+/**
+ * Issue #81 — top margin for the MapLibre built-in compass so it clears
+ * the ATAKStatusBar that sits at the very top of the map surface.
+ *
+ * Derivation (all in dp):
+ *   ATAKStatusBar.padding(vertical = 8.dp): 8 top + 8 bottom  = 16 dp
+ *   ATAKStatusBar row content (13sp text / 14dp icon)          ≈ 20 dp
+ *   ATAKStatusBar total height                                  ≈ 36 dp
+ *   Typical Android system status bar                          ≈ 24 dp
+ *   Total top clearance                                        ≈ 60 dp
+ *   + 4 dp breathing room                                       = 64 dp
+ *
+ * This is a fixed dp constant because ATAKStatusBar has a fixed layout
+ * (no dynamic content that changes the bar height). The system status bar
+ * typically ranges 20–28 dp; 64 dp clears both extremes comfortably.
+ * setCompassMargins accepts raw pixels, so we convert at runtime via
+ * context.resources.displayMetrics.density.
+ */
+internal const val COMPASS_TOP_MARGIN_DP = 64
 
 /** Issue #75 — imperative holder for the self-marker's current dim state
  *  (stale restored fix vs live GPS). Shared between the activation path,
