@@ -378,18 +378,6 @@ fun TacticalMap(
         onDispose { }
     }
 
-    // Push contact updates through to the GeoJson source whenever the
-    // caller's collection reference changes.
-    DisposableEffect(mapView, contacts) {
-        mapView.getMapAsync { map ->
-            if (map.style != null) {
-                ContactLayer.update(map, context, contacts)
-                contactSymbolLayer.update(map, context, contacts)
-            }
-        }
-        onDispose { }
-    }
-
     // GAP-101 — react to basemap selection from Settings. Re-applies the
     // entire style JSON so the operational layers (which live inline in the
     // style JSON to dodge the MapLibre-Android addLayer GL quirk) keep
@@ -566,7 +554,35 @@ fun TacticalMap(
         }
     }
 
-    AndroidView(factory = { mapView }, modifier = modifier)
+    // Issue #77 — push contact updates on every recomposition that delivers a new
+    // contacts list, mirroring the Cesium engine's AndroidView.update pattern.
+    // Two deliberate changes vs the removed DisposableEffect(mapView, contacts):
+    //
+    //   1. AndroidView.update fires on every recomposition (not only on key change),
+    //      so a marker dropped while the style is loading is not silently lost —
+    //      the push retries on the next frame and every subsequent recomposition
+    //      until it lands.
+    //
+    //   2. map.getStyle { } (the queuing variant) instead of `if (map.style != null)`:
+    //      when the style is still loading the callback is queued and fires as soon
+    //      as the style is ready, closing the race between ingest and style-load that
+    //      caused locally-dropped markers to disappear on first open.
+    //
+    // currentContacts (rememberUpdatedState) always holds the latest list, so the
+    // async getStyle callback never captures a stale snapshot even if several
+    // recompositions happen between the update call and the callback execution.
+    AndroidView(
+        factory = { mapView },
+        update = {
+            mapView.getMapAsync { map ->
+                map.getStyle { _ ->
+                    ContactLayer.update(map, context, currentContacts)
+                    contactSymbolLayer.update(map, context, currentContacts)
+                }
+            }
+        },
+        modifier = modifier,
+    )
 }
 
 /**
