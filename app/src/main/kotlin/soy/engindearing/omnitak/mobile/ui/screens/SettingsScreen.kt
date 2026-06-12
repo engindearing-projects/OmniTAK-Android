@@ -62,6 +62,7 @@ import soy.engindearing.omnitak.mobile.data.DistanceUnit
 import soy.engindearing.omnitak.mobile.data.MapProvider
 import soy.engindearing.omnitak.mobile.data.UserPrefs
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
+import androidx.compose.material.icons.filled.ManageAccounts
 import soy.engindearing.omnitak.mobile.ui.components.GybDeviceSheet
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalBackground
@@ -74,6 +75,7 @@ fun SettingsScreen(
     onOpenAbout: () -> Unit = {},
     onOpenPlugins: (pluginId: String) -> Unit = {},
     onOpenPluginsList: () -> Unit = {},
+    onOpenProfiles: () -> Unit = {},
 ) {
     val app = LocalContext.current.applicationContext as OmniTAKApp
     val prefs by app.userPrefsStore.prefs.collectAsState(initial = UserPrefs())
@@ -127,6 +129,47 @@ fun SettingsScreen(
                 value = prefs.team,
                 onSelect = { v -> mutate { it.copy(team = v) } },
             )
+
+            // ── Configuration Profiles ──────────────────────────────────────
+            // Profiles let a captain snapshot their config and share it with
+            // teammates via a QR code (omnitak://profile?d=…). Active profile
+            // name is shown as a subtitle so the operator knows which one they're
+            // running.
+            SectionHeader("Configuration Profiles")
+            val activeProfileId by app.configProfileStore.activeProfileId.collectAsState(initial = null)
+            val allProfiles by app.configProfileStore.profiles.collectAsState(initial = emptyList())
+            val activeProfileName = allProfiles.firstOrNull { it.id == activeProfileId }?.name
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onOpenProfiles() }
+                    .padding(vertical = 10.dp, horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Filled.ManageAccounts,
+                    contentDescription = null,
+                    tint = TacticalAccent,
+                    modifier = Modifier.size(22.dp),
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Manage profiles", color = MaterialTheme.colorScheme.onBackground)
+                    Text(
+                        if (activeProfileName != null) "Active: $activeProfileName"
+                        else if (allProfiles.isEmpty()) "No profiles saved yet"
+                        else "${allProfiles.size} profile${if (allProfiles.size != 1) "s" else ""} saved",
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Icon(
+                    Icons.Filled.ChevronRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+                )
+            }
 
             SectionHeader(Loc.t("settings.section.interface"))
             Row(

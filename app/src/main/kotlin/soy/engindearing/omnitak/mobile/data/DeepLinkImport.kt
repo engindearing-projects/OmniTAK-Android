@@ -54,6 +54,20 @@ data class ImportedServerConfig(
 }
 
 object DeepLinkImport {
+    /**
+     * Returns true when the URI carries a configuration-profile payload
+     * (`omnitak://profile?d=…`). Check this BEFORE [isServerConfig] because
+     * the `omnitak://` scheme is shared between both URL shapes.
+     */
+    fun isProfileConfig(uri: Uri?): Boolean = ProfileQrCodec.isProfileUri(uri)
+
+    /**
+     * Decode a profile URI produced by [ProfileQrCodec.encode].
+     * Returns null if the URI is malformed or the JSON payload can't be
+     * parsed — callers should surface a user-visible error in that case.
+     */
+    fun parseProfileConfig(uri: Uri): ConfigProfile? = ProfileQrCodec.decode(uri)
+
     /** Accept any URI we recognise as a server-onboarding payload. */
     fun isServerConfig(uri: Uri?): Boolean {
         if (uri == null) return false

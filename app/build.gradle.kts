@@ -196,6 +196,24 @@ dependencies {
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
     implementation("org.bouncycastle:bcpkix-jdk18on:1.78.1")
 
+    // ZXing core — QR code generation for the config-profile QR sync feature.
+    // Pure Java, Apache-2.0, ~300 KB, no Android resources. Used only for
+    // encoding (ProfileQrGenerator); MLKit barcode-scanning handles decode
+    // so we don't pull in the full ZXing Android Embedded UI stack.
+    implementation("com.google.zxing:core:3.5.3")
+
+    // MLKit barcode scanning — QR decode in the in-app CameraX scanner.
+    // Runs on-device (no network), bundled model ~900 KB. Apache-2.0.
+    implementation("com.google.mlkit:barcode-scanning:17.3.0")
+
+    // CameraX — camera preview + frame analysis for the QR scanner UI.
+    // Consistent on API 26+ (our minSdk), replaces the fragmented Camera2 API.
+    val cameraxVersion = "1.4.0"
+    implementation("androidx.camera:camera-core:$cameraxVersion")
+    implementation("androidx.camera:camera-camera2:$cameraxVersion")
+    implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
+    implementation("androidx.camera:camera-view:$cameraxVersion")
+
     // MAVLink Java codec for UAS Quick Connect drone control. MIT-licensed,
     // pure Java, MAVLink 2 support per the RAS-A IOP v1.2 (the DoD
     // interoperability standard the official ATAK UAS Tool 13.0 implements).

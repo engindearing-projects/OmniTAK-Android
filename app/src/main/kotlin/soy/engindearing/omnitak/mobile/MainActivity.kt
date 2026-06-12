@@ -23,6 +23,7 @@ import soy.engindearing.omnitak.mobile.data.CSREnrollmentService
 import soy.engindearing.omnitak.mobile.data.ConnectionProtocol
 import soy.engindearing.omnitak.mobile.data.DeepLinkImport
 import soy.engindearing.omnitak.mobile.data.ImportedServerConfig
+import soy.engindearing.omnitak.mobile.data.ProfileQrCodec
 import soy.engindearing.omnitak.mobile.data.TAKServer
 import soy.engindearing.omnitak.mobile.ui.navigation.AppNav
 import soy.engindearing.omnitak.mobile.ui.theme.OmniTAKTheme
@@ -84,6 +85,29 @@ class MainActivity : ComponentActivity() {
     private fun handleImportIntent(intent: Intent?) {
         if (intent?.action != Intent.ACTION_VIEW) return
         val uri = intent.data ?: return
+
+        // Profile import takes priority — check BEFORE server-config because
+        // both share the `omnitak://` scheme (profile = omnitak://profile?d=…).
+        if (DeepLinkImport.isProfileConfig(uri)) {
+            val profile = DeepLinkImport.parseProfileConfig(uri)
+            if (profile == null) {
+                Toast.makeText(this, "Invalid profile QR code", Toast.LENGTH_LONG).show()
+                return
+            }
+            val app = applicationContext as OmniTAKApp
+            lifecycleScope.launch {
+                app.configProfileStore.saveProfile(profile)
+                app.configProfileStore.apply(profile)
+                Log.i("OmniTAK", "Imported profile '${profile.name}' from $uri")
+                Toast.makeText(
+                    this@MainActivity,
+                    "Profile \"${profile.name}\" imported",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+            return
+        }
+
         if (!DeepLinkImport.isServerConfig(uri)) return
 
         val cfg = DeepLinkImport.parseServerConfig(uri)

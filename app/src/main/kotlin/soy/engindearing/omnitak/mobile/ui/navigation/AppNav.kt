@@ -38,6 +38,7 @@ import soy.engindearing.omnitak.mobile.ui.screens.MapScreen
 import soy.engindearing.omnitak.mobile.ui.screens.MeshDeviceSettingsScreen
 import soy.engindearing.omnitak.mobile.ui.screens.MeshTopologyScreen
 import soy.engindearing.omnitak.mobile.ui.screens.MeshtasticScreen
+import soy.engindearing.omnitak.mobile.ui.screens.ProfilesScreen
 import soy.engindearing.omnitak.mobile.ui.screens.ServersScreen
 import soy.engindearing.omnitak.mobile.ui.screens.SettingsScreen
 import soy.engindearing.omnitak.mobile.ui.screens.UASScreen
@@ -243,7 +244,11 @@ fun AppNav() {
                     onOpenAbout = { nav.navigate("about") },
                     onOpenPlugins = { pluginId -> nav.navigate("settings/plugin/$pluginId") },
                     onOpenPluginsList = { nav.navigate("plugins") },
+                    onOpenProfiles = { nav.navigate("settings/profiles") },
                 )
+            }
+            composable("settings/profiles") {
+                ProfilesScreen(onBack = { nav.popBackStack() })
             }
             composable("about") { AboutScreen() }
             // Top-level Plugins list (reads from PluginRegistry).
