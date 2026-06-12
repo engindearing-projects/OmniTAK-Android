@@ -31,6 +31,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -56,9 +59,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.OmniTAKApp
+import soy.engindearing.omnitak.mobile.data.MeshCoreUartClient
+import soy.engindearing.omnitak.mobile.data.MeshFramework
 import soy.engindearing.omnitak.mobile.data.MeshNode
 import soy.engindearing.omnitak.mobile.data.MeshtasticBleClient
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
+import soy.engindearing.omnitak.mobile.domain.MeshCoreManager
 import soy.engindearing.omnitak.mobile.domain.MeshtasticManager
 import soy.engindearing.omnitak.mobile.ui.components.BleScanList
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
@@ -74,17 +80,25 @@ fun MeshtasticScreen(
 ) {
     val app = LocalContext.current.applicationContext as OmniTAKApp
     val mesh = app.meshtastic
-    // Touching this lazy property kicks the bridge into active
+    val meshCore = app.meshcore
+    // Touching these lazy properties kicks each CoT bridge into active
     // collection so any nodes ingested below light up on the map.
     remember { app.meshtasticCoTBridge }
-    val nodes by mesh.nodes.collectAsState()
-    val connectionState by mesh.state.collectAsState()
-    val bleState = mesh.bleState()?.collectAsState()?.value
-    val anyConnected = connectionState is ConnectionState.Connected ||
-        bleState is ConnectionState.Connected
+    remember { app.meshCoreCoTBridge }
     val userPrefs by app.userPrefsStore.prefs.collectAsState(
         initial = soy.engindearing.omnitak.mobile.data.UserPrefs(),
     )
+    val framework = userPrefs.selectedMeshFramework
+    val nodes by mesh.nodes.collectAsState()
+    val meshCoreNodes by meshCore.nodes.collectAsState()
+    val connectionState by mesh.state.collectAsState()
+    val bleState = mesh.bleState()?.collectAsState()?.value
+    val meshCoreState = meshCore.bleState()?.collectAsState()?.value
+    val anyConnected = when (framework) {
+        MeshFramework.MESHTASTIC ->
+            connectionState is ConnectionState.Connected || bleState is ConnectionState.Connected
+        MeshFramework.MESHCORE -> meshCoreState is ConnectionState.Connected
+    }
     val coScope = rememberCoroutineScope()
 
     var selectedTab by remember { mutableStateOf(0) }
@@ -181,7 +195,10 @@ fun MeshtasticScreen(
                             enabled = anyConnected,
                             onClick = {
                                 menuOpen = false
-                                mesh.disconnect()
+                                when (framework) {
+                                    MeshFramework.MESHTASTIC -> mesh.disconnect()
+                                    MeshFramework.MESHCORE -> meshCore.disconnect()
+                                }
                             },
                         )
                     }
@@ -198,33 +215,65 @@ fun MeshtasticScreen(
                 .fillMaxSize()
                 .padding(inner),
         ) {
-            TabRow(
-                selectedTabIndex = selectedTab,
-                containerColor = TacticalBackground,
-                contentColor = TacticalAccent,
+            // Mesh framework selector — Meshtastic | MeshCore. Persists to
+            // UserPrefs.selectedMeshFramework and switches the panes below.
+            SingleChoiceSegmentedButtonRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
             ) {
-                Tab(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    text = { Text("TCP") },
-                )
-                Tab(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    text = { Text("BLE") },
-                )
+                MeshFramework.entries.forEachIndexed { index, fw ->
+                    SegmentedButton(
+                        selected = framework == fw,
+                        onClick = {
+                            if (framework != fw) {
+                                coScope.launch { app.userPrefsStore.setSelectedMeshFramework(fw) }
+                            }
+                        },
+                        shape = SegmentedButtonDefaults.itemShape(index, MeshFramework.entries.size),
+                    ) {
+                        Text(if (fw == MeshFramework.MESHTASTIC) "Meshtastic" else "MeshCore")
+                    }
+                }
             }
-            when (selectedTab) {
-                0 -> TcpPane(
-                    mesh,
-                    nodes.values.sortedByDescending { it.lastHeardEpoch },
-                    nodes.size,
-                    onOpenChat = onOpenChat,
-                )
-                else -> BlePane(
-                    mesh,
-                    nodes.values.sortedByDescending { it.lastHeardEpoch },
-                    nodes.size,
+
+            when (framework) {
+                MeshFramework.MESHTASTIC -> {
+                    TabRow(
+                        selectedTabIndex = selectedTab,
+                        containerColor = TacticalBackground,
+                        contentColor = TacticalAccent,
+                    ) {
+                        Tab(
+                            selected = selectedTab == 0,
+                            onClick = { selectedTab = 0 },
+                            text = { Text("TCP") },
+                        )
+                        Tab(
+                            selected = selectedTab == 1,
+                            onClick = { selectedTab = 1 },
+                            text = { Text("BLE") },
+                        )
+                    }
+                    when (selectedTab) {
+                        0 -> TcpPane(
+                            mesh,
+                            nodes.values.sortedByDescending { it.lastHeardEpoch },
+                            nodes.size,
+                            onOpenChat = onOpenChat,
+                        )
+                        else -> BlePane(
+                            mesh,
+                            nodes.values.sortedByDescending { it.lastHeardEpoch },
+                            nodes.size,
+                            onOpenChat = onOpenChat,
+                        )
+                    }
+                }
+                MeshFramework.MESHCORE -> MeshCorePane(
+                    meshCore,
+                    meshCoreNodes.values.sortedByDescending { it.lastHeardEpoch },
+                    meshCoreNodes.size,
                     onOpenChat = onOpenChat,
                 )
             }
@@ -440,6 +489,152 @@ private fun BlePane(
             NodeList(sortedNodes, onOpenChat = onOpenChat)
         }
         Spacer(Modifier.height(16.dp))
+    }
+}
+
+@Composable
+private fun MeshCorePane(
+    meshCore: MeshCoreManager,
+    sortedNodes: List<MeshNode>,
+    nodeCount: Int,
+    onOpenChat: (String) -> Unit = {},
+) {
+    // Make sure the MeshCore client exists so we can observe its state.
+    LaunchedEffect(Unit) { meshCore.ensureBleReady() }
+
+    val coScope = rememberCoroutineScope()
+    val bleStateFlow = meshCore.bleState()
+    val bleBytesFlow = meshCore.bleBytesReceived()
+    val rssiFlow = meshCore.bleRssi()
+
+    val bleState = bleStateFlow?.collectAsState()?.value ?: ConnectionState.Disconnected
+    val bleBytes = bleBytesFlow?.collectAsState()?.value ?: 0L
+    val bleRssi = rssiFlow?.collectAsState()?.value ?: 0
+
+    var isScanning by remember { mutableStateOf(false) }
+    val results = remember { mutableStateListOf<MeshCoreUartClient.BleScanResult>() }
+
+    DisposableEffect(Unit) {
+        onDispose { meshCore.stopMeshScan() }
+    }
+
+    val stateLabel = when (val s = bleState) {
+        ConnectionState.Disconnected -> "Disconnected"
+        is ConnectionState.Connecting -> "Connecting to ${s.serverName}…"
+        is ConnectionState.Connected -> "Connected to ${s.serverName}"
+        is ConnectionState.Failed -> "Failed: ${s.reason}"
+    }
+    val connected = bleState is ConnectionState.Connected
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        SectionHeader("MeshCore companion (BLE)")
+        Text(
+            "Pair OmniTAK with a MeshCore companion radio over BLE (Nordic UART). " +
+                "Contacts' advertised positions plot as PLI; inbound messages land in Chat. " +
+                "If Android asks for a PIN, use the code on the node's screen, or " +
+                "${MeshCoreUartClient.PAIRING_PIN} if it has no screen.",
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+            style = MaterialTheme.typography.bodySmall,
+        )
+
+        BleScanList(
+            isScanning = isScanning,
+            onStartScan = {
+                results.clear()
+                isScanning = true
+                coScope.launch {
+                    val flow = meshCore.startBleScan() ?: run {
+                        isScanning = false
+                        return@launch
+                    }
+                    flow.collect { hit ->
+                        if (results.none { it.address == hit.address }) results.add(hit)
+                    }
+                }
+            },
+            onStopScan = {
+                isScanning = false
+                meshCore.stopMeshScan()
+            },
+            results = results.map {
+                soy.engindearing.omnitak.mobile.ui.components.BleDeviceItem(
+                    name = it.name, address = it.address, rssi = it.rssi,
+                )
+            },
+            onConnect = { addr ->
+                isScanning = false
+                meshCore.stopMeshScan()
+                coScope.launch { meshCore.connectBle(addr) }
+            },
+        )
+
+        if (connected) {
+            OutlinedButton(
+                onClick = { meshCore.disconnect() },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Disconnect") }
+        }
+
+        HorizontalDivider(color = TacticalSurface)
+
+        SectionHeader("Link")
+        KeyValueRow(label = "State", value = stateLabel)
+        KeyValueRow(label = "Bytes RX", value = "$bleBytes")
+        KeyValueRow(label = "RSSI", value = if (bleRssi == 0) "—" else "$bleRssi dBm")
+        KeyValueRow(label = "Contacts", value = "$nodeCount")
+
+        HorizontalDivider(color = TacticalSurface)
+
+        SectionHeader("Contacts")
+        if (sortedNodes.isEmpty()) {
+            Text(
+                "No contacts yet. Connect to a MeshCore companion radio; its known " +
+                    "contacts' adverts will populate here as they're heard.",
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        } else {
+            MeshCoreNodeList(meshCore, sortedNodes, onOpenChat = onOpenChat)
+        }
+        Spacer(Modifier.height(16.dp))
+    }
+}
+
+@Composable
+private fun MeshCoreNodeList(
+    meshCore: MeshCoreManager,
+    nodes: List<MeshNode>,
+    onOpenChat: (String) -> Unit = {},
+) {
+    val app = LocalContext.current.applicationContext as OmniTAKApp
+    var detailNode by remember { mutableStateOf<MeshNode?>(null) }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        nodes.forEach { n ->
+            NodeRow(node = n, onClick = { detailNode = n })
+        }
+    }
+    detailNode?.let { selected ->
+        soy.engindearing.omnitak.mobile.ui.components.MeshNodeDetailSheet(
+            node = selected,
+            onDismiss = { detailNode = null },
+            onMessage = {
+                val convoId = meshCore.meshCoreDmConversationId(selected.id)
+                val title = "DM: ${selected.longName.ifBlank { selected.shortName.ifBlank { selected.idHex } }}"
+                app.chatStore.upsertConversationIfMissing(
+                    id = convoId,
+                    title = title,
+                    isGroup = false,
+                )
+                detailNode = null
+                onOpenChat(convoId)
+            },
+        )
     }
 }
 

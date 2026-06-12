@@ -27,11 +27,16 @@ import soy.engindearing.omnitak.mobile.domain.ConnectionState
 import soy.engindearing.omnitak.mobile.domain.DataPackageBootstrap
 import soy.engindearing.omnitak.mobile.domain.DrawingStore
 import soy.engindearing.omnitak.mobile.domain.MapCameraStore
-import soy.engindearing.omnitak.mobile.domain.MeshtasticCoTBridge
+import soy.engindearing.omnitak.mobile.domain.MeshCoTBridge
 import soy.engindearing.omnitak.mobile.domain.MeshCoTRouter
+import soy.engindearing.omnitak.mobile.domain.MeshFrameworkManager
 import soy.engindearing.omnitak.mobile.domain.SelfPositionBroadcaster
 import soy.engindearing.omnitak.mobile.domain.TAKConnectionService
 import soy.engindearing.omnitak.mobile.domain.MeshtasticManager
+import soy.engindearing.omnitak.mobile.domain.MeshCoreManager
+import soy.engindearing.omnitak.mobile.data.MeshFramework
+import soy.engindearing.omnitak.mobile.data.MeshtasticCoTConverter
+import soy.engindearing.omnitak.mobile.data.MeshCoreCoTConverter
 import soy.engindearing.omnitak.mobile.domain.ServerManager
 
 class OmniTAKApp : Application() {
@@ -149,9 +154,11 @@ class OmniTAKApp : Application() {
             combine(
                 serverManager.connectionState,
                 meshtastic.activeConnectionState,
-            ) { serverState, meshState ->
+                meshcore.activeConnectionState,
+            ) { serverState, meshState, meshCoreState ->
                 serverState is ConnectionState.Connected ||
-                    meshState is ConnectionState.Connected
+                    meshState is ConnectionState.Connected ||
+                    meshCoreState is ConnectionState.Connected
             }
                 .distinctUntilChanged()
                 .collect { eitherConnected ->
@@ -374,6 +381,63 @@ class OmniTAKApp : Application() {
             }
         }
     }
+
+    /** MeshCore companion-radio manager — the second mesh framework. Wired in
+     *  parallel to [meshtastic]: contacts' adverts decode to CoT (via
+     *  [meshCoreCoTBridge]); inbound DMs/channel text land in the same chat
+     *  store. The mesh screen + broadcaster switch onto this when the operator
+     *  selects MeshCore. */
+    val meshcore: MeshCoreManager by lazy {
+        MeshCoreManager(this).also { mgr ->
+            mgr.cotSink = { event ->
+                val selfUid = cachedPrefs.value.selfUid
+                val selfCallsign = cachedPrefs.value.callsign
+                val isSelf = (selfUid.isNotBlank() && event.uid == selfUid) ||
+                    (selfCallsign.isNotBlank() && event.callsign == selfCallsign)
+                if (!isSelf) {
+                    when (MeshCoTRouter.classify(event)) {
+                        MeshCoTRouter.Destination.CHAT -> {
+                            val senderCallsign = event.callsign ?: event.uid
+                            val convId = soy.engindearing.omnitak.mobile.data.ChatRoom.ALL_USERS
+                            val chatMsg = event.rawXml?.let {
+                                runCatching {
+                                    soy.engindearing.omnitak.mobile.data.ChatXml.parse(it, selfUid.ifBlank { null })
+                                }.getOrNull()
+                            } ?: soy.engindearing.omnitak.mobile.data.ChatMessage(
+                                id = event.uid,
+                                conversationId = convId,
+                                senderUid = event.uid,
+                                senderCallsign = senderCallsign,
+                                text = event.remarks.ifBlank { "[mesh chat]" },
+                                timeIso = event.timeIso
+                                    ?: soy.engindearing.omnitak.mobile.data.CotXml.isoMillis(),
+                                status = soy.engindearing.omnitak.mobile.data.ChatStatus.RECEIVED,
+                                isFromSelf = false,
+                            )
+                            chatStore.ingest(chatMsg)
+                        }
+                        MeshCoTRouter.Destination.CONTACT -> contactStore.ingest(event)
+                    }
+                }
+            }
+            mgr.chatSink = { msg ->
+                val title = when {
+                    msg.conversationId.startsWith("MESHCORE-DM-") -> "DM: ${msg.senderCallsign}"
+                    msg.conversationId.startsWith("MESHCORE-CH") -> {
+                        val ch = msg.conversationId.removePrefix("MESHCORE-CH")
+                        "MeshCore: Channel $ch"
+                    }
+                    else -> msg.senderCallsign
+                }
+                chatStore.upsertConversationIfMissing(
+                    id = msg.conversationId,
+                    title = title,
+                    isGroup = !msg.conversationId.startsWith("MESHCORE-DM-"),
+                )
+                chatStore.ingest(msg)
+            }
+        }
+    }
     val meshDeviceConfigStore: MeshDeviceConfigStore by lazy { MeshDeviceConfigStore(this) }
     val userPrefsStore: UserPrefsStore by lazy { UserPrefsStore(this) }
     val kmlOverlayStore: soy.engindearing.omnitak.mobile.data.KmlVectorOverlayStore by lazy {
@@ -433,8 +497,8 @@ class OmniTAKApp : Application() {
             sendCoT = { xml -> serverManager.sendCoT(xml) },
             locationFix = fixFlow,
             batteryProvider = ::readDeviceBatteryPercent,
-            sendToMesh = { event -> meshtastic.sendCoTOverMesh(event) },
-            meshConnected = { meshtastic.activeConnectionState.value is ConnectionState.Connected },
+            sendToMesh = { event -> activeMeshManager.sendCoTOverMesh(event) },
+            meshConnected = { activeMeshManager.activeConnectionState.value is ConnectionState.Connected },
             meshBroadcastEnabled = { broadcastOverMeshFlow.value },
             // Lambda, not a snapshot — the operator's interval pref now
             // applies to a running broadcaster instead of freezing at the
@@ -564,10 +628,11 @@ class OmniTAKApp : Application() {
         val DISABLED_BY_DEFAULT = setOf("soy.engindearing.diagnostics")
     }
 
-    val meshtasticCoTBridge: MeshtasticCoTBridge by lazy {
-        MeshtasticCoTBridge(
+    val meshtasticCoTBridge: MeshCoTBridge by lazy {
+        MeshCoTBridge(
             mesh = meshtastic,
             cotSink = { event -> contactStore.ingest(event) },
+            nodeToCoT = { MeshtasticCoTConverter.nodeToCoT(it) },
         ).also { bridge ->
             bridge.start()
             // Mirror the persisted prefs into the bridge so the
@@ -580,6 +645,36 @@ class OmniTAKApp : Application() {
             }
         }
     }
+
+    /** MeshCore-side CoT bridge — parallel to [meshtasticCoTBridge], but
+     *  converts MeshCore contacts (UID `MESHCORE-…`). Both bridges feed the
+     *  same contact store; only the active framework's manager produces
+     *  nodes (the other has no live connection), so running both is inert.
+     *  Honors the same `autoPublishMeshToTak` toggle. */
+    val meshCoreCoTBridge: MeshCoTBridge by lazy {
+        MeshCoTBridge(
+            mesh = meshcore,
+            cotSink = { event -> contactStore.ingest(event) },
+            nodeToCoT = { MeshCoreCoTConverter.nodeToCoT(it) },
+        ).also { bridge ->
+            bridge.start()
+            appScope.launch {
+                userPrefsStore.prefs
+                    .map { it.autoPublishMeshToTak }
+                    .distinctUntilChanged()
+                    .collect { bridge.enabled = it }
+            }
+        }
+    }
+
+    /** The mesh manager matching the operator's selected framework. Read off
+     *  the eagerly-cached prefs snapshot so non-suspending callers (the
+     *  broadcaster lambdas) can resolve it. Defaults to Meshtastic. */
+    val activeMeshManager: MeshFrameworkManager
+        get() = when (cachedPrefs.value.selectedMeshFramework) {
+            MeshFramework.MESHCORE -> meshcore
+            MeshFramework.MESHTASTIC -> meshtastic
+        }
 }
 
 /**
