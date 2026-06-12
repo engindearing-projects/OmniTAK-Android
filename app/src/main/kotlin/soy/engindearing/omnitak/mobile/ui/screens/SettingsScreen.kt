@@ -63,6 +63,7 @@ import soy.engindearing.omnitak.mobile.data.MapProvider
 import soy.engindearing.omnitak.mobile.data.UserPrefs
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
 import androidx.compose.material.icons.filled.ManageAccounts
+import androidx.compose.material3.Icon
 import soy.engindearing.omnitak.mobile.ui.components.GybDeviceSheet
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalBackground

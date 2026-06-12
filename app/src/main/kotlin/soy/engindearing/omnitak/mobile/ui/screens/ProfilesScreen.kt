@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -109,7 +110,7 @@ private const val TAG = "ProfilesScreen"
  *  - "Generate QR" → shows a QR code for sharing.
  *  - "Scan to import" → CameraX + MLKit scanner with an import preview/confirm dialog.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@kotlin.OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfilesScreen(onBack: () -> Unit = {}) {
     val context = LocalContext.current
@@ -353,7 +354,7 @@ private fun ProfileRow(
 
 // ── Snapshot dialog ──────────────────────────────────────────────────────────
 
-@OptIn(ExperimentalMaterial3Api::class)
+@kotlin.OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SnapshotDialog(onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
     var name by remember { mutableStateOf("") }
@@ -403,7 +404,7 @@ private fun SnapshotDialog(onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
 
 // ── Rename dialog ────────────────────────────────────────────────────────────
 
-@OptIn(ExperimentalMaterial3Api::class)
+@kotlin.OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun RenameDialog(current: String, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
     var name by remember { mutableStateOf(current) }
