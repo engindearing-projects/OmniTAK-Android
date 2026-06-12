@@ -30,17 +30,17 @@ import kotlin.coroutines.coroutineContext
  * comes in the follow-up once the meshtastic `.proto` set is wired
  * into the Gradle build.
  */
-class MeshtasticTcpClient {
+class MeshtasticTcpClient : MeshTransport {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var connectJob: Job? = null
     private var socket: Socket? = null
 
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
-    val state: StateFlow<ConnectionState> = _state.asStateFlow()
+    override val state: StateFlow<ConnectionState> = _state.asStateFlow()
 
     private val _frames = MutableSharedFlow<ByteArray>(extraBufferCapacity = 64)
-    val frames: SharedFlow<ByteArray> = _frames.asSharedFlow()
+    override val frames: SharedFlow<ByteArray> = _frames.asSharedFlow()
 
     private val _bytesReceived = MutableStateFlow(0L)
     val bytesReceived: StateFlow<Long> = _bytesReceived.asStateFlow()
@@ -68,11 +68,14 @@ class MeshtasticTcpClient {
         }
     }
 
-    fun disconnect() {
+    override fun disconnect() {
         connectJob?.cancel()
         cleanup()
         _state.value = ConnectionState.Disconnected
     }
+
+    /** [MeshTransport.send] — TCP delegates to the framed [sendBytes]. */
+    override suspend fun send(payload: ByteArray): Boolean = sendBytes(payload)
 
     /**
      * Encodes + writes a ToRadio protobuf payload. Caller is responsible

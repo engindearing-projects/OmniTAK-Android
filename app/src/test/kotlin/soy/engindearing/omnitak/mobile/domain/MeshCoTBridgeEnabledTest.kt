@@ -12,16 +12,17 @@ import org.junit.Test
 import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.MeshNode
 import soy.engindearing.omnitak.mobile.data.MeshPosition
+import soy.engindearing.omnitak.mobile.data.MeshtasticCoTConverter
 
 /**
  * Verifies the Phase 3 auto-publish toggle wired through
- * [MeshtasticCoTBridge.enabled]. When the bridge is disabled, node
+ * [MeshCoTBridge.enabled]. When the bridge is disabled, node
  * updates flowing through the [MeshtasticManager.nodes] StateFlow must
  * NOT reach the cotSink. Re-enabling the bridge should resume forwarding
  * subsequent updates.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
-class MeshtasticCoTBridgeEnabledTest {
+class MeshCoTBridgeEnabledTest {
 
     private fun positionedNode(id: Long, lat: Double, lon: Double, lastHeard: Long = 1) = MeshNode(
         id = id,
@@ -37,9 +38,10 @@ class MeshtasticCoTBridgeEnabledTest {
         val mgr = MeshtasticManager(context = null)
         val received = mutableListOf<CoTEvent>()
         val scope = CoroutineScope(dispatcher)
-        val bridge = MeshtasticCoTBridge(
+        val bridge = MeshCoTBridge(
             mesh = mgr,
             cotSink = { received += it },
+            nodeToCoT = { MeshtasticCoTConverter.nodeToCoT(it) },
             scope = scope,
         )
         bridge.start()
@@ -75,9 +77,10 @@ class MeshtasticCoTBridgeEnabledTest {
     @Test
     fun bridge_defaults_to_enabled() {
         val mgr = MeshtasticManager(context = null)
-        val bridge = MeshtasticCoTBridge(
+        val bridge = MeshCoTBridge(
             mesh = mgr,
             cotSink = { /* unused */ },
+            nodeToCoT = { MeshtasticCoTConverter.nodeToCoT(it) },
             scope = CoroutineScope(Dispatchers.Unconfined),
         )
         assertTrue("auto-publish must default to on for backwards compat", bridge.enabled)

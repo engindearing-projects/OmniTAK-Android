@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
@@ -62,12 +63,12 @@ import soy.engindearing.omnitak.mobile.data.MeshtasticTcpClient
  * provides the matching TX path over the active TCP transport — BLE
  * TX hooks in as a follow-up.
  */
-class MeshtasticManager(private val context: Context? = null) {
+class MeshtasticManager(private val context: Context? = null) : MeshFrameworkManager {
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     private val _nodes = MutableStateFlow<Map<Long, MeshNode>>(emptyMap())
-    val nodes: StateFlow<Map<Long, MeshNode>> = _nodes.asStateFlow()
+    override val nodes: StateFlow<Map<Long, MeshNode>> = _nodes.asStateFlow()
 
     val tcpClient = MeshtasticTcpClient()
     private var bleClient: MeshtasticBleClient? = null
@@ -105,7 +106,7 @@ class MeshtasticManager(private val context: Context? = null) {
      * showed as "No device connected" in Device Settings.
      */
     @OptIn(ExperimentalCoroutinesApi::class)
-    val activeConnectionState: StateFlow<ConnectionState> =
+    override val activeConnectionState: StateFlow<ConnectionState> =
         _activeTransport.flatMapLatest { transport ->
             when (transport) {
                 MeshConnectionType.TCP -> tcpClient.state
@@ -130,7 +131,7 @@ class MeshtasticManager(private val context: Context? = null) {
     /** Sink for CoT events parsed off the mesh — wired up by
      *  [OmniTAKApp] to [ContactStore.ingest] so portnum-72 ATAK-plugin
      *  payloads flow into the same map pipeline as TCP-server CoT. */
-    @Volatile var cotSink: ((CoTEvent) -> Unit)? = null
+    @Volatile override var cotSink: ((CoTEvent) -> Unit)? = null
 
     fun connectTcp(host: String, port: Int = 4403) {
         // Tearing down a BLE session before opening the TCP one is
@@ -157,7 +158,7 @@ class MeshtasticManager(private val context: Context? = null) {
      * parser. Requires the manager to have been constructed with a
      * Context (`MeshtasticManager(applicationContext)`).
      */
-    suspend fun connectBle(deviceAddress: String): Boolean {
+    override suspend fun connectBle(deviceAddress: String): Boolean {
         val client = bleClientOrNull() ?: run {
             Log.w(TAG, "connectBle called but BLE client unavailable")
             return false
@@ -215,10 +216,17 @@ class MeshtasticManager(private val context: Context? = null) {
         bleClient?.stopScan()
     }
 
+    /** [MeshFrameworkManager] scan — maps the Meshtastic BLE scan results
+     *  into the framework-neutral [MeshScanResult] the picker consumes. */
+    override suspend fun startMeshScan(timeoutMs: Long): Flow<MeshScanResult>? =
+        startBleScan(timeoutMs)?.map { MeshScanResult(it.name, it.address, it.rssi) }
+
+    override fun stopMeshScan() = stopBleScan()
+
     /** RSSI of the active BLE link, or null if BLE not initialized. */
     fun bleRssi(): StateFlow<Int>? = bleClient?.rssi
 
-    fun disconnect() {
+    override fun disconnect() {
         when (_activeTransport.value) {
             MeshConnectionType.TCP -> tcpClient.disconnect()
             MeshConnectionType.BLUETOOTH -> {
@@ -388,7 +396,7 @@ class MeshtasticManager(private val context: Context? = null) {
      * [OmniTAKApp] to [ChatStore.ingest] so the Chat tab surfaces them
      * in a "Mesh: channel N" conversation.
      */
-    @Volatile var chatSink: ((ChatMessage) -> Unit)? = null
+    @Volatile override var chatSink: ((ChatMessage) -> Unit)? = null
 
     /**
      * GAP-122 — send a text message over the Meshtastic transport on
@@ -401,7 +409,7 @@ class MeshtasticManager(private val context: Context? = null) {
      * instead of the broadcast address. Recipients see it as a DM in
      * conversation "MESH-DM-<myNodeId>".
      */
-    suspend fun sendMeshChat(text: String, channelIndex: Int = 0, toNodeId: UInt? = null): Boolean {
+    override suspend fun sendMeshChat(text: String, channelIndex: Int, toNodeId: UInt?): Boolean {
         if (text.isEmpty()) return false
         val transport = _activeTransport.value ?: return false
         val payload = text.toByteArray(Charsets.UTF_8)
@@ -485,7 +493,7 @@ class MeshtasticManager(private val context: Context? = null) {
      * writes go through the toRadio characteristic on
      * [MeshtasticBleClient.sendToRadio] (chunked at the negotiated MTU).
      */
-    suspend fun sendCoTOverMesh(event: CoTEvent, channelIndex: UInt = 0u): Boolean {
+    override suspend fun sendCoTOverMesh(event: CoTEvent, channelIndex: UInt): Boolean {
         // Phase 2: Emit standard TAKPacket (atak.proto) for interop with stock
         // Meshtastic ATAK Plugin, Meshtastic phone-app TAK role, and the
         // TAK_Meshtastic_Gateway. The MeshPacket wrapper still uses

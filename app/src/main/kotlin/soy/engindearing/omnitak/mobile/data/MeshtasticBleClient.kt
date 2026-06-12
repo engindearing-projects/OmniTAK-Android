@@ -223,6 +223,27 @@ class MeshtasticBleClient(context: Context) : BleManager(context) {
         _state.value = ConnectionState.Disconnected
     }
 
+    /**
+     * [MeshTransport] view over this client.
+     *
+     * Exposed as an adapter rather than `MeshtasticBleClient : MeshTransport`
+     * because Nordic's [BleManager.disconnect] is `public final` and returns
+     * a `DisconnectRequest` — a same-name `disconnect(): Unit` from the
+     * interface would be an irreconcilable accidental-override clash. The
+     * adapter delegates [MeshTransport.send] to [sendToRadio] (byte-identical
+     * Meshtastic behavior) and [MeshTransport.disconnect] to a fire-and-forget
+     * [disconnectClean] on this client's own IO scope — the same teardown the
+     * manager already drives.
+     */
+    val asTransport: MeshTransport = object : MeshTransport {
+        override val state: StateFlow<ConnectionState> get() = this@MeshtasticBleClient.state
+        override val frames: SharedFlow<ByteArray> get() = this@MeshtasticBleClient.frames
+        override suspend fun send(payload: ByteArray): Boolean = sendToRadio(payload)
+        override fun disconnect() {
+            scope.launch { disconnectClean() }
+        }
+    }
+
     // endregion
 
     // region TX ---------------------------------------------------------

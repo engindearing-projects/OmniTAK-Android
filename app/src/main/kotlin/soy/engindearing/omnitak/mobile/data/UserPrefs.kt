@@ -17,6 +17,10 @@ enum class DistanceUnit { METRIC, IMPERIAL }
 enum class CoordFormat { LATLON_DECIMAL, LATLON_DMS, MGRS, UTM, TWD97 }
 enum class MapProvider { OSM_RASTER, SATELLITE_HINT, TOPO_HINT, WMTS_CUSTOM }
 
+/** Mesh framework the operator's radio speaks. Drives which manager the
+ *  mesh screen + CoT bridge + broadcaster route through. */
+enum class MeshFramework { MESHTASTIC, MESHCORE }
+
 /**
  * Operator preferences — callsign, units, coord format, tile choice.
  * All string-backed in DataStore so the schema stays trivial; enum
@@ -99,6 +103,11 @@ data class UserPrefs(
     /** How often (seconds) PPLI is sent over the mesh. Coerced to 30..60
      *  so LoRa bandwidth is respected. */
     val meshBroadcastIntervalSecs: Int = 30,
+    /** Which mesh framework the connected radio speaks. Defaults to
+     *  Meshtastic for backwards compatibility — every existing install
+     *  runs Meshtastic. Selecting MeshCore switches the mesh screen, CoT
+     *  bridge, and broadcaster onto the MeshCore companion BLE path. */
+    val selectedMeshFramework: MeshFramework = MeshFramework.MESHTASTIC,
     /** 3D terrain map mode — tilts the camera and renders DEM relief
      *  (AWS Terrarium tiles). Parity with the iOS Cesium 3D globe
      *  toggle. Default off — 2D top-down is the tactical default. */
@@ -151,6 +160,7 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_GYB_LAST_DEVICE = stringPreferencesKey("gyb_last_device_address")
     private val KEY_BROADCAST_OVER_MESH = booleanPreferencesKey("broadcast_over_mesh")
     private val KEY_MESH_BROADCAST_INTERVAL = intPreferencesKey("mesh_broadcast_interval_secs")
+    private val KEY_MESH_FRAMEWORK = stringPreferencesKey("selected_mesh_framework")
     private val KEY_MAP_3D = booleanPreferencesKey("map_3d_enabled")
     private val KEY_CESIUM_GLOBE = booleanPreferencesKey("cesium_globe_enabled")
     private val KEY_TOOLBAR_ITEMS = stringPreferencesKey("toolbar_item_ids")
@@ -190,6 +200,7 @@ class UserPrefsStore(private val context: Context) {
             p[KEY_GYB_LAST_DEVICE] = next.gybLastDeviceAddress
             p[KEY_BROADCAST_OVER_MESH] = next.broadcastOverMesh
             p[KEY_MESH_BROADCAST_INTERVAL] = next.meshBroadcastIntervalSecs.coerceIn(30, 60)
+            p[KEY_MESH_FRAMEWORK] = next.selectedMeshFramework.name
             p[KEY_MAP_3D] = next.map3dEnabled
             p[KEY_CESIUM_GLOBE] = next.cesiumGlobeEnabled
             p[KEY_TOOLBAR_ITEMS] = next.toolbarItemIds.joinToString(",")
@@ -254,6 +265,11 @@ class UserPrefsStore(private val context: Context) {
         update { it.copy(meshBroadcastIntervalSecs = value.coerceIn(30, 60)) }
     }
 
+    /** Persist the operator's chosen mesh framework (Meshtastic | MeshCore). */
+    suspend fun setSelectedMeshFramework(value: MeshFramework) {
+        update { it.copy(selectedMeshFramework = value) }
+    }
+
     /**
      * Read the stable EUD UID, generating + persisting one on first
      * call. Every wire CoT event tied to this device — PPLI, GeoChat,
@@ -301,6 +317,9 @@ class UserPrefsStore(private val context: Context) {
         gybLastDeviceAddress = p[KEY_GYB_LAST_DEVICE] ?: "",
         broadcastOverMesh = p[KEY_BROADCAST_OVER_MESH] ?: true,
         meshBroadcastIntervalSecs = p[KEY_MESH_BROADCAST_INTERVAL]?.coerceIn(30, 60) ?: 30,
+        selectedMeshFramework = p[KEY_MESH_FRAMEWORK]
+            ?.let { runCatching { MeshFramework.valueOf(it) }.getOrNull() }
+            ?: MeshFramework.MESHTASTIC,
         map3dEnabled = p[KEY_MAP_3D] ?: false,
         cesiumGlobeEnabled = p[KEY_CESIUM_GLOBE] ?: false,
         toolbarItemIds = p[KEY_TOOLBAR_ITEMS]?.split(",")?.filter { it.isNotBlank() } ?: emptyList(),
