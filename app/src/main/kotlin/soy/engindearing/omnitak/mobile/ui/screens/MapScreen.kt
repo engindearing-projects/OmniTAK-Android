@@ -217,9 +217,6 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     val rasterImagery by app.rasterOverlayStore.overlays.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    // Radial "Copy Coords" — Compose clipboard handle, resolved here
-    // because LocalClipboardManager is composition-local.
-    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
 
     // Issue #16 — Lasso freehand multi-select.
     // The MapLibreMap reference is captured via TacticalMap.onMapReady
@@ -1375,8 +1372,15 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     "copy" -> if (ll != null) {
                         val coord = soy.engindearing.omnitak.mobile.data.CoordFormatter
                             .position(ll.latitude, ll.longitude, userPrefs.coordFormat)
-                        clipboard.setText(androidx.compose.ui.text.AnnotatedString(coord))
-                        toast(Loc.t("map.toast.copied", coord))
+                        // Issue #92 — verified platform write; the toast
+                        // only claims "Copied" when the clip read back
+                        // intact, so an OEM-side silent drop reports
+                        // failure instead of lying to the operator.
+                        if (soy.engindearing.omnitak.mobile.data.CoordClipboard.copy(appContext, coord)) {
+                            toast(Loc.t("map.toast.copied", coord))
+                        } else {
+                            toast(Loc.t("map.toast.copyFailed"))
+                        }
                     }
                     "center" -> if (ll != null) {
                         panTarget = ll
