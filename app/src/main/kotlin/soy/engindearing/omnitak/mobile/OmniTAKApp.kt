@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.data.AdminResponse
 import soy.engindearing.omnitak.mobile.data.CertVault
+import soy.engindearing.omnitak.mobile.data.ConfigProfileStore
 import soy.engindearing.omnitak.mobile.data.LocationProvider
 import soy.engindearing.omnitak.mobile.data.MeshDeviceConfigStore
 import soy.engindearing.omnitak.mobile.data.SelfFixPersistence
@@ -440,6 +441,15 @@ class OmniTAKApp : Application() {
     }
     val meshDeviceConfigStore: MeshDeviceConfigStore by lazy { MeshDeviceConfigStore(this) }
     val userPrefsStore: UserPrefsStore by lazy { UserPrefsStore(this) }
+
+    /** Profile store — manages named config snapshots + QR sync. */
+    val configProfileStore: ConfigProfileStore by lazy {
+        ConfigProfileStore(
+            context = this,
+            userPrefsStore = userPrefsStore,
+            serverStore = TAKServerStore(this),
+        )
+    }
     val kmlOverlayStore: soy.engindearing.omnitak.mobile.data.KmlVectorOverlayStore by lazy {
         soy.engindearing.omnitak.mobile.data.KmlVectorOverlayStore(this)
     }
