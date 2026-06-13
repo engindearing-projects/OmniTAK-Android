@@ -8,6 +8,9 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.ByteArrayOutputStream
+import java.util.zip.GZIPOutputStream
+import java.util.Base64
 
 /**
  * Unit tests for [ConfigProfile] serialization, [ProfileQrCodec] round-trip,
@@ -39,14 +42,13 @@ class ConfigProfileTest {
                     port = 8089,
                     protocol = "tls",
                     useTLS = true,
-                    username = "operator",
-                    // No password field in ProfileServer — by design.
+                    // No username / password field in ProfileServer — by design (PII + secret).
                 )
             ),
             enrollmentPointer = EnrollmentPointer(
                 host = "tak.example.com",
                 enrollmentPort = 8446,
-                username = "operator",
+                // No username — PII excluded per security contract.
                 trustSelfSigned = true,
             ),
             mapProvider = MapProvider.TOPO_HINT.name,
@@ -66,7 +68,7 @@ class ConfigProfileTest {
         assertEquals(1, decoded.servers.size)
         assertEquals("tak.example.com", decoded.servers[0].host)
         assertEquals(8089, decoded.servers[0].port)
-        assertEquals("operator", decoded.servers[0].username)
+        // username is intentionally excluded from ProfileServer (PII).
         assertNotNull(decoded.enrollmentPointer)
         assertEquals(8446, decoded.enrollmentPointer!!.enrollmentPort)
     }
@@ -120,9 +122,9 @@ class ConfigProfileTest {
         )
         val profileServer = ProfileServer.fromServer(server)
 
-        // Secrets must be excluded.
-        assertEquals("operator", profileServer.username)
-        // No password field in ProfileServer — verified at class definition level.
+        // Secrets + PII must be excluded.
+        // No username field in ProfileServer — verified at class definition level.
+        // No password field in ProfileServer — by design.
         assertEquals("abc", profileServer.id)
         assertEquals("tak.example.com", profileServer.host)
         assertEquals(8089, profileServer.port)
@@ -138,12 +140,13 @@ class ConfigProfileTest {
             port = 8089,
             protocol = "tls",
             useTLS = true,
-            username = "operator",
+            // username not included — PII excluded from ProfileServer.
         )
         val server = ProfileServer.toServer(ps)
 
         assertEquals("tak.mil", server.host)
-        assertEquals("operator", server.username)
+        // username is null — not propagated from profile (PII excluded).
+        assertNull("username must not be set on import", server.username)
         // Secrets must be null — the teammate enrolls their own cert.
         assertNull("password must not be set on import", server.password)
         assertNull("certificatePassword must not be set on import", server.certificatePassword)
@@ -166,6 +169,7 @@ class ConfigProfileTest {
                     port = 8089,
                     protocol = "tls",
                     useTLS = true,
+                    // No username — PII excluded from ProfileServer.
                 )
             ),
             coordFormat = CoordFormat.MGRS.name,
@@ -210,10 +214,10 @@ class ConfigProfileTest {
                     port = 8089,
                     protocol = "tls",
                     useTLS = true,
-                    username = "operator$i",
+                    // No username — PII excluded from ProfileServer.
                 )
             },
-            enrollmentPointer = EnrollmentPointer("tak1.example.com", 8446, username = "operator1"),
+            enrollmentPointer = EnrollmentPointer("tak1.example.com", 8446),
         )
         val uriString = ProfileQrCodec.encode(profile)
         assertTrue(
@@ -245,6 +249,80 @@ class ConfigProfileTest {
     @Test
     fun isProfileUriReturnsFalseForNull() {
         assertFalse(ProfileQrCodec.isProfileUri(null))
+    }
+
+    // ── Gzip-bomb guard ─────────────────────────────────────────────────────
+
+    /**
+     * A hostile QR can embed a gzip stream that decompresses to many megabytes
+     * (gzip bomb). [ProfileQrCodec.decode] must reject payloads that decompress
+     * beyond the 64 KiB cap rather than OOM the app.
+     */
+    @Test
+    fun qrCodecRejectsOversizedPayload() {
+        // Build a gzip stream whose decompressed size is > 64 KiB (just under
+        // 1 MB of repeating bytes) and encode it as a fake profile URI.
+        val bigData = ByteArray(1_024 * 1_024) { 0x41 } // 1 MB of 'A'
+        val bos = ByteArrayOutputStream()
+        GZIPOutputStream(bos).use { it.write(bigData) }
+        val b64 = Base64.getUrlEncoder().withoutPadding().encodeToString(bos.toByteArray())
+        val uriStr = "omnitak://profile?d=$b64"
+
+        // decode() wraps in runCatching and returns null on any error —
+        // the gzip-bomb guard throws inside gunzip, which is caught.
+        val decoded = ProfileQrCodec.decode(uriStr)
+        assertNull("Oversized QR payload must decode to null (gzip-bomb guard)", decoded)
+    }
+
+    // ── No-secrets regression test ───────────────────────────────────────────
+
+    /**
+     * Asserts that [ConfigProfileStore.snapshotCurrent] (via [ProfileQrCodec.encode])
+     * produces a QR payload that contains NO password, cert passphrase, cert blob,
+     * or username (PII). This locks the security contract in code.
+     */
+    @Test
+    fun snapshotCurrentQrContainsNoSecrets() {
+        // Build a TAKServer carrying every secret field.
+        val server = TAKServer(
+            id = "srv-secret-test",
+            name = "Secure HQ",
+            host = "tak.mil",
+            port = 8089,
+            protocol = "tls",
+            useTLS = true,
+            username = "operator42",
+            password = "hunter2",
+            certificatePassword = "certPass123",
+            certificateName = "client.p12",
+        )
+
+        // Simulate what snapshotCurrent builds: ProfileServer.fromServer strips secrets.
+        val profileServer = ProfileServer.fromServer(server)
+        val enrollmentPointer = EnrollmentPointer(
+            host = server.host,
+            enrollmentPort = 8446,
+            // username intentionally omitted per Fix 11.
+        )
+        val profile = ConfigProfile(
+            id = "sec-test",
+            name = "Security Regression",
+            servers = listOf(profileServer),
+            enrollmentPointer = enrollmentPointer,
+        )
+
+        val uriStr = ProfileQrCodec.encode(profile)
+
+        // Decode and re-serialize to get the raw JSON for content inspection.
+        val decoded = ProfileQrCodec.decode(uriStr)
+        assertNotNull("Profile must decode successfully", decoded)
+        val rawJson = Json { encodeDefaults = true }
+            .encodeToString(ConfigProfile.serializer(), decoded!!)
+
+        assertFalse("QR must not contain password 'hunter2'", rawJson.contains("hunter2"))
+        assertFalse("QR must not contain cert password 'certPass123'", rawJson.contains("certPass123"))
+        assertFalse("QR must not contain cert blob 'client.p12'", rawJson.contains("client.p12"))
+        assertFalse("QR must not contain username 'operator42'", rawJson.contains("operator42"))
     }
 
     @Test

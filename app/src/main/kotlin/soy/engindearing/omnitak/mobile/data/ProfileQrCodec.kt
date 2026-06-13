@@ -100,7 +100,31 @@ object ProfileQrCodec {
         return bos.toByteArray()
     }
 
+    /**
+     * Decompress gzip data with a hard cap of [MAX_GUNZIP_BYTES] (64 KiB).
+     * Throws [IllegalArgumentException] if the decompressed stream exceeds
+     * the limit — prevents a hostile QR from OOM-ing the app via a gzip bomb.
+     */
     private fun gunzip(data: ByteArray): ByteArray {
-        GZIPInputStream(ByteArrayInputStream(data)).use { return it.readBytes() }
+        GZIPInputStream(ByteArrayInputStream(data)).use { gz ->
+            val out = ByteArrayOutputStream()
+            val buf = ByteArray(4096)
+            var total = 0
+            while (true) {
+                val n = gz.read(buf)
+                if (n < 0) break
+                total += n
+                if (total > MAX_GUNZIP_BYTES) {
+                    throw IllegalArgumentException(
+                        "Profile QR payload exceeds ${MAX_GUNZIP_BYTES / 1024} KiB limit — likely a gzip bomb"
+                    )
+                }
+                out.write(buf, 0, n)
+            }
+            return out.toByteArray()
+        }
     }
+
+    /** Maximum decompressed payload size accepted from a QR code (64 KiB). */
+    private const val MAX_GUNZIP_BYTES = 65_536
 }
