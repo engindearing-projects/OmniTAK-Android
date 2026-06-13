@@ -572,6 +572,7 @@ private fun MeshCorePane(
                 meshCore.stopMeshScan()
                 coScope.launch { meshCore.connectBle(addr) }
             },
+            deviceNoun = "MeshCore radios",
         )
 
         if (connected) {
