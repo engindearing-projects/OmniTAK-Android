@@ -68,11 +68,13 @@ object DeepLinkImport {
      */
     fun parseProfileConfig(uri: Uri): ConfigProfile? = ProfileQrCodec.decode(uri)
 
-    /** Accept any URI we recognise as a server-onboarding payload. */
+    /** Accept any URI we recognise as a server-onboarding payload.
+     *  Restricted to `atak://` and `omnitak://` schemes only — HTTP/HTTPS
+     *  links from arbitrary sources could be used for drive-by server injection. */
     fun isServerConfig(uri: Uri?): Boolean {
         if (uri == null) return false
         val scheme = uri.scheme?.lowercase() ?: return false
-        if (scheme !in setOf("atak", "omnitak", "http", "https")) return false
+        if (scheme !in setOf("atak", "omnitak")) return false
         return !uri.getQueryParameter("host").isNullOrBlank()
     }
 
