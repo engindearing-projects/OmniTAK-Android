@@ -53,6 +53,7 @@ object MeshCoreFrameCodec {
     const val RESP_CHANNEL_MSG: Byte = 0x08
     const val RESP_CONTACT_MSG_V3: Byte = 0x10
     const val RESP_CHANNEL_MSG_V3: Byte = 0x11
+    const val RESP_DEVICE_INFO: Byte = 0x0D
     const val RESP_BATTERY: Byte = 0x0C
     const val RESP_CODE_STATS: Byte = 0x18
     const val RESP_NO_MORE_MSGS: Byte = 0x0A
@@ -184,6 +185,18 @@ object MeshCoreFrameCodec {
         /** No more queued messages. */
         data object NoMoreMessages : Decoded
 
+        /**
+         * RESP_DEVICE_INFO (0x0D) — build/firmware metadata from the companion
+         * radio. Parsed from [MeshCoreFrameCodec.parseDeviceInfo].
+         */
+        data class DeviceInfo(
+            val fwCode: Int,
+            val maxContacts: Int,
+            val maxChannels: Int,
+            val manufacturer: String,
+            val version: String,
+        ) : Decoded
+
         /** A frame we recognise the code of but don't model in v1. */
         data class Unhandled(val code: Int) : Decoded
     }
@@ -198,6 +211,7 @@ object MeshCoreFrameCodec {
             PUSH_MESSAGES_WAITING -> Decoded.MessagesWaiting
             RESP_NO_MORE_MSGS -> Decoded.NoMoreMessages
             RESP_SELF_INFO -> parseSelfInfo(pkt) ?: Decoded.Unhandled(code.toInt() and 0xFF)
+            RESP_DEVICE_INFO -> parseDeviceInfo(pkt) ?: Decoded.Unhandled(code.toInt() and 0xFF)
             RESP_BATTERY -> parseBattery(pkt)
             RESP_CODE_STATS -> parseStatsBattery(pkt)
             PUSH_CODE_NEW_ADVERT, PUSH_CODE_ADVERT, RESP_CODE_CONTACT ->
@@ -280,6 +294,40 @@ object MeshCoreFrameCodec {
         }.getOrNull()
     }
 
+    /**
+     * RESP_DEVICE_INFO (0x0D) — firmware/build metadata.
+     * Layout (≥4 bytes, full form ≥77 bytes):
+     *  [0]=0x0D [1]=fwCode [2]=maxContacts/2 [3]=maxChannels
+     *  [20..59]=manufacturer (c-string, 40 bytes) [60..79]=version (c-string, 20 bytes)
+     * Matches the reference `logDeviceInfo` in BtConnectionManager.java.
+     */
+    private fun parseDeviceInfo(pkt: ByteArray): Decoded.DeviceInfo? {
+        if (pkt.size < 4) return null
+        return runCatching {
+            val fwCode = pkt[1].toInt() and 0xFF
+            val maxContactsHalf = pkt[2].toInt() and 0xFF
+            val maxChannels = pkt[3].toInt() and 0xFF
+            val manufacturer = if (pkt.size >= 77) decodeCString(pkt, 20, 40) else ""
+            val version = if (pkt.size >= 77) decodeCString(pkt, 60, 20) else ""
+            Decoded.DeviceInfo(
+                fwCode = fwCode,
+                maxContacts = maxContactsHalf * 2,
+                maxChannels = maxChannels,
+                manufacturer = manufacturer,
+                version = version,
+            )
+        }.getOrNull()
+    }
+
+    /** Decode a null-terminated C-string from [src] at [off] for up to [maxLen] bytes. */
+    private fun decodeCString(src: ByteArray, off: Int, maxLen: Int): String {
+        if (off < 0 || maxLen <= 0 || src.size <= off) return ""
+        val end = minOf(src.size, off + maxLen)
+        var n = off
+        while (n < end && src[n] != 0.toByte()) n++
+        return String(src, off, n - off, StandardCharsets.UTF_8).trim()
+    }
+
     /** RESP_BATTERY: `[0x0C][mv lo][mv hi]`. */
     private fun parseBattery(pkt: ByteArray): Decoded? {
         if (pkt.size < 3) return Decoded.Unhandled(RESP_BATTERY.toInt() and 0xFF)
@@ -340,19 +388,23 @@ object MeshCoreFrameCodec {
 
     /**
      * MeshCore identifies a node by its 32-byte public key. We collapse that
-     * to a 32-bit id (the first 4 bytes, big-endian) so it slots into the
-     * framework-neutral [MeshNode.id]/[CoTEvent] machinery. Two distinct
-     * pubkeys colliding in 4 bytes is astronomically unlikely on a tactical
-     * mesh, and the full pubkey hex is still kept in the contact name/remarks.
+     * to a 48-bit id (the first **6** bytes, big-endian) so it slots into the
+     * framework-neutral [MeshNode.id]/[CoTEvent] machinery while matching the
+     * 6-byte prefix the firmware uses to key contacts. A [Long] holds 48 bits
+     * without overflow. The full pubkey hex is kept in the contact name/remarks.
+     *
+     * CoT UID format: `MESHCORE-<12 uppercase hex>` (6 bytes = 12 hex chars).
      */
     fun nodeIdFromPubKey(pubKeyHex: String): Long {
         val hex = pubKeyHex.trim()
-        if (hex.length < 8) return 0L
+        if (hex.length < 12) return 0L
         return runCatching {
-            ((hex.substring(0, 2).toLong(16) shl 24) or
-                (hex.substring(2, 4).toLong(16) shl 16) or
-                (hex.substring(4, 6).toLong(16) shl 8) or
-                hex.substring(6, 8).toLong(16)) and 0xFFFFFFFFL
+            ((hex.substring(0, 2).toLong(16) shl 40) or
+                (hex.substring(2, 4).toLong(16) shl 32) or
+                (hex.substring(4, 6).toLong(16) shl 24) or
+                (hex.substring(6, 8).toLong(16) shl 16) or
+                (hex.substring(8, 10).toLong(16) shl 8) or
+                hex.substring(10, 12).toLong(16))
         }.getOrDefault(0L)
     }
 

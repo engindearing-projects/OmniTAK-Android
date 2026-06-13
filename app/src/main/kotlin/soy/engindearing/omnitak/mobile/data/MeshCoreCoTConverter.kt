@@ -58,8 +58,8 @@ object MeshCoreCoTConverter {
         )
     }
 
-    /** TAK UID for a MeshCore contact — `MESHCORE-<idHex8 upper>`. */
-    fun takUid(nodeId: Long): String = "MESHCORE-${"%08X".format(nodeId.toInt())}"
+    /** TAK UID for a MeshCore contact — `MESHCORE-<12 uppercase hex>` (6-byte prefix). */
+    fun takUid(nodeId: Long): String = "MESHCORE-${"%012X".format(nodeId)}"
 
     private fun buildRemarks(node: MeshNode): String {
         val sb = StringBuilder("MeshCore Node | ID: !${node.idHex}")
@@ -80,7 +80,7 @@ object MeshCoreCoTConverter {
         remarks: String,
     ): String {
         val hae = (position.altitudeM ?: 0).toDouble()
-        val nodeIdUpper = "%08X".format(node.id.toInt())
+        val nodeIdUpper = "%012X".format(node.id)
         val shortEsc = escape(node.shortName)
         val longEsc = escape(callsign)
         val lastHeardIso = CotXml.isoMillis(node.lastHeardEpoch * 1_000L)

@@ -135,6 +135,48 @@ class MeshCoreFrameCodecTest {
         assertEquals(100, MeshCoreFrameCodec.batteryMvToPercent(4300))
     }
 
+    // ---- DECODE: device info -------------------------------------------
+
+    @Test fun `decode device info 0x0D minimal frame`() {
+        // [0]=0x0D [1]=fwCode [2]=maxContactsHalf [3]=maxChannels
+        val pkt = byteArrayOf(0x0D, 0x02, 0x20, 0x04) // fwCode=2, contacts=64, channels=4
+        val d = MeshCoreFrameCodec.decode(pkt)
+        assertTrue("Expected DeviceInfo, got: $d", d is MeshCoreFrameCodec.Decoded.DeviceInfo)
+        d as MeshCoreFrameCodec.Decoded.DeviceInfo
+        assertEquals(2, d.fwCode)
+        assertEquals(64, d.maxContacts)
+        assertEquals(4, d.maxChannels)
+        assertEquals("", d.manufacturer) // short frame — no manufacturer
+        assertEquals("", d.version)
+    }
+
+    @Test fun `decode device info 0x0D full frame parses manufacturer and version`() {
+        // Full layout: [0]=code [1]=fwCode [2]=maxContactsHalf [3]=maxChannels
+        // [20..59]=manufacturer(40B) [60..79]=version(20B) => need at least 80 bytes
+        val pkt = ByteArray(80)
+        pkt[0] = 0x0D
+        pkt[1] = 0x03 // fwCode
+        pkt[2] = 0x10 // maxContacts/2 = 16 → 32 contacts
+        pkt[3] = 0x08 // maxChannels
+        val mfg = "TestMaker".toByteArray(StandardCharsets.UTF_8)
+        val ver = "1.16.0".toByteArray(StandardCharsets.UTF_8)
+        System.arraycopy(mfg, 0, pkt, 20, mfg.size)
+        System.arraycopy(ver, 0, pkt, 60, ver.size)
+        val d = MeshCoreFrameCodec.decode(pkt)
+        assertTrue(d is MeshCoreFrameCodec.Decoded.DeviceInfo)
+        d as MeshCoreFrameCodec.Decoded.DeviceInfo
+        assertEquals(3, d.fwCode)
+        assertEquals(32, d.maxContacts)
+        assertEquals(8, d.maxChannels)
+        assertEquals("TestMaker", d.manufacturer)
+        assertEquals("1.16.0", d.version)
+    }
+
+    @Test fun `decode device info 0x0D too short returns unhandled`() {
+        val d = MeshCoreFrameCodec.decode(byteArrayOf(0x0D, 0x01))
+        assertTrue("Expected Unhandled, got: $d", d is MeshCoreFrameCodec.Decoded.Unhandled)
+    }
+
     // ---- DECODE: contact/advert ----------------------------------------
 
     /**
@@ -181,8 +223,8 @@ class MeshCoreFrameCodecTest {
         d as MeshCoreFrameCodec.Decoded.Contact
         assertEquals(false, d.isRepeater)
         assertEquals("ALPHA", d.node.longName)
-        // node id = first 4 bytes BE of pubkey: 01 02 03 04
-        assertEquals(0x01020304L, d.node.id)
+        // node id = first 6 bytes BE of pubkey: 01 02 03 04 05 06
+        assertEquals(0x010203040506L, d.node.id)
         val pos = d.node.position
         assertNotNull("advert with non-zero lat/lon must produce a position", pos)
         assertEquals(47.6588, pos!!.lat, 1e-6)
@@ -293,9 +335,12 @@ class MeshCoreFrameCodecTest {
 
     // ---- pubkey helpers -------------------------------------------------
 
-    @Test fun `nodeId from pubkey is first 4 bytes big-endian`() {
-        assertEquals(0xDEADBEEFL, MeshCoreFrameCodec.nodeIdFromPubKey("deadbeef0011"))
+    @Test fun `nodeId from pubkey is first 6 bytes big-endian`() {
+        // deadbeef0011 = 6 bytes → 0xDEADBEEF0011L
+        assertEquals(0xDEADBEEF0011L, MeshCoreFrameCodec.nodeIdFromPubKey("deadbeef0011"))
+        // Short pubkey returns 0
         assertEquals(0L, MeshCoreFrameCodec.nodeIdFromPubKey("aa")) // too short
+        assertEquals(0L, MeshCoreFrameCodec.nodeIdFromPubKey("deadbeef")) // 4 bytes = still short
     }
 
     @Test fun `pubkey prefix bytes`() {

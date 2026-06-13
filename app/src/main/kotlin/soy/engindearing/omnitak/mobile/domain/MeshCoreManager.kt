@@ -2,6 +2,7 @@ package soy.engindearing.omnitak.mobile.domain
 
 import android.content.Context
 import android.util.Log
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -52,8 +53,9 @@ class MeshCoreManager(private val context: Context? = null) : MeshFrameworkManag
     override val nodes: StateFlow<Map<Long, MeshNode>> = _nodes.asStateFlow()
 
     /** nodeId → full pubkey hex, so outbound DMs can recover the 32-byte key
-     *  the firmware matches on (we collapse ids to 4 bytes for the node map). */
-    private val pubKeyByNodeId = HashMap<Long, String>()
+     *  the firmware matches on (we collapse ids to 6 bytes for the node map).
+     *  ConcurrentHashMap: written from the BLE/frame thread, read from coroutine senders. */
+    private val pubKeyByNodeId = ConcurrentHashMap<Long, String>()
 
     private var client: MeshCoreUartClient? = null
     private var frameCollector: Job? = null
@@ -200,6 +202,9 @@ class MeshCoreManager(private val context: Context? = null) : MeshFrameworkManag
                 routeInboundChannelText(d.channelIndex, d.text)
                 client?.let { c -> scope.launch { c.send(MeshCoreFrameCodec.buildGetNextMessage()) } }
             }
+            is MeshCoreFrameCodec.Decoded.DeviceInfo ->
+                Log.i(TAG, "MeshCore device-info fwCode=${d.fwCode} maxContacts=${d.maxContacts}" +
+                    " maxChannels=${d.maxChannels} mfg='${d.manufacturer}' ver='${d.version}'")
             is MeshCoreFrameCodec.Decoded.Unhandled ->
                 Log.v(TAG, "MeshCore unhandled frame code=0x${Integer.toHexString(d.code)} (${frame.size}B)")
             null -> Log.v(TAG, "MeshCore empty/undecodable frame (${frame.size}B)")
@@ -232,6 +237,11 @@ class MeshCoreManager(private val context: Context? = null) : MeshFrameworkManag
     private fun routeInboundText(senderPrefixHex: String, text: String) {
         if (text.isBlank()) return
         val nodeId = MeshCoreFrameCodec.nodeIdFromPubKey(senderPrefixHex)
+        // Record the 6-byte prefix as a pubkey stand-in so outbound DM replies
+        // can resolve the target even if the sender has never sent an advert.
+        if (nodeId != 0L && senderPrefixHex.length >= 12) {
+            pubKeyByNodeId.putIfAbsent(nodeId, senderPrefixHex)
+        }
         val node = _nodes.value[nodeId]
         val callsign = node?.longName?.takeIf { it.isNotBlank() }
             ?: node?.shortName?.takeIf { it.isNotBlank() }
@@ -239,7 +249,7 @@ class MeshCoreManager(private val context: Context? = null) : MeshFrameworkManag
         val now = System.currentTimeMillis()
         val msg = ChatMessage(
             conversationId = meshCoreDmConversationId(nodeId),
-            senderUid = "MESHCORE-${"%08X".format(nodeId.toInt())}",
+            senderUid = "MESHCORE-${"%012X".format(nodeId)}",
             senderCallsign = callsign,
             text = text,
             timeIso = CotXml.isoSeconds(now),
@@ -269,7 +279,7 @@ class MeshCoreManager(private val context: Context? = null) : MeshFrameworkManag
     }
 
     fun meshCoreDmConversationId(nodeId: Long): String =
-        "MESHCORE-DM-${"%08X".format(nodeId.toInt())}"
+        "MESHCORE-DM-${"%012X".format(nodeId)}"
 
     fun meshCoreChannelConversationId(channelIndex: Int): String =
         "MESHCORE-CH$channelIndex"
