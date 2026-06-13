@@ -550,18 +550,29 @@ private suspend fun sendChatInner(
 ) {
     val senderUid = app.userPrefsStore.ensureSelfUid()
 
-    // GAP-122 / GAP-124 — Mesh conversations route through
-    // MeshtasticManager (portnum 1) instead of the TAK server's CoT
-    // GeoChat path. Channel chat → broadcast on a channel index;
-    // DM → directed packet to the peer's nodenum (parsed back from the
-    // 8-hex-char suffix on the convo id).
-    if (convo.id.startsWith("MESH-CH") || convo.id.startsWith("MESH-DM-")) {
-        val channelIndex = if (convo.id.startsWith("MESH-CH")) {
-            convo.id.removePrefix("MESH-CH").toIntOrNull() ?: 0
-        } else 0
-        val toNodeId: UInt? = if (convo.id.startsWith("MESH-DM-")) {
-            convo.id.removePrefix("MESH-DM-").toLongOrNull(16)?.toUInt()
-        } else null
+    // GAP-122 / GAP-124 — Mesh conversations route through the active mesh
+    // framework manager (Meshtastic portnum 1 or MeshCore native DM) instead
+    // of the TAK server's CoT GeoChat path.
+    // MESH-CH*/MESH-DM-* → Meshtastic (portnum 1).
+    // MESHCORE-CH*/MESHCORE-DM-* → MeshCore (native pubkey-to-pubkey DM).
+    if (convo.id.startsWith("MESH-CH") || convo.id.startsWith("MESH-DM-") ||
+        convo.id.startsWith("MESHCORE-CH") || convo.id.startsWith("MESHCORE-DM-")
+    ) {
+        val isMeshCore = convo.id.startsWith("MESHCORE-")
+        val channelIndex = when {
+            convo.id.startsWith("MESH-CH") -> convo.id.removePrefix("MESH-CH").toIntOrNull() ?: 0
+            convo.id.startsWith("MESHCORE-CH") -> convo.id.removePrefix("MESHCORE-CH").toIntOrNull() ?: 0
+            else -> 0
+        }
+        // toNodeId: for DM conversations the nodeId is the hex suffix.
+        // Meshtastic uses 32-bit ids (8 hex); MeshCore uses 48-bit (12 hex).
+        val toNodeId: UInt? = when {
+            convo.id.startsWith("MESH-DM-") ->
+                convo.id.removePrefix("MESH-DM-").toLongOrNull(16)?.toUInt()
+            convo.id.startsWith("MESHCORE-DM-") ->
+                convo.id.removePrefix("MESHCORE-DM-").toLongOrNull(16)?.and(0xFFFFFFFFL)?.toUInt()
+            else -> null
+        }
         val msgId = UUID.randomUUID().toString()
         val outgoing = ChatMessage(
             id = msgId,
@@ -574,7 +585,9 @@ private suspend fun sendChatInner(
             isFromSelf = true,
         )
         app.chatStore.markOutgoing(outgoing)
-        val sent = app.meshtastic.sendMeshChat(text, channelIndex, toNodeId)
+        // Route through the active framework so a MeshCore-selected operator's
+        // chat goes to MeshCoreManager, not the dead MeshtasticManager.
+        val sent = app.activeMeshManager.sendMeshChat(text, channelIndex, toNodeId)
         app.chatStore.updateMessageStatus(
             conversationId = convo.id,
             messageId = msgId,
@@ -616,8 +629,9 @@ private suspend fun sendChatInner(
 
     // Off-grid mesh GeoChat — portnum-72 b-t-f TAKMessage so operators
     // with radios and NO server can exchange chat. Step 2 of off-grid plan.
-    // Keep the existing MESH-CH*/MESH-DM-* portnum-1 path unchanged (above).
-    val meshState = app.meshtastic.activeConnectionState.value
+    // Keep the existing MESH-CH*/MESH-DM-* / MESHCORE-* path unchanged (above).
+    val activeMesh = app.activeMeshManager
+    val meshState = activeMesh.activeConnectionState.value
     val latestPrefs = app.userPrefsStore.prefs.first()
     var meshSent = false
     if (meshState is soy.engindearing.omnitak.mobile.domain.ConnectionState.Connected &&
@@ -636,7 +650,7 @@ private suspend fun sendChatInner(
         // flagship off-grid case (radio, no server) a successful mesh
         // delivery used to render FAILED because only the server result
         // was consulted. Real mesh errors get logged, not swallowed.
-        meshSent = runCatching { app.meshtastic.sendCoTOverMesh(meshCotEvent) }
+        meshSent = runCatching { activeMesh.sendCoTOverMesh(meshCotEvent) }
             .onFailure { t ->
                 android.util.Log.w(
                     "ChatScreen",
