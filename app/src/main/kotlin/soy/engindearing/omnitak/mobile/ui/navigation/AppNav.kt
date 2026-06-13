@@ -34,6 +34,7 @@ import soy.engindearing.omnitak.mobile.ui.screens.AboutScreen
 import soy.engindearing.omnitak.mobile.ui.screens.AddServerScreen
 import soy.engindearing.omnitak.mobile.ui.screens.ChatScreen
 import soy.engindearing.omnitak.mobile.ui.screens.EnrollServerScreen
+import soy.engindearing.omnitak.mobile.ui.screens.ImportPreviewDialog
 import soy.engindearing.omnitak.mobile.ui.screens.MapScreen
 import soy.engindearing.omnitak.mobile.ui.screens.MeshDeviceSettingsScreen
 import soy.engindearing.omnitak.mobile.ui.screens.MeshTopologyScreen
@@ -356,6 +357,23 @@ fun AppNav() {
     if (showKmlOverlays) {
         soy.engindearing.omnitak.mobile.ui.components.KmlOverlaysSheet(
             onDismiss = { showKmlOverlays = false },
+        )
+    }
+
+    // Deep-link profile import — show the same ImportPreviewDialog the
+    // in-app QR scanner uses, so the user can review before applying.
+    val pendingImport by app.pendingProfileImport.collectAsState()
+    pendingImport?.let { candidate ->
+        ImportPreviewDialog(
+            profile = candidate,
+            onConfirm = {
+                app.pendingProfileImport.value = null
+                scope.launch {
+                    app.configProfileStore.saveProfile(candidate)
+                    app.configProfileStore.apply(candidate)
+                }
+            },
+            onDismiss = { app.pendingProfileImport.value = null },
         )
     }
 }

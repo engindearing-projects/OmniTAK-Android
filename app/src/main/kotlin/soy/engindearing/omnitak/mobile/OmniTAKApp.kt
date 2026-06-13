@@ -442,6 +442,15 @@ class OmniTAKApp : Application() {
     val meshDeviceConfigStore: MeshDeviceConfigStore by lazy { MeshDeviceConfigStore(this) }
     val userPrefsStore: UserPrefsStore by lazy { UserPrefsStore(this) }
 
+    /**
+     * Holds a profile decoded from a deep-link that has not yet been
+     * confirmed by the user. The UI observes this and presents
+     * [ImportPreviewDialog]; on confirm/dismiss it clears this to null.
+     * Using App-level state (not Activity-level) so the pending import
+     * survives an onNewIntent delivered to a resumed Activity.
+     */
+    val pendingProfileImport = MutableStateFlow<soy.engindearing.omnitak.mobile.data.ConfigProfile?>(null)
+
     /** Profile store — manages named config snapshots + QR sync. */
     val configProfileStore: ConfigProfileStore by lazy {
         ConfigProfileStore(

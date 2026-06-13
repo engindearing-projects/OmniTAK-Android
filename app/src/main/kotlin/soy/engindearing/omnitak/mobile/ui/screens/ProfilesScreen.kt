@@ -643,7 +643,7 @@ private fun QrScannerDialog(
 // ── Import preview dialog ─────────────────────────────────────────────────────
 
 @Composable
-private fun ImportPreviewDialog(
+internal fun ImportPreviewDialog(
     profile: ConfigProfile,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,

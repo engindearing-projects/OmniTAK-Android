@@ -23,7 +23,6 @@ import soy.engindearing.omnitak.mobile.data.CSREnrollmentService
 import soy.engindearing.omnitak.mobile.data.ConnectionProtocol
 import soy.engindearing.omnitak.mobile.data.DeepLinkImport
 import soy.engindearing.omnitak.mobile.data.ImportedServerConfig
-import soy.engindearing.omnitak.mobile.data.ProfileQrCodec
 import soy.engindearing.omnitak.mobile.data.TAKServer
 import soy.engindearing.omnitak.mobile.ui.navigation.AppNav
 import soy.engindearing.omnitak.mobile.ui.theme.OmniTAKTheme
@@ -88,6 +87,8 @@ class MainActivity : ComponentActivity() {
 
         // Profile import takes priority — check BEFORE server-config because
         // both share the `omnitak://` scheme (profile = omnitak://profile?d=…).
+        // Route through the same ImportPreviewDialog used by the in-app scanner
+        // so the user can review and confirm before the profile is applied.
         if (DeepLinkImport.isProfileConfig(uri)) {
             val profile = DeepLinkImport.parseProfileConfig(uri)
             if (profile == null) {
@@ -95,16 +96,10 @@ class MainActivity : ComponentActivity() {
                 return
             }
             val app = applicationContext as OmniTAKApp
-            lifecycleScope.launch {
-                app.configProfileStore.saveProfile(profile)
-                app.configProfileStore.apply(profile)
-                Log.i("OmniTAK", "Imported profile '${profile.name}' from $uri")
-                Toast.makeText(
-                    this@MainActivity,
-                    "Profile \"${profile.name}\" imported",
-                    Toast.LENGTH_LONG,
-                ).show()
-            }
+            // Publish to the pending-import flow; AppNav observes it and
+            // shows ImportPreviewDialog — same flow as the in-app QR scanner.
+            app.pendingProfileImport.value = profile
+            Log.i("OmniTAK", "Queued deep-link profile import '${profile.name}' for user review")
             return
         }
 
