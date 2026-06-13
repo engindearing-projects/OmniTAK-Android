@@ -175,6 +175,8 @@ class ConfigProfileStore(
     /**
      * Build an [EnrollmentPointer] from the server list if any server needs
      * CSR enrollment (TLS + username). Picks the first such server.
+     * Username is deliberately excluded — it is PII (often the callsign) and
+     * the enrolling teammate enters their own credentials during the CSR flow.
      */
     private fun buildEnrollmentPointer(servers: List<TAKServer>): EnrollmentPointer? {
         val enrollable = servers.firstOrNull { it.useTLS && !it.username.isNullOrBlank() }
@@ -182,7 +184,7 @@ class ConfigProfileStore(
         return EnrollmentPointer(
             host = enrollable.host,
             enrollmentPort = 8446,
-            username = enrollable.username,
+            // username intentionally omitted — see security contract on [EnrollmentPointer].
         )
     }
 }

@@ -69,6 +69,9 @@ data class ConfigProfile(
  * Cert names are intentionally included (non-secret) so teammates know which
  * cert file they need to enroll; the actual P12 bytes and passphrase stay in
  * the device CertVault.
+ *
+ * Username is intentionally excluded — it is PII (often the callsign) and
+ * the teammate enters their own credentials during the CSR enrollment flow.
  */
 @Serializable
 data class ProfileServer(
@@ -79,11 +82,10 @@ data class ProfileServer(
     val protocol: String,
     val useTLS: Boolean,
     val allowUntrustedTls: Boolean = false,
-    val username: String? = null,
-    // password / certificatePassword / certificateName intentionally excluded.
+    // username / password / certificatePassword / certificateName intentionally excluded.
 ) {
     companion object {
-        /** Strip secrets from a [TAKServer] before adding to a profile. */
+        /** Strip secrets and PII from a [TAKServer] before adding to a profile. */
         fun fromServer(s: TAKServer): ProfileServer = ProfileServer(
             id = s.id,
             name = s.name,
@@ -92,11 +94,14 @@ data class ProfileServer(
             protocol = s.protocol,
             useTLS = s.useTLS,
             allowUntrustedTls = s.allowUntrustedTls,
-            username = s.username,
+            // username intentionally excluded — PII; teammate enters at enrollment.
         )
 
         /** Reconstitute a [TAKServer] from an imported profile server entry.
-         *  Secrets stay null — the operator enrolls their own cert afterward. */
+         *  Secrets stay null — the operator enrolls their own cert afterward.
+         *  [allowUntrustedTls] is intentionally NOT propagated from the profile:
+         *  an imported QR must not silently disable TLS trust on the recipient's
+         *  device. The teammate can override it manually after import if needed. */
         fun toServer(ps: ProfileServer): TAKServer = TAKServer(
             id = ps.id,
             name = ps.name,
@@ -104,19 +109,25 @@ data class ProfileServer(
             port = ps.port,
             protocol = ps.protocol,
             useTLS = ps.useTLS,
-            allowUntrustedTls = ps.allowUntrustedTls,
-            username = ps.username,
+            allowUntrustedTls = false,
+            // username intentionally null — not in profile (PII); teammate provides at enrollment.
         )
     }
 }
 
-/** Where a teammate should hit the CSR enrollment endpoint. */
+/**
+ * Where a teammate should hit the CSR enrollment endpoint.
+ *
+ * Username is intentionally excluded from this pointer — it is PII
+ * (often the callsign) and each teammate enters their own credentials
+ * during the enrollment flow. Only connection parameters are shared.
+ */
 @Serializable
 data class EnrollmentPointer(
     val host: String,
     val enrollmentPort: Int = 8446,
     /** Full enrollment URL if different from the standard TAK pattern. */
     val enrollUrl: String? = null,
-    val username: String? = null,
+    // username intentionally excluded — PII; teammate enters at enrollment.
     val trustSelfSigned: Boolean = true,
 )
