@@ -204,6 +204,7 @@ class ContactSymbolLayer {
             iconsetPath = c.iconsetPath,
             argb = argb,
             sizePx = ICON_PIXEL_SIZE,
+            context = context,
         ) ?: return null
         style.addImage(imageId, bitmap)
         registeredSidcs.add(imageId)

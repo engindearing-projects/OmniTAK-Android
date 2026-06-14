@@ -58,10 +58,10 @@ import soy.engindearing.omnitak.mobile.ui.theme.TacticalSurface
 
 /**
  * Issue #98 — what the icon picker hands back. Either a MIL-STD-2525 symbol
- * (carries only a CoT [type]) or a standard TAK icon-suite icon (Spot Map
- * today; Markers/Google when a clean asset pack lands), which additionally
- * carries the `<usericon iconsetpath>` and optional swatch [argbHex] so the
- * placed marker round-trips byte-for-byte with ATAK / iTAK.
+ * (carries only a CoT [type]) or a standard TAK icon-suite icon — Spot Map,
+ * Markers, or Google — which additionally carries the `<usericon iconsetpath>`
+ * and (Spot Map only) the swatch [argbHex] so the placed marker round-trips
+ * byte-for-byte with ATAK / iTAK.
  */
 data class MarkerIconChoice(
     val cotType: String,
@@ -69,6 +69,12 @@ data class MarkerIconChoice(
     val argbHex: String? = null,
     val label: String,
 )
+
+/** CoT type ridden by Markers / Google placements. Those packs have no
+ *  dedicated type the way Spot Map owns `b-m-p-s-m`; an unknown-ground point is
+ *  the sensible cross-client fallback while the `usericon iconsetpath` carries
+ *  the actual glyph. */
+private const val BADGE_MARKER_COT_TYPE = "a-u-G"
 
 /**
  * Issue #98 (Phase 1) — TAK icon-suite picker.
@@ -83,12 +89,15 @@ data class MarkerIconChoice(
  *  - the full **MIL-STD-2525** catalogue ([MilStdIconService.getAllDefinitions],
  *    108 symbols from `assets/cot_types.json`) — infantry, armor, aircraft, …
  *
+ * plus the **Markers** and **Google** packs (Material-Symbols / Apache-2.0
+ * glyphs on a tinted badge — see [TakIconRegistry]) so received CoT carrying
+ * those iconset paths resolves and the same icons are selectable when placing.
+ *
  * The choice is handed back as a [MarkerIconChoice] and flows into the placed
  * [soy.engindearing.omnitak.mobile.data.CoTEvent], so the symbol renders
  * through the same [ContactSymbolLayer] / Cesium path received markers use —
  * closing the "standard TAK icon sets … selectable when placing markers" half
- * of #98. (Markers / Google bitmap packs are modeled in [TakIconRegistry] but
- * not bundled — GPL asset blocker, see that file.)
+ * of #98. (Per-marker import of arbitrary custom iconsets is Phase 2.)
  *
  * Modal-only (never compresses the full-screen map, per
  * `feedback_omnitak_fullscreen_map`). Mirrors the FEMA palette
@@ -181,6 +190,24 @@ fun MarkerIconPickerSheet(
                 }
             }
 
+            // ── Markers set ───────────────────────────────────────────────
+            // ATAK's general-purpose marker glyphs (flag / warning / vehicle …).
+            BadgeIconRow(
+                title = "MARKERS",
+                icons = TakIconRegistry.selectableMarkerIcons,
+                selectedIconsetPath = selectedIconsetPath,
+                onPick = onPick,
+            )
+
+            // ── Google POI set ────────────────────────────────────────────
+            // ATAK's Google place-marker pack (airport / hospital / gas …).
+            BadgeIconRow(
+                title = "GOOGLE",
+                icons = TakIconRegistry.selectableGoogleIcons,
+                selectedIconsetPath = selectedIconsetPath,
+                onPick = onPick,
+            )
+
             Text(
                 "MIL-STD-2525 · ${all.size} SYMBOLS",
                 color = TacticalAccent,
@@ -237,6 +264,115 @@ fun MarkerIconPickerSheet(
             }
             Spacer(Modifier.height(16.dp))
         }
+    }
+}
+
+/**
+ * A horizontally-scrolling row of bitmap-glyph icons for one badge pack
+ * (Markers / Google). Each tile renders the same badge bitmap the map draws and,
+ * when tapped, emits the pack's canonical `usericon iconsetpath` so the placed
+ * marker round-trips to ATAK / iTAK. These packs carry no per-icon colour, so a
+ * generic unknown-ground CoT type rides along as the receiver's fallback while
+ * the iconset path carries the real glyph.
+ */
+@Composable
+private fun <T> BadgeIconRow(
+    title: String,
+    icons: List<T>,
+    selectedIconsetPath: String?,
+    onPick: (MarkerIconChoice) -> Unit,
+) where T : TakIconRegistry.BadgeIcon {
+    Text(
+        title,
+        color = TacticalAccent,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Bold,
+    )
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(top = 6.dp, bottom = 10.dp),
+    ) {
+        for (icon in icons) {
+            BadgeSwatch(
+                icon = icon,
+                selected = selectedIconsetPath?.equals(icon.iconsetPath, ignoreCase = true) == true,
+                onClick = {
+                    onPick(
+                        MarkerIconChoice(
+                            // No dedicated CoT type for these packs; an
+                            // unknown-ground point is the cross-client fallback.
+                            cotType = BADGE_MARKER_COT_TYPE,
+                            iconsetPath = icon.iconsetPath,
+                            argbHex = null,
+                            label = "${icon.pack.displayName} ${icon.displayName}",
+                        ),
+                    )
+                },
+            )
+        }
+    }
+}
+
+/** A single badge-pack icon tile — the rendered Markers / Google glyph the
+ *  operator taps to place that marker. Matches the badge bitmap [TakIconRegistry]
+ *  draws on the map so the picker preview and the placed marker are identical. */
+@Composable
+private fun BadgeSwatch(
+    icon: TakIconRegistry.BadgeIcon,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val context = LocalContext.current
+    val bitmap by produceState<ImageBitmap?>(initialValue = null, icon.token) {
+        value = withContext(Dispatchers.Default) {
+            TakIconRegistry.bitmapFor(context, icon, sizePx = 96).asImageBitmap()
+        }
+    }
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (selected) TacticalAccent.copy(alpha = 0.18f) else TacticalSurface)
+            .border(
+                width = if (selected) 2.dp else 1.dp,
+                color = if (selected) TacticalAccent else Color(icon.badgeArgb).copy(alpha = 0.5f),
+                shape = RoundedCornerShape(10.dp),
+            )
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp, horizontal = 8.dp),
+    ) {
+        Box(
+            modifier = Modifier.size(36.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            val bmp = bitmap
+            if (bmp != null) {
+                androidx.compose.foundation.Image(
+                    bitmap = bmp,
+                    contentDescription = icon.displayName,
+                    modifier = Modifier.size(32.dp),
+                )
+            } else {
+                Box(
+                    Modifier
+                        .size(20.dp)
+                        .clip(RoundedCornerShape(5.dp))
+                        .background(Color(icon.badgeArgb).copy(alpha = 0.6f)),
+                )
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            icon.displayName,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
+            fontSize = 9.sp,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

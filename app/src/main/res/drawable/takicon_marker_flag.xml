@@ -1,0 +1,16 @@
+<!--
+  TAK icon-suite "Markers" pack glyph (issue #98). Glyph path from the
+  Material Symbols set (Apache License 2.0, github.com/google/material-design-icons)
+  so it is clean-licensed to ship in the closed Play binary. White fill;
+  TakIconRegistry tints + badges it at runtime.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M14.4,6L14,4H5v17h2v-7h5.6l0.4,2h7V6z" />
+</vector>

@@ -69,6 +69,128 @@ class TakIconRegistryTest {
         assertNull(TakIconRegistry.SpotIcon.fromIconsetPath("f7f71666-8b28-4b57-9fbb-e38e61d33b79/Google/airports.png"))
     }
 
+    // ---- Markers pack resolution (inbound iconsetpath) ------------------
+
+    @Test
+    fun `markers iconset path resolves to the matching glyph`() {
+        // A script pushing CoT with <usericon iconsetpath="COT_MAPPING_2525C/flag">
+        // must resolve to the Markers flag glyph, not fall through to MIL-STD.
+        val icon = TakIconRegistry.MarkerIcon.fromIconsetPath("COT_MAPPING_2525C/flag")
+        assertEquals(TakIconRegistry.MarkerIcon.FLAG, icon)
+    }
+
+    @Test
+    fun `every markers glyph round-trips through its iconset path`() {
+        for (icon in TakIconRegistry.MarkerIcon.entries) {
+            assertEquals(icon, TakIconRegistry.MarkerIcon.fromIconsetPath(icon.iconsetPath))
+        }
+    }
+
+    @Test
+    fun `markers path match is case insensitive`() {
+        assertEquals(
+            TakIconRegistry.MarkerIcon.WARNING,
+            TakIconRegistry.MarkerIcon.fromIconsetPath("cot_mapping_2525c/WARNING"),
+        )
+    }
+
+    @Test
+    fun `unknown markers token falls back to circle rather than null`() {
+        // A Markers marker must never render blank; an unrecognised token
+        // resolves to the neutral circle glyph so the marker still draws.
+        assertEquals(
+            TakIconRegistry.MarkerIcon.CIRCLE,
+            TakIconRegistry.MarkerIcon.fromIconsetPath("COT_MAPPING_2525C/unobtainium"),
+        )
+    }
+
+    @Test
+    fun `markers resolver ignores a spot or google path`() {
+        assertNull(TakIconRegistry.MarkerIcon.fromIconsetPath("COT_MAPPING_SPOTMAP/red"))
+        assertNull(TakIconRegistry.MarkerIcon.fromIconsetPath("f7f71666-8b28-4b57-9fbb-e38e61d33b79/Google/airports.png"))
+    }
+
+    // ---- Google POI pack resolution (inbound iconsetpath) ---------------
+
+    @Test
+    fun `google iconset path resolves to the matching poi glyph`() {
+        // ATAK emits the Google pack as `<uid>/Google/<name>.png`; the basename
+        // (sans group + .png) must resolve to the right POI glyph.
+        val icon = TakIconRegistry.GoogleIcon.fromIconsetPath(
+            "f7f71666-8b28-4b57-9fbb-e38e61d33b79/Google/airports.png",
+        )
+        assertEquals(TakIconRegistry.GoogleIcon.AIRPORT, icon)
+    }
+
+    @Test
+    fun `every google glyph round-trips through its iconset path`() {
+        for (icon in TakIconRegistry.GoogleIcon.entries) {
+            assertEquals(icon, TakIconRegistry.GoogleIcon.fromIconsetPath(icon.iconsetPath))
+        }
+    }
+
+    @Test
+    fun `google resolver tolerates a png suffix and a group segment`() {
+        assertEquals(
+            TakIconRegistry.GoogleIcon.HOSPITAL,
+            TakIconRegistry.GoogleIcon.fromIconsetPath(
+                "f7f71666-8b28-4b57-9fbb-e38e61d33b79/hospitals.png",
+            ),
+        )
+    }
+
+    @Test
+    fun `unknown google token falls back to airport rather than null`() {
+        assertEquals(
+            TakIconRegistry.GoogleIcon.AIRPORT,
+            TakIconRegistry.GoogleIcon.fromIconsetPath(
+                "f7f71666-8b28-4b57-9fbb-e38e61d33b79/Google/teleporter.png",
+            ),
+        )
+    }
+
+    @Test
+    fun `google resolver ignores a spot or markers path`() {
+        assertNull(TakIconRegistry.GoogleIcon.fromIconsetPath("COT_MAPPING_SPOTMAP/red"))
+        assertNull(TakIconRegistry.GoogleIcon.fromIconsetPath("COT_MAPPING_2525C/flag"))
+    }
+
+    // ---- Cross-pack badge resolution + handles --------------------------
+
+    @Test
+    fun `resolveBadgeIcon routes each pack to its own catalogue`() {
+        assertEquals(
+            TakIconRegistry.MarkerIcon.STAR,
+            TakIconRegistry.resolveBadgeIcon("COT_MAPPING_2525C/star"),
+        )
+        assertEquals(
+            TakIconRegistry.GoogleIcon.GAS,
+            TakIconRegistry.resolveBadgeIcon("f7f71666-8b28-4b57-9fbb-e38e61d33b79/gas_stations.png"),
+        )
+        // Spot Map and MIL-STD are not badge packs.
+        assertNull(TakIconRegistry.resolveBadgeIcon("COT_MAPPING_SPOTMAP/red"))
+        assertNull(TakIconRegistry.resolveBadgeIcon(null))
+    }
+
+    @Test
+    fun `handles is true for markers and google iconset paths`() {
+        assertTrue(TakIconRegistry.handles("a-u-G", "COT_MAPPING_2525C/flag"))
+        assertTrue(TakIconRegistry.handles("a-u-G", "f7f71666-8b28-4b57-9fbb-e38e61d33b79/police.png"))
+    }
+
+    @Test
+    fun `style image id is stable and distinct per badge pack`() {
+        val flag = TakIconRegistry.styleImageId("a-u-G", "COT_MAPPING_2525C/flag", null)
+        val star = TakIconRegistry.styleImageId("a-u-G", "COT_MAPPING_2525C/star", null)
+        val gas = TakIconRegistry.styleImageId("a-u-G", "f7f71666-8b28-4b57-9fbb-e38e61d33b79/gas_stations.png", null)
+        assertNotNull(flag)
+        assertTrue(flag!!.startsWith("takicon-markers-"))
+        assertTrue(gas!!.startsWith("takicon-google-"))
+        // Distinct glyphs key distinct images; the same glyph keys one image.
+        assertTrue(flag != star)
+        assertEquals(flag, TakIconRegistry.styleImageId("a-u-G", "COT_MAPPING_2525C/flag", null))
+    }
+
     @Test
     fun `handles is true for a spot iconset path and for the spot cot type`() {
         assertTrue(TakIconRegistry.handles("b-m-p-s-m", "COT_MAPPING_SPOTMAP/blue"))
@@ -167,14 +289,23 @@ class TakIconRegistryTest {
     }
 
     @Test
-    fun `markers and google packs are modeled but flagged unbundled`() {
-        // Phase-1 asset blocker: the bitmap packs are known to the framework so
-        // they slot in behind the same API later, but must report unbundled so
-        // we never claim an icon we can't actually draw.
-        assertFalse(TakIconRegistry.TakIconPack.MARKERS.bundled)
-        assertFalse(TakIconRegistry.TakIconPack.GOOGLE.bundled)
+    fun `markers and google packs are bundled and selectable`() {
+        // Phase-1 deliverable: all three standard sets ship and are selectable.
+        // Glyphs are Material-Symbols (Apache-2.0) vector drawables, so the
+        // bitmap packs are genuinely bundled — not stubbed.
+        assertTrue(TakIconRegistry.TakIconPack.MARKERS.bundled)
+        assertTrue(TakIconRegistry.TakIconPack.GOOGLE.bundled)
+        assertTrue(TakIconRegistry.selectableMarkerIcons.isNotEmpty())
+        assertTrue(TakIconRegistry.selectableGoogleIcons.isNotEmpty())
         // The Google UID matches ATAK's canonical iconset UID so an inbound
-        // Google iconsetpath would key to the right (future) pack.
+        // Google iconsetpath keys to the right pack.
         assertEquals("f7f71666-8b28-4b57-9fbb-e38e61d33b79", TakIconRegistry.TakIconPack.GOOGLE.uid)
+    }
+
+    @Test
+    fun `all three standard tak icon sets report bundled`() {
+        // The acceptance-criteria check: Markers / Spots / Google all present.
+        val bundled = TakIconRegistry.availablePacks.filter { it.bundled }.map { it.displayName }.toSet()
+        assertTrue(bundled.containsAll(setOf("Spot Map", "Markers", "Google")))
     }
 }

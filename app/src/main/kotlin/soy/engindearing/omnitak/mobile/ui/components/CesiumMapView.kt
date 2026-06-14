@@ -14,6 +14,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.viewinterop.AndroidView
 import org.json.JSONObject
@@ -72,6 +73,10 @@ fun CesiumMapView(
     snapNorthTrigger: Int = 0,
 ) {
     val density = LocalDensity.current.density
+    // #98 — app context to rasterise the Markers / Google badge glyphs into the
+    // `icon` data-URLs the globe billboards (held across recompositions so the
+    // pushEntities closure can read it).
+    val appContext = LocalContext.current.applicationContext
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val ready = remember { mutableStateOf(false) }
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
@@ -94,6 +99,7 @@ fun CesiumMapView(
         if (!ready.value) return
         val json = buildCesiumEntitiesJson(
             contactsState.value, selfLatState.value, selfLonState.value, selfCallsignState.value,
+            context = appContext,
         )
         wv.evaluateJavascript("window.OmniBridge.setEntities($json);", null)
     }
