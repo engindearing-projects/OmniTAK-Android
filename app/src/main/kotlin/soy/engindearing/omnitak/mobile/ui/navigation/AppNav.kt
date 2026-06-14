@@ -191,6 +191,7 @@ fun AppNav() {
                 ServersScreen(
                     onAdd = { nav.navigate("servers/add") },
                     onQuickConnect = { nav.navigate("servers/enroll") },
+                    onScanQr = { nav.navigate("servers/scan") },
                 )
             }
             composable("servers/add") {
@@ -198,6 +199,11 @@ fun AppNav() {
             }
             composable("servers/enroll") {
                 EnrollServerScreen(onDone = { nav.popBackStack() })
+            }
+            composable("servers/scan") {
+                soy.engindearing.omnitak.mobile.ui.screens.ServerEnrollScanRoute(
+                    onDone = { nav.popBackStack() },
+                )
             }
             composable("uas") {
                 UASScreen(onDone = { nav.popBackStack() })

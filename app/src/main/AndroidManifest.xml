@@ -76,17 +76,21 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- GAP-105 rest — data-package import. Three on-ramps:
-                 1. atak://… deep links (matches ATAK's own scheme so
+            <!-- GAP-105 rest / #100 — data-package + enrollment deep links.
+                 On-ramps:
+                 1. tak://com.atakmap.app/enroll?host=…&username=…&token=…
+                    — the standard ATAK / TAK Server / ArgusTAK enrollment
+                    QR. Scanning it with the OS camera app opens OmniTAK and
+                    auto-enrolls a client cert (#100).
+                 2. atak://… deep links (matches ATAK's own scheme so
                     QR codes generated for ATAK can also onboard OmniTAK).
-                 2. omnitak://… deep links (our own future-proof scheme).
-                 3. https://*/?omnitak=server… HTTPS App Links (lets a
-                    plain web URL deep-link in once verified, no scheme
-                    prompt). -->
+                 3. omnitak://… deep links (our own future-proof scheme:
+                    server-connect AND config-profile sync). -->
             <intent-filter android:autoVerify="false">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="tak" />
                 <data android:scheme="atak" />
                 <data android:scheme="omnitak" />
             </intent-filter>

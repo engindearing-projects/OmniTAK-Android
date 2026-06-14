@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -62,7 +63,11 @@ import soy.engindearing.omnitak.mobile.ui.theme.TacticalSurface
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ServersScreen(onAdd: () -> Unit, onQuickConnect: () -> Unit = {}) {
+fun ServersScreen(
+    onAdd: () -> Unit,
+    onQuickConnect: () -> Unit = {},
+    onScanQr: () -> Unit = {},
+) {
     val app = LocalContext.current.applicationContext as OmniTAKApp
     val manager = app.serverManager
     val servers by manager.servers.collectAsState()
@@ -86,6 +91,18 @@ fun ServersScreen(onAdd: () -> Unit, onQuickConnect: () -> Unit = {}) {
                     Text("TAK Servers", color = MaterialTheme.colorScheme.onBackground)
                 },
                 actions = {
+                    // #100 — scan a standard TAK / ATAK enrollment QR
+                    // (tak://…/enroll) to CSR-enroll a cert and connect. The
+                    // reliable in-app on-ramp that doesn't depend on the OS
+                    // camera app routing the tak:// scheme back to us.
+                    IconButton(onClick = onScanQr) {
+                        Icon(
+                            Icons.Filled.QrCodeScanner,
+                            contentDescription = "Scan enrollment QR",
+                            tint = TacticalAccent,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
                     // Quick Connect — request a client cert from the server's
                     // enrollment endpoint instead of importing a pre-issued .p12.
                     // BUG-C (closed-test, May 2026) — the icon-only bolt was
@@ -195,8 +212,9 @@ private fun EmptyServers(modifier: Modifier = Modifier) {
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            "Tap + to enter a server manually, or Quick Connect (⚡) to " +
-                "auto-enroll a certificate from a TAK Server's enrollment " +
+            "Scan (▣) a TAK/ATAK enrollment QR to enroll and connect in one " +
+                "tap, tap + to enter a server manually, or Quick Connect (⚡) " +
+                "to auto-enroll a certificate from a TAK Server's enrollment " +
                 "endpoint.",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),

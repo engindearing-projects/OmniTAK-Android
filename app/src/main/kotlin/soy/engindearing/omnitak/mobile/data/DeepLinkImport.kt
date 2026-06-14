@@ -8,20 +8,22 @@ import android.net.Uri
  * the resulting URL deep-links into the app, we parse it and apply the
  * server config in one tap.
  *
- * Three URL shapes we accept today:
+ * URL shapes we accept today:
  *
- * 1. `atak://com.atakmap.app/connect?host=tak.example.com&port=8089&proto=tls`
+ * 1. `tak://com.atakmap.app/enroll?host=argustak.com%3A8089&username=u&token=t`
+ *    — the STANDARD ATAK / TAK Server / ArgusTAK enrollment QR (#100). The
+ *    `host` carries the (URL-encoded) connection `host:port`; `username` +
+ *    `token` are one-time CSR-enrollment credentials. Parsed by
+ *    [isEnrollLink] / [parseEnrollLink] and routed to the CSR enroll flow.
+ *
+ * 2. `atak://com.atakmap.app/connect?host=tak.example.com&port=8089&proto=tls`
  *    — matches the de-facto ATAK Quick-Connect format some onboarding
  *    portals already generate. We tolerate either `tls=true` or
  *    `proto=tls`. ATAK's own client also reads `username` / `token`.
  *
- * 2. `omnitak://server?host=...&port=...&tls=true&user=...&pw=...&name=...`
+ * 3. `omnitak://server?host=...&port=...&tls=true&user=...&pw=...&name=...`
  *    — our own future-proof scheme so we don't have to depend on ATAK's
  *    URL conventions for new fields (callsign, team, basemap, etc.).
- *
- * 3. Anything that has a `host` query param and looks like a TAK endpoint —
- *    used as a generic fallback so OpenTAKserver onboarding portals can
- *    point at any URL of the form `https://example.com/?host=...`.
  *
  * The parser intentionally avoids cert / data-package zip handling for
  * now — that's filed as the next iteration of GAP-105 (full ATAK
@@ -76,6 +78,133 @@ object DeepLinkImport {
         val scheme = uri.scheme?.lowercase() ?: return false
         if (scheme !in setOf("atak", "omnitak")) return false
         return !uri.getQueryParameter("host").isNullOrBlank()
+    }
+
+    /**
+     * #100 — recognise the *standard* ATAK / TAK Server / ArgusTAK
+     * enrollment deep link:
+     *
+     *   `tak://com.atakmap.app/enroll?host=<host>[:port]&username=<u>&token=<t>`
+     *
+     * This is what ArgusTAK / ATAK / TAK Server emit in their onboarding QR
+     * codes. It is shaped differently from our [isServerConfig] connect form:
+     *  - the path is `/enroll` (the connect form has no path),
+     *  - the `host` query param frequently carries `host:port` (URL-encoded,
+     *    e.g. `argustak.com%3A8089`) rather than a separate `port=`,
+     *  - the credential is a one-time CSR-enrollment `token`, not a password.
+     *
+     * Accepts the `tak`, `atak`, and `omnitak` schemes so the same QR works
+     * whether the generator used ATAK's canonical `tak://` host
+     * (`com.atakmap.app`) or just the scheme. HTTP/HTTPS are intentionally
+     * excluded — same drive-by-injection guard as [isServerConfig].
+     */
+    fun isEnrollLink(uri: Uri?): Boolean {
+        if (uri == null) return false
+        val scheme = uri.scheme?.lowercase() ?: return false
+        if (scheme !in setOf("tak", "atak", "omnitak")) return false
+        // The path is the discriminator: `…/enroll`. Uri.path can be null for
+        // opaque URIs, so fall back to a substring probe on the raw string.
+        val isEnrollPath = uri.path?.trimEnd('/')?.endsWith("enroll", ignoreCase = true) == true ||
+            uri.toString().contains("/enroll", ignoreCase = true)
+        if (!isEnrollPath) return false
+        return !uri.getQueryParameter("host").isNullOrBlank()
+    }
+
+    /**
+     * Parse a [isEnrollLink] enrollment URI into an [ImportedServerConfig]
+     * ready for the CSR enrollment flow. Returns null when the link is
+     * missing the host or enrollment credentials (the caller should toast a
+     * friendly error rather than silently dropping the import).
+     *
+     * Field mapping:
+     *  - `host` → split on `:` so `argustak.com:8089` yields host
+     *    `argustak.com` + **connection** port 8089. A bare host with no
+     *    colon defaults the connection port to 8089 (TAK streaming default).
+     *  - `username` → CSR auth username (becomes the cert CN).
+     *  - `token`  → CSR auth secret. Carried in [ImportedServerConfig.password]
+     *    because [CSREnrollmentService] sends username+secret as HTTP Basic
+     *    auth to `/Marti/api/tls/signClient/v2` — the token IS the password
+     *    on the enrollment endpoint.
+     *  - enrollment port → defaults to 8446 (TAK Server's cert-enrollment
+     *    port, which differs from the 8089 connection port), overridable via
+     *    `enrollport` / `enrollmentport` on the link for servers that colocate
+     *    enrollment on a non-standard port.
+     */
+    fun parseEnrollLink(uri: Uri): ImportedServerConfig? {
+        // `host` may be percent-encoded host:port (Uri.getQueryParameter
+        // already decodes %3A → ':'). Split host from the connection port.
+        val rawHost = uri.getQueryParameter("host")?.trim().orEmpty()
+        if (rawHost.isBlank()) return null
+        val (host, portFromHost) = splitHostPort(rawHost)
+        if (host.isBlank()) return null
+
+        val username = uri.getQueryParameter("username")?.takeIf { it.isNotBlank() }
+            ?: return null
+        // ATAK uses `token`; tolerate `password` as a fallback for generators
+        // that reuse the connect-form param name on an enroll link.
+        val token = (uri.getQueryParameter("token") ?: uri.getQueryParameter("password"))
+            ?.takeIf { it.isNotEmpty() } ?: return null
+
+        // Connection port: prefer host:port suffix, then an explicit ?port=,
+        // else the TAK streaming default 8089.
+        val connectPort = portFromHost
+            ?: uri.getQueryParameter("port")?.toIntOrNull()?.takeIf { it in 1..65535 }
+            ?: 8089
+
+        // Enrollment port is a SEPARATE port from the connection port — TAK
+        // Server enrolls on 8446 by default. Overridable for non-standard rigs.
+        val enrollmentPort = (uri.getQueryParameter("enrollport")
+            ?: uri.getQueryParameter("enrollmentport"))
+            ?.toIntOrNull()?.takeIf { it in 1..65535 } ?: 8446
+
+        // Trust-all during enrollment by default so a single QR onboards both
+        // self-signed (self-hosted TAK Server) and publicly-trusted (ArgusTAK
+        // behind Let's Encrypt) endpoints. Override with trust=ca on the link.
+        val trustRaw = (uri.getQueryParameter("trustselfsigned")
+            ?: uri.getQueryParameter("trust"))?.lowercase()
+        val trustSelfSigned = trustRaw !in setOf("false", "ca", "system", "0", "no")
+
+        val name = uri.getQueryParameter("name")?.takeIf { it.isNotBlank() } ?: host
+
+        return ImportedServerConfig(
+            name = name,
+            host = host,
+            port = connectPort,
+            useTLS = true,            // enrollment is always mTLS
+            username = username,
+            password = token,         // token = the enrollment Basic-auth secret
+            enrollmentPort = enrollmentPort,
+            trustSelfSigned = trustSelfSigned,
+        )
+    }
+
+    /**
+     * Split a `host` or `host:port` string into (host, port?). Tolerates a
+     * trailing colon with no port and a non-numeric port (treated as no
+     * port). Bracketed IPv6 literals (`[::1]:8089`) are handled so the
+     * colons inside the address aren't mistaken for the port separator.
+     *
+     * `internal` so it can be unit-tested without Robolectric — this is the
+     * load-bearing decode of the URL-encoded `host=argustak.com%3A8089` form.
+     */
+    internal fun splitHostPort(value: String): Pair<String, Int?> {
+        val v = value.trim()
+        if (v.startsWith("[")) {
+            // IPv6: [addr]:port
+            val close = v.indexOf(']')
+            if (close < 0) return v to null
+            val addr = v.substring(1, close)
+            val rest = v.substring(close + 1)
+            val port = rest.removePrefix(":").toIntOrNull()?.takeIf { it in 1..65535 }
+            return addr to port
+        }
+        val idx = v.lastIndexOf(':')
+        if (idx <= 0 || idx == v.length - 1) return v.removeSuffix(":") to null
+        val maybePort = v.substring(idx + 1).toIntOrNull()?.takeIf { it in 1..65535 }
+        // A malformed/out-of-range port after the colon must not poison the
+        // hostname (DNS would fail on "host:abc") — strip to the host portion
+        // and report no port so the caller falls back to its default.
+        return v.substring(0, idx) to maybePort
     }
 
     /**

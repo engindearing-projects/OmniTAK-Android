@@ -76,10 +76,10 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * GAP-105 rest — handle `atak://` / `omnitak://` deep links carrying
-     * a server-onboarding payload. Singletask launchMode means a second
-     * scan while the app is open re-enters via [onNewIntent] instead of
-     * spawning a new task.
+     * GAP-105 rest / #100 — handle `tak://` / `atak://` / `omnitak://` deep
+     * links carrying a server-onboarding payload (enrollment QR, connect link,
+     * or config profile). Singletask launchMode means a second scan while the
+     * app is open re-enters via [onNewIntent] instead of spawning a new task.
      */
     private fun handleImportIntent(intent: Intent?) {
         if (intent?.action != Intent.ACTION_VIEW) return
@@ -100,6 +100,25 @@ class MainActivity : ComponentActivity() {
             // shows ImportPreviewDialog — same flow as the in-app QR scanner.
             app.pendingProfileImport.value = profile
             Log.i("OmniTAK", "Queued deep-link profile import '${profile.name}' for user review")
+            return
+        }
+
+        // #100 — the standard ATAK / TAK Server / ArgusTAK enrollment QR
+        // (`tak://…/enroll?host=&username=&token=`). Check BEFORE isServerConfig:
+        // an `atak://…/enroll` link also satisfies the connect-form matcher, and
+        // we want it to CSR-enroll (token = enrollment secret) rather than be
+        // added cert-less and rejected at the mTLS handshake.
+        if (DeepLinkImport.isEnrollLink(uri)) {
+            val enrollCfg = DeepLinkImport.parseEnrollLink(uri)
+            if (enrollCfg == null) {
+                Toast.makeText(
+                    this,
+                    "Enrollment link missing host, username, or token",
+                    Toast.LENGTH_LONG,
+                ).show()
+                return
+            }
+            enrollFromDeepLink(uri, enrollCfg)
             return
         }
 
