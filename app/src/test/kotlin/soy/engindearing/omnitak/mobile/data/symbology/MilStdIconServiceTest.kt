@@ -267,4 +267,29 @@ class MilStdIconServiceTest {
             MilStdIconService.load(emptyList())
         }
     }
+
+    // ---- Re-affiliation (#98 marker icon picker) -------------------------
+
+    @Test
+    fun `withAffiliation swaps the affiliation segment and keeps the tail`() {
+        // Hostile armor <-> friendly armor: only the 2nd token flips so the
+        // affiliation chips can retype a picked symbol without re-opening the
+        // picker.
+        assertEquals("a-f-G-U-C-A", MilStdIconService.withAffiliation("a-h-G-U-C-A", 'f'))
+        assertEquals("a-h-G-U-C-A", MilStdIconService.withAffiliation("a-f-G-U-C-A", 'h'))
+        assertEquals("a-n-A-M-F-Q", MilStdIconService.withAffiliation("a-u-A-M-F-Q", 'n'))
+    }
+
+    @Test
+    fun `withAffiliation falls back to a generic point for a too-short type`() {
+        assertEquals("a-u-G-U-C", MilStdIconService.withAffiliation("a", 'u'))
+    }
+
+    @Test
+    fun `withAffiliation result still resolves to the matching SIDC`() {
+        // The re-affiliated type must round-trip through getSidc to the
+        // friendly-armor symbol (not the hostile one it started as).
+        val reaff = MilStdIconService.withAffiliation("a-h-G-U-C-A", 'f')
+        assertEquals("SFGPUCA----", MilStdIconService.getSidc(reaff))
+    }
 }

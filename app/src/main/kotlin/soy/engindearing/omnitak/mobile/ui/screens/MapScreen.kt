@@ -400,22 +400,30 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         }
     }
 
-    // Issue #97 — keep-screen-on. Apply FLAG_KEEP_SCREEN_ON to the activity
-    // window while this composable is in composition AND the setting is on.
-    // DisposableEffect re-runs whenever keepScreenOn changes so the flag is
-    // added/cleared immediately when the operator toggles it in Settings.
+    // Issue #97 — keep-screen-on. The original fix cast LocalContext.current
+    // directly to Activity, but under enableEdgeToEdge + MaterialTheme that
+    // context is a ContextThemeWrapper, so the cast returned null and the
+    // window flag was never applied — the screen kept sleeping (the reported
+    // bug). Walk the ContextWrapper chain to the real Activity, and also set
+    // keepScreenOn on the decor view as a belt-and-suspenders path that does
+    // not depend on resolving the Activity at all. The DisposableEffect
+    // re-runs whenever keepScreenOn flips so the change takes effect at once.
     val context = LocalContext.current
     DisposableEffect(userPrefs.keepScreenOn) {
-        val window = (context as? android.app.Activity)?.window
+        val activity = context.findActivity()
+        val window = activity?.window
         if (userPrefs.keepScreenOn) {
             window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            window?.decorView?.keepScreenOn = true
         } else {
             window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            window?.decorView?.keepScreenOn = false
         }
         onDispose {
             // Remove the flag when the map screen leaves composition
             // (e.g. navigating to Settings) so the screen can sleep normally.
             window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            window?.decorView?.keepScreenOn = false
         }
     }
 
@@ -1541,6 +1549,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             initialAffiliation = editingMarker?.affiliation ?: CoTAffiliation.FRIEND,
             initialAltitude = editingMarker?.hae?.takeIf { it != 0.0 },
             initialRemarks = editingMarker?.remarks ?: "",
+            // Issue #98 — re-open an existing marker on the symbol it carries.
+            initialCotType = editingMarker?.type,
             editing = editingMarker != null,
             onSave = { result ->
                 val ll = markerSheetLatLng
@@ -1548,7 +1558,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     val uid = editingMarker?.uid ?: "local-${System.currentTimeMillis()}"
                     val event = CoTEvent(
                         uid = uid,
-                        type = "a-${result.affiliation.code}-G-U-C",
+                        // Issue #98 — use the picked MIL-STD symbol when the
+                        // operator chose one; otherwise keep the generic
+                        // per-affiliation point so the pre-icon-suite default
+                        // is preserved.
+                        type = result.cotType ?: "a-${result.affiliation.code}-G-U-C",
                         lat = ll.latitude,
                         lon = ll.longitude,
                         hae = result.altitudeMeters ?: 0.0,
@@ -1979,4 +1993,16 @@ private fun MapControlFab(
     ) {
         Icon(icon, contentDescription = contentDescription, tint = tint)
     }
+}
+
+/**
+ * Issue #97 — resolve the hosting [android.app.Activity] from a Compose
+ * [android.content.Context], which under enableEdgeToEdge + MaterialTheme is
+ * a ContextThemeWrapper rather than the Activity itself. Walks the
+ * ContextWrapper chain; null if none is an Activity (e.g. preview / test).
+ */
+private tailrec fun android.content.Context.findActivity(): android.app.Activity? = when (this) {
+    is android.app.Activity -> this
+    is android.content.ContextWrapper -> baseContext.findActivity()
+    else -> null
 }

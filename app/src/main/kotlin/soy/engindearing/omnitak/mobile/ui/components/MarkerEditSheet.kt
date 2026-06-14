@@ -15,6 +15,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -34,6 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -49,6 +53,13 @@ data class MarkerEditResult(
     val affiliation: CoTAffiliation,
     val altitudeMeters: Double?,
     val remarks: String,
+    /**
+     * Issue #98 — the full CoT type the operator chose from the icon
+     * picker (e.g. `a-h-G-U-C-A`). Null means "no specific symbol was
+     * picked" — the caller falls back to a generic per-affiliation point
+     * (`a-<aff>-G-U-C`), preserving the pre-icon-suite behavior.
+     */
+    val cotType: String?,
 )
 
 /**
@@ -68,6 +79,10 @@ fun MarkerEditSheet(
     initialAffiliation: CoTAffiliation = CoTAffiliation.FRIEND,
     initialAltitude: Double? = null,
     initialRemarks: String = "",
+    /** Issue #98 — the marker's current CoT type, so an existing marker
+     *  re-opens with the symbol it already carries. Null = no specific
+     *  symbol picked yet (generic per-affiliation point). */
+    initialCotType: String? = null,
     editing: Boolean = false,
     onSave: (MarkerEditResult) -> Unit,
     onDelete: (() -> Unit)? = null,
@@ -88,6 +103,12 @@ fun MarkerEditSheet(
         mutableStateOf(initialAltitude?.let { "%.0f".format(it) } ?: "")
     }
     var remarks by remember(initialRemarks) { mutableStateOf(initialRemarks) }
+    // Issue #98 — selected CoT type from the icon picker. Null until the
+    // operator picks a specific symbol; the affiliation chips below keep it
+    // re-affiliated so picking "armor" then flipping to hostile yields the
+    // hostile-armor symbol without re-opening the picker.
+    var cotType by remember(initialCotType) { mutableStateOf(initialCotType) }
+    var iconPickerOpen by remember { mutableStateOf(false) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -155,10 +176,34 @@ fun MarkerEditSheet(
                     AffiliationChip(
                         affiliation = a,
                         selected = affiliation == a,
-                        onClick = { affiliation = a },
+                        onClick = {
+                            affiliation = a
+                            // Keep a picked symbol on the new side (#98).
+                            cotType = cotType?.let {
+                                soy.engindearing.omnitak.mobile.data.symbology
+                                    .MilStdIconService.withAffiliation(it, a.code)
+                            }
+                        },
                     )
                 }
             }
+
+            // Issue #98 — symbol / icon row. Tapping opens the MIL-STD-2525
+            // picker; the chosen CoT type rides into the result so the placed
+            // marker resolves to that exact symbol (same path received markers
+            // use). When nothing is picked the marker stays a generic
+            // per-affiliation point — the pre-icon-suite behavior.
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "Symbol",
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                style = MaterialTheme.typography.labelLarge,
+            )
+            Spacer(Modifier.height(8.dp))
+            MarkerSymbolRow(
+                cotType = cotType,
+                onClick = { iconPickerOpen = true },
+            )
 
             Spacer(Modifier.height(16.dp))
             OutlinedTextField(
@@ -213,6 +258,7 @@ fun MarkerEditSheet(
                                 affiliation = affiliation,
                                 altitudeMeters = altitudeText.toDoubleOrNull(),
                                 remarks = remarks.trim(),
+                                cotType = cotType,
                             )
                         )
                     },
@@ -224,6 +270,100 @@ fun MarkerEditSheet(
             }
             Spacer(Modifier.height(16.dp))
         }
+    }
+
+    // Issue #98 — MIL-STD-2525 icon picker. Picking sets the CoT type and
+    // snaps the affiliation chips to match the symbol's own affiliation so
+    // the sheet stays internally consistent.
+    MarkerIconPickerSheet(
+        visible = iconPickerOpen,
+        selectedCotType = cotType,
+        onPick = { def ->
+            cotType = def.value
+            affiliation = CoTAffiliation.fromCode(def.value.getOrNull(2))
+            iconPickerOpen = false
+        },
+        onDismiss = { iconPickerOpen = false },
+    )
+}
+
+/**
+ * Issue #98 — current-symbol row inside [MarkerEditSheet]. Shows the
+ * rendered MIL-STD glyph + label for the picked CoT type (or a "Choose
+ * symbol" prompt when none is picked) and opens the picker on tap.
+ */
+@Composable
+private fun MarkerSymbolRow(
+    cotType: String?,
+    onClick: () -> Unit,
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val def = remember(cotType) {
+        cotType?.let {
+            soy.engindearing.omnitak.mobile.data.symbology.MilStdIconService.getDefinition(it)
+        }
+    }
+    val bitmap by androidx.compose.runtime.produceState<androidx.compose.ui.graphics.ImageBitmap?>(
+        initialValue = null, cotType,
+    ) {
+        value = if (cotType == null) null else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            soy.engindearing.omnitak.mobile.data.symbology.MilStdIconCache
+                .bitmapFor(context, cotType, sizePx = 72)
+                ?.asImageBitmap()
+        }
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(TacticalBackground)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        androidx.compose.foundation.layout.Box(
+            Modifier.size(36.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            val bmp = bitmap
+            if (bmp != null) {
+                androidx.compose.foundation.Image(
+                    bitmap = bmp,
+                    contentDescription = def?.label,
+                    modifier = Modifier.size(32.dp),
+                )
+            } else {
+                androidx.compose.material3.Icon(
+                    imageVector = Icons.Filled.Category,
+                    contentDescription = null,
+                    tint = TacticalAccent.copy(alpha = 0.8f),
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            // Prefer the catalogue label; fall back to the raw type for a
+            // marker carrying a type the picker doesn't enumerate (e.g. a
+            // received RID track being re-typed), then to the prompt.
+            Text(
+                def?.label ?: cotType ?: "Choose symbol",
+                color = MaterialTheme.colorScheme.onBackground,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                cotType ?: "Generic point (by affiliation)",
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        androidx.compose.material3.Icon(
+            imageVector = Icons.Filled.ChevronRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+        )
     }
 }
 

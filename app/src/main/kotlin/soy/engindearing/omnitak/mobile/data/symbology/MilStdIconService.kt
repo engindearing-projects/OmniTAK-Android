@@ -187,6 +187,27 @@ object MilStdIconService {
 
     fun getAffiliation(cotType: String): Affiliation = Affiliation.fromCotType(cotType)
 
+    /**
+     * Re-affiliate a CoT type by swapping its affiliation segment (the
+     * second token after `a-`) to [code] while keeping the battle
+     * dimension and function tail intact — e.g. `a-h-G-U-C-A` with code
+     * `f` → `a-f-G-U-C-A`. Lets the marker-edit affiliation chips retrofit
+     * an already-picked specific symbol onto a new side without forcing the
+     * operator back into the icon picker.
+     *
+     * Falls back to the generic per-affiliation ground unit when [cotType]
+     * is too short to carry an affiliation segment, so callers always get
+     * a renderable type back.
+     */
+    fun withAffiliation(cotType: String, code: Char): String {
+        val parts = cotType.split('-').toMutableList()
+        if (parts.size < 2 || !parts[0].equals("a", ignoreCase = true)) {
+            return "a-$code-G-U-C"
+        }
+        parts[1] = code.toString()
+        return parts.joinToString("-")
+    }
+
     fun getBattleDimension(cotType: String): BattleDimension =
         BattleDimension.fromCotType(cotType)
 

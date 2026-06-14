@@ -83,6 +83,11 @@ fun CesiumMapView(
     val onLongPressState = rememberUpdatedState(onLongPress)
     val onContactTapState = rememberUpdatedState(onContactTap)
     val onCameraState = rememberUpdatedState(onCameraChanged)
+    // #95 — read the latest lock state inside the JS bridge callbacks so a
+    // globe that opens while north-up is already on gets the lock applied on
+    // bridge-ready (the change-driven DisposableEffect below only fires on a
+    // toggle, never on first composition).
+    val northUpLockedState = rememberUpdatedState(northUpLocked)
 
     fun pushEntities() {
         val wv = webViewRef.value ?: return
@@ -131,6 +136,16 @@ fun CesiumMapView(
                                 // operator was looking (#78).
                                 seedInheritedCamera()
                                 pushEntities()
+                                // #95 — apply the persisted north-up lock on
+                                // first ready so the globe respects it without
+                                // waiting for a toggle.
+                                if (northUpLockedState.value) {
+                                    webViewRef.value?.evaluateJavascript(
+                                        "if(window.OmniBridge&&window.OmniBridge.setNorthUpLocked)" +
+                                            "window.OmniBridge.setNorthUpLocked(true);",
+                                        null,
+                                    )
+                                }
                             }
                         }
 
