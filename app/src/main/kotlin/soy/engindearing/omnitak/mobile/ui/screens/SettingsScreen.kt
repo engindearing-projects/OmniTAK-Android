@@ -515,6 +515,53 @@ fun SettingsScreen(
                 }
             }
 
+            // Issue #95 / #97 — map behaviour toggles.
+            SectionHeader("Map")
+            // North-up lock (#95)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Lock north-up",
+                        color = MaterialTheme.colorScheme.onBackground,
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Text(
+                        "Disable map rotation and always face north",
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Switch(
+                    checked = prefs.northUpLocked,
+                    onCheckedChange = { v -> mutate { it.copy(northUpLocked = v) } },
+                )
+            }
+            // Keep screen on (#97)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Keep screen on",
+                        color = MaterialTheme.colorScheme.onBackground,
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Text(
+                        "Prevent screen from sleeping while the map is open",
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Switch(
+                    checked = prefs.keepScreenOn,
+                    onCheckedChange = { v -> mutate { it.copy(keepScreenOn = v) } },
+                )
+            }
+
             // About — the route was registered in AppNav since 0.1 but
             // nothing navigated to it after the bottom-bar rework dropped
             // the About tab. This row is the entry point.

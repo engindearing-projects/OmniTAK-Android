@@ -130,6 +130,14 @@ data class UserPrefs(
     val lastCameraLat: Double? = null,
     val lastCameraLon: Double? = null,
     val lastCameraZoom: Double? = null,
+    /** Issue #95 — lock map bearing to 0° (north-up). While on, rotation
+     *  gestures are suppressed and the camera snaps back to north. Persisted
+     *  so field operators who always run north-up don't have to re-enable. */
+    val northUpLocked: Boolean = false,
+    /** Issue #97 — prevent the screen from sleeping while OmniTAK is
+     *  foreground. Fixes the bug where the setting was present but
+     *  FLAG_KEEP_SCREEN_ON was never actually applied. Default off. */
+    val keepScreenOn: Boolean = false,
 )
 
 class UserPrefsStore(private val context: Context) {
@@ -169,6 +177,9 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_CAMERA_LAT  = stringPreferencesKey("last_camera_lat")
     private val KEY_CAMERA_LON  = stringPreferencesKey("last_camera_lon")
     private val KEY_CAMERA_ZOOM = stringPreferencesKey("last_camera_zoom")
+    // Issue #95 — north-up lock; #97 — keep-screen-on
+    private val KEY_NORTH_UP_LOCKED = booleanPreferencesKey("north_up_locked")
+    private val KEY_KEEP_SCREEN_ON  = booleanPreferencesKey("keep_screen_on")
 
     val prefs: Flow<UserPrefs> = context.userPrefsDataStore.data.map { p -> readFrom(p) }
 
@@ -210,6 +221,8 @@ class UserPrefsStore(private val context: Context) {
             if (next.lastCameraLat != null)  p[KEY_CAMERA_LAT]  = next.lastCameraLat.toString()
             if (next.lastCameraLon != null)  p[KEY_CAMERA_LON]  = next.lastCameraLon.toString()
             if (next.lastCameraZoom != null) p[KEY_CAMERA_ZOOM] = next.lastCameraZoom.toString()
+            p[KEY_NORTH_UP_LOCKED] = next.northUpLocked
+            p[KEY_KEEP_SCREEN_ON]  = next.keepScreenOn
         }
     }
 
@@ -327,6 +340,8 @@ class UserPrefsStore(private val context: Context) {
         lastCameraLat  = p[KEY_CAMERA_LAT]?.toDoubleOrNull(),
         lastCameraLon  = p[KEY_CAMERA_LON]?.toDoubleOrNull(),
         lastCameraZoom = p[KEY_CAMERA_ZOOM]?.toDoubleOrNull(),
+        northUpLocked  = p[KEY_NORTH_UP_LOCKED] ?: false,
+        keepScreenOn   = p[KEY_KEEP_SCREEN_ON]  ?: false,
     )
 
     // ATAK / OpenTakServer canonical team names are Title Case ("Cyan",

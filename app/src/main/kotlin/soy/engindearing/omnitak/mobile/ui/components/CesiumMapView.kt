@@ -64,6 +64,12 @@ fun CesiumMapView(
     // silently ignoring it (the "panel never appears on Cesium" class).
     panTarget: LatLng? = null,
     panTargetTick: Int = 0,
+    /** Issue #95 — when true, globe rotates back to heading 0 (north-up)
+     *  and the scene's rotation gestures are suppressed via the JS bridge.
+     *  The Cesium HTML side must implement OmniBridge.setNorthUpLocked(bool). */
+    northUpLocked: Boolean = false,
+    /** Issue #95/#96 — tap the compass → snap globe heading to north. */
+    snapNorthTrigger: Int = 0,
 ) {
     val density = LocalDensity.current.density
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
@@ -208,6 +214,31 @@ fun CesiumMapView(
         if (panTargetTick > 0 && t != null && ready.value) {
             webViewRef.value?.evaluateJavascript(
                 "window.OmniBridge.flyTo({lat:${t.latitude},lon:${t.longitude},range:3000});",
+                null,
+            )
+        }
+        onDispose { }
+    }
+
+    // Issue #95 — north-up lock on the Cesium globe. When ready, push the
+    // lock state to the JS bridge.  setNorthUpLocked(true) should disable
+    // rotation gestures in the scene and fly to heading 0; false restores.
+    DisposableEffect(northUpLocked) {
+        if (ready.value) {
+            webViewRef.value?.evaluateJavascript(
+                "if(window.OmniBridge&&window.OmniBridge.setNorthUpLocked)" +
+                    "window.OmniBridge.setNorthUpLocked(${northUpLocked});",
+                null,
+            )
+        }
+        onDispose { }
+    }
+    // Issue #95/#96 — manual snap to north (compass tap when lock is off).
+    DisposableEffect(snapNorthTrigger) {
+        if (snapNorthTrigger > 0 && ready.value) {
+            webViewRef.value?.evaluateJavascript(
+                "if(window.OmniBridge&&window.OmniBridge.snapToNorth)" +
+                    "window.OmniBridge.snapToNorth();",
                 null,
             )
         }

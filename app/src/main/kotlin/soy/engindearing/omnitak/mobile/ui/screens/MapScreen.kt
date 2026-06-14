@@ -1,5 +1,6 @@
 package soy.engindearing.omnitak.mobile.ui.screens
 
+import android.view.WindowManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -65,6 +66,7 @@ import soy.engindearing.omnitak.mobile.data.GeoMath
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
 import soy.engindearing.omnitak.mobile.i18n.Loc
 import soy.engindearing.omnitak.mobile.ui.components.ATAKStatusBar
+import soy.engindearing.omnitak.mobile.ui.components.CompassOverlay
 import soy.engindearing.omnitak.mobile.ui.components.ContactsPanel
 import soy.engindearing.omnitak.mobile.ui.components.LayersDialog
 import soy.engindearing.omnitak.mobile.ui.components.MarkerEditSheet
@@ -150,6 +152,10 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     var recenterTick by remember { mutableStateOf(0) }
     var zoomInTick by remember { mutableStateOf(0) }
     var zoomOutTick by remember { mutableStateOf(0) }
+    // Issue #95/#96 — snap-to-north trigger (compass tap when lock is off)
+    // and live bearing for the compass overlay.
+    var snapNorthTick by remember { mutableStateOf(0) }
+    var currentBearing by remember { mutableStateOf(0.0) }
     var measurementActive by remember { mutableStateOf(false) }
     // UAS waypoint-add mode — when true, taps on the map drop mission
     // waypoints instead of any other action. Toggled from the mission
@@ -372,6 +378,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     }
     val handleCameraChanged: (LatLng, Double, Double) -> Unit = { target, zoom, bearing ->
         cameraTarget = target
+        currentBearing = bearing
         app.mapCameraStore.update(target.latitude, target.longitude, zoom, bearing)
     }
     // Keep the ADSB query box following the viewport — significant pans
@@ -390,6 +397,25 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         adsbPlugin.cameraCenterProvider = {
             val c = cameraTarget ?: selfFix?.let { LatLng(it.lat, it.lon) }
             c?.let { soy.engindearing.omnitak.plugin.PluginLatLng(it.latitude, it.longitude) }
+        }
+    }
+
+    // Issue #97 — keep-screen-on. Apply FLAG_KEEP_SCREEN_ON to the activity
+    // window while this composable is in composition AND the setting is on.
+    // DisposableEffect re-runs whenever keepScreenOn changes so the flag is
+    // added/cleared immediately when the operator toggles it in Settings.
+    val context = LocalContext.current
+    DisposableEffect(userPrefs.keepScreenOn) {
+        val window = (context as? android.app.Activity)?.window
+        if (userPrefs.keepScreenOn) {
+            window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            // Remove the flag when the map screen leaves composition
+            // (e.g. navigating to Settings) so the screen can sleep normally.
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
 
@@ -449,6 +475,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             // Center) fly the globe instead of being silently eaten.
             panTarget = panTarget,
             panTargetTick = panTargetTick,
+            // Issue #95 — north-up lock + compass snap for the globe.
+            northUpLocked = userPrefs.northUpLocked,
+            snapNorthTrigger = snapNorthTick,
         )
         // Plugin map overlays on the GLOBE engine. The handle is null here
         // (no MapLibreMap on Cesium), so an overlay that can only draw on
@@ -569,6 +598,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 soy.engindearing.omnitak.mobile.ui.components.KmlOverlayRenderer
                     .applyRaster(style, rasterImagery, app.rasterOverlayStore)
             },
+            // Issue #95 — north-up lock + tap-to-reset support.
+            northUpLocked = userPrefs.northUpLocked,
+            snapNorthTrigger = snapNorthTick,
         )
         // Plugin map overlays on the MAPLIBRE engine. The handle is the live
         // MapLibreMap (captured via onMapReady above; null briefly until the
@@ -1255,6 +1287,25 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 }
             },
             modifier = Modifier.align(Alignment.BottomEnd),
+        )
+
+        // Issue #96 — compass overlay. Floats at top-start corner, just below
+        // the status bar. Shows live bearing; tapping snaps map to north.
+        // The MapLibre built-in compass is already on top-start (issue #81),
+        // but it disappears when north-up — this one is always visible and
+        // provides the manual snap action.
+        CompassOverlay(
+            bearingDeg = currentBearing,
+            onTapToNorth = {
+                if (userPrefs.northUpLocked) {
+                    // Already locked — snap is automatic; just a no-op tap.
+                } else {
+                    snapNorthTick++
+                }
+            },
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(start = 12.dp, top = 72.dp),
         )
 
         // Map control stack — zoom in / zoom out / center-on-me — at the

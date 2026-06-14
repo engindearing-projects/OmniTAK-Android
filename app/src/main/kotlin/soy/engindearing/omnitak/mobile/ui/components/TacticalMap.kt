@@ -98,6 +98,15 @@ fun TacticalMap(
     /** Camera idle: target, zoom, bearing (degrees clockwise from north).
      *  Bearing feeds the #78 engine-switch viewport handoff. */
     onCameraIdle: ((LatLng, Double, Double) -> Unit)? = null,
+    /** Issue #95 — when true, disable rotate gestures and snap/hold the
+     *  camera at bearing 0° (north-up). Animated on toggle so it doesn't
+     *  feel like a jump. */
+    northUpLocked: Boolean = false,
+    /** Issue #95/#96 — incremented by the compass tap or north-lock FAB
+     *  to animate the camera back to bearing 0° without toggling the lock
+     *  setting (useful when lock is off and the operator just wants to
+     *  quickly reset orientation). */
+    snapNorthTrigger: Int = 0,
     /** Fired once the MapLibre map is ready. Issue #16 — lasso uses
      *  this to grab the [MapLibreMap] reference for screen↔geo
      *  projection during freehand selection. */
@@ -121,6 +130,7 @@ fun TacticalMap(
     val currentCameraIdle by rememberUpdatedState(onCameraIdle)
     val currentMapReady by rememberUpdatedState(onMapReady)
     val currentStyleReady by rememberUpdatedState(onStyleReady)
+    val currentNorthUpLocked by rememberUpdatedState(northUpLocked)
     val currentTerrain3d by rememberUpdatedState(terrain3d)
     val currentSelfFix by rememberUpdatedState(selfFix)
     val currentFollowMe by rememberUpdatedState(followMeActive)
@@ -200,6 +210,17 @@ fun TacticalMap(
                 map.addOnCameraIdleListener {
                     val pos = map.cameraPosition
                     val target = pos.target ?: return@addOnCameraIdleListener
+                    // Issue #95 — if north-up lock is active and the bearing
+                    // somehow drifted (edge case: programmatic pan), snap back.
+                    if (currentNorthUpLocked && kotlin.math.abs(pos.bearing) > 0.5) {
+                        map.animateCamera(
+                            CameraUpdateFactory.newCameraPosition(
+                                CameraPosition.Builder(pos).bearing(0.0).build()
+                            ),
+                            250,
+                        )
+                        return@addOnCameraIdleListener
+                    }
                     currentCameraIdle?.invoke(target, pos.zoom, pos.bearing)
                 }
                 map.addOnMapLongClickListener { latLng ->
@@ -358,6 +379,47 @@ fun TacticalMap(
         }
         onDispose { }
     }
+
+    // Issue #95 — north-up lock: disable/re-enable rotate gestures and snap
+    // to bearing 0° when locked.  The MapLibre UiSettings gate is toggled
+    // every time the value flips; it persists on the map object until we
+    // change it, so no repeated enable is needed while the lock holds.
+    DisposableEffect(mapView, northUpLocked) {
+        mapView.getMapAsync { map ->
+            map.uiSettings.isRotateGesturesEnabled = !northUpLocked
+            if (northUpLocked) {
+                // Animate to north so the snap doesn't feel jarring.
+                val cur = map.cameraPosition
+                if (kotlin.math.abs(cur.bearing) > 0.5) {
+                    map.animateCamera(
+                        CameraUpdateFactory.newCameraPosition(
+                            CameraPosition.Builder(cur).bearing(0.0).build()
+                        ),
+                        350,
+                    )
+                }
+            }
+        }
+        onDispose { }
+    }
+    // Issue #95/#96 — manual snap-to-north: compass tap when lock is off.
+    DisposableEffect(mapView, snapNorthTrigger) {
+        if (snapNorthTrigger > 0) {
+            mapView.getMapAsync { map ->
+                val cur = map.cameraPosition
+                if (kotlin.math.abs(cur.bearing) > 0.5) {
+                    map.animateCamera(
+                        CameraUpdateFactory.newCameraPosition(
+                            CameraPosition.Builder(cur).bearing(0.0).build()
+                        ),
+                        350,
+                    )
+                }
+            }
+        }
+        onDispose { }
+    }
+
     // 3D terrain: tilt the camera so the DEM relief (baked into the
     // style JSON via injectTerrain) renders dimensionally. 0° = flat
     // top-down 2D; 55° = the dimensional tactical view. Animated so the
