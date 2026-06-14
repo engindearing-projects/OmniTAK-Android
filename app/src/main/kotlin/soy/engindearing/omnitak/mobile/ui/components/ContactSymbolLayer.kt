@@ -25,6 +25,7 @@ import org.maplibre.android.style.sources.GeoJsonSource
 import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.symbology.MilStdIconCache
 import soy.engindearing.omnitak.mobile.data.symbology.MilStdIconService
+import soy.engindearing.omnitak.mobile.data.symbology.TakIconRegistry
 
 /**
  * Experimental GeoJSON-source-driven contacts layer. Holds a single
@@ -75,6 +76,12 @@ class ContactSymbolLayer {
         const val PROP_CALLSIGN = "callsign"
         const val PROP_AFFILIATION = "affiliation"
         const val PROP_TYPE = "cotType"
+        // Fully-resolved MapLibre image name for this feature. Either
+        // `milstd-<sidc>` (MIL-STD-2525 path) or a TAK-icon-suite id
+        // (`takicon-spot-…`) when the contact resolves to a bundled iconset
+        // — issue #98. The symbol layer reads icon-image straight off this so
+        // the two symbol families coexist without colliding.
+        const val PROP_IMAGE = "iconImage"
 
         // Pixel size the cache rasterises at. 64 matches the legacy
         // Marker path and is the canonical milsymbol size.
@@ -103,7 +110,10 @@ class ContactSymbolLayer {
         style.addSource(source)
 
         val symbolLayer = SymbolLayer(SYMBOL_LAYER_ID, SOURCE_ID).withProperties(
-            iconImage(Expression.concat(Expression.literal(ICON_IMAGE_PREFIX), Expression.get(PROP_SIDC))),
+            // Per-feature resolved image name (MIL-STD `milstd-<sidc>` or a TAK
+            // icon-suite id). Computed in [featureJson] so the iconset-path
+            // branch (#98) and the SIDC branch share one rendering pass.
+            iconImage(Expression.get(PROP_IMAGE)),
             // Slight visual scale-down so the 64 px raster reads as a
             // map marker, not a sticker. Matches the legacy MarkerOptions
             // sizing on the Annotation path.
@@ -154,20 +164,50 @@ class ContactSymbolLayer {
             return 0
         }
 
-        // First pass: make sure every SIDC referenced by the
-        // FeatureCollection has its image registered. Skip rows
-        // with bad coordinates.
+        // First pass: make sure every image referenced by the
+        // FeatureCollection has been registered. Skip rows with bad
+        // coordinates. Issue #98 — a contact carrying a TAK-suite iconset
+        // (Spot Map today; Markers/Google when a clean pack lands) resolves to
+        // a bundled icon FIRST; everything else falls back to MIL-STD-2525.
         var newlyRegistered = 0
         val features = JSONArray()
         for (c in contacts) {
             if (c.lat.isNaN() || c.lon.isNaN()) continue
             val sidc = MilStdIconService.getSidc(c.type)
-            if (registerSidcImage(style, context, sidc)) newlyRegistered++
-            features.put(featureJson(c, sidc))
+            val takImageId = registerTakIconImage(style, context, c)
+            if (takImageId == null && registerSidcImage(style, context, sidc)) {
+                newlyRegistered++
+            }
+            val imageName = takImageId ?: (ICON_IMAGE_PREFIX + sidc)
+            features.put(featureJson(c, sidc, imageName))
         }
 
         GeoJsonLayerFeeder.push(style, SOURCE_ID, features)
         return newlyRegistered
+    }
+
+    /**
+     * Issue #98 — if [c] resolves to a bundled TAK icon-suite glyph (Spot Map
+     * via `<usericon iconsetpath>` or the `b-m-p-s-m` CoT type), rasterise +
+     * register it and return its style image id. Returns null when no TAK-suite
+     * icon applies, so the caller falls back to the MIL-STD path. The
+     * `iconsetPath` is consulted FIRST, before any SIDC lookup — exactly the
+     * resolution order ATAK / iTAK use, and the gap kymyura reported.
+     */
+    private fun registerTakIconImage(style: Style, context: Context, c: CoTEvent): String? {
+        if (!TakIconRegistry.handles(c.type, c.iconsetPath)) return null
+        val argb = c.colorArgb?.let { TakIconRegistry.normalizeArgb(it) }
+        val imageId = TakIconRegistry.styleImageId(c.type, c.iconsetPath, argb) ?: return null
+        if (imageId in registeredSidcs) return imageId
+        val bitmap = TakIconRegistry.resolveBitmap(
+            cotType = c.type,
+            iconsetPath = c.iconsetPath,
+            argb = argb,
+            sizePx = ICON_PIXEL_SIZE,
+        ) ?: return null
+        style.addImage(imageId, bitmap)
+        registeredSidcs.add(imageId)
+        return imageId
     }
 
     /**
@@ -199,7 +239,7 @@ class ContactSymbolLayer {
         return MilStdIconService.getDefinitionBySidc(sidc)?.value ?: "a-u-A"
     }
 
-    private fun featureJson(c: CoTEvent, sidc: String): JSONObject {
+    private fun featureJson(c: CoTEvent, sidc: String, imageName: String): JSONObject {
         return JSONObject().apply {
             put("type", "Feature")
             put("geometry", JSONObject().apply {
@@ -212,6 +252,7 @@ class ContactSymbolLayer {
             put("properties", JSONObject().apply {
                 put(PROP_UID, c.uid)
                 put(PROP_SIDC, sidc)
+                put(PROP_IMAGE, imageName)
                 put(PROP_CALLSIGN, c.callsign ?: c.uid)
                 put(PROP_AFFILIATION, c.affiliation.code.toString())
                 put(PROP_TYPE, c.type)

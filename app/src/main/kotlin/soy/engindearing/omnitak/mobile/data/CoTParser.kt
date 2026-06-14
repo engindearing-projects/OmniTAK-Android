@@ -38,6 +38,7 @@ object CoTParser {
         var teamRole: String? = null
         var remarks: String? = null
         var iconsetPath: String? = null
+        var colorArgb: Int? = null
 
         var ev = parser.eventType
         while (ev != XmlPullParser.END_DOCUMENT) {
@@ -74,6 +75,12 @@ object CoTParser {
                     "usericon" -> {
                         iconsetPath = parser.getAttributeValue(null, "iconsetpath") ?: iconsetPath
                     }
+                    // Marker colour — Spot Map points carry their swatch here
+                    // (<color argb="-65536"/>); the TAK icon registry tints the
+                    // dot from it so received spots match the sender's colour.
+                    "color" -> {
+                        colorArgb = parser.getAttributeValue(null, "argb")?.toIntOrNull() ?: colorArgb
+                    }
                 }
             }
             ev = parser.next()
@@ -96,6 +103,7 @@ object CoTParser {
             teamName = teamName,
             teamRole = teamRole,
             iconsetPath = iconsetPath,
+            colorArgb = colorArgb,
         )
     }.getOrNull()
 }

@@ -76,6 +76,11 @@ data class CoTEvent(
     // it fall back to the friendly-ground-installation default that
     // [type] declares. See `FemaIconCatalog` and #29 / iOS PR for #13.
     val iconsetPath: String? = null,
+    /** Signed ARGB from the CoT `<color argb="…"/>` element. Spot Map markers
+     *  carry their swatch here (the colour rides `<color>`, not `type`), so the
+     *  TAK icon registry can tint a received spot dot to match the sender. Null
+     *  when the event carried no `<color>`. */
+    val colorArgb: Int? = null,
     /** TAK team name from `<__group name="Red|Orange|…"/>`. Null when absent. */
     val teamName: String? = null,
     /** TAK team role from `<__group role="Team Member|…"/>`. Null when absent. */

@@ -64,9 +64,14 @@ object CotBuilders {
             append("/>")
             // ATAK / iTAK render FEMA markers (and any custom-glyph marker)
             // off the `iconsetpath` detail — emit it when present so peers
-            // with the catalog show the right symbol (#29).
+            // with the catalog show the right symbol (#29). Spot Map points
+            // (#98) additionally carry their swatch in <color argb>; ATAK reads
+            // the dot colour from there, not the CoT type.
             event.iconsetPath?.takeIf { it.isNotBlank() }?.let {
                 append("<usericon iconsetpath=\"").append(CotXml.escape(it)).append("\"/>")
+            }
+            event.colorArgb?.let {
+                append("<color argb=\"").append(it).append("\"/>")
             }
             if (event.remarks.isNotBlank()) {
                 append("<remarks>").append(CotXml.escape(event.remarks)).append("</remarks>")

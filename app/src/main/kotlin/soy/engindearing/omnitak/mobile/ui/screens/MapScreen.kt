@@ -1,6 +1,5 @@
 package soy.engindearing.omnitak.mobile.ui.screens
 
-import android.view.WindowManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -400,32 +399,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         }
     }
 
-    // Issue #97 — keep-screen-on. The original fix cast LocalContext.current
-    // directly to Activity, but under enableEdgeToEdge + MaterialTheme that
-    // context is a ContextThemeWrapper, so the cast returned null and the
-    // window flag was never applied — the screen kept sleeping (the reported
-    // bug). Walk the ContextWrapper chain to the real Activity, and also set
-    // keepScreenOn on the decor view as a belt-and-suspenders path that does
-    // not depend on resolving the Activity at all. The DisposableEffect
-    // re-runs whenever keepScreenOn flips so the change takes effect at once.
-    val context = LocalContext.current
-    DisposableEffect(userPrefs.keepScreenOn) {
-        val activity = context.findActivity()
-        val window = activity?.window
-        if (userPrefs.keepScreenOn) {
-            window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            window?.decorView?.keepScreenOn = true
-        } else {
-            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            window?.decorView?.keepScreenOn = false
-        }
-        onDispose {
-            // Remove the flag when the map screen leaves composition
-            // (e.g. navigating to Settings) so the screen can sleep normally.
-            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            window?.decorView?.keepScreenOn = false
-        }
-    }
+    // Issue #97 — keep-screen-on now lives at the AppNav / single-Activity
+    // scope (see AppNav.kt) so the screen stays awake on every destination
+    // while OmniTAK is foreground, not just while the map tab is composed.
+    // Scoping it here previously tore the flag down the moment the operator
+    // opened another tab — the exact reported failure mode.
 
     Box(
         modifier = Modifier
@@ -1551,6 +1529,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             initialRemarks = editingMarker?.remarks ?: "",
             // Issue #98 — re-open an existing marker on the symbol it carries.
             initialCotType = editingMarker?.type,
+            initialIconsetPath = editingMarker?.iconsetPath,
             editing = editingMarker != null,
             onSave = { result ->
                 val ll = markerSheetLatLng
@@ -1568,6 +1547,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         hae = result.altitudeMeters ?: 0.0,
                         callsign = result.callsign,
                         remarks = result.remarks,
+                        // Issue #98 — Spot Map (or other TAK-suite) glyph. The
+                        // iconset path + colour ride the wire so peers render
+                        // the identical dot; null for MIL-STD picks.
+                        iconsetPath = result.iconsetPath,
+                        colorArgb = result.argbHex?.toLong(16)?.toInt(),
                     )
                     app.contactStore.ingest(event)
                     val verb = if (editingMarker != null) Loc.t("marker.verb.updated")
@@ -1993,16 +1977,4 @@ private fun MapControlFab(
     ) {
         Icon(icon, contentDescription = contentDescription, tint = tint)
     }
-}
-
-/**
- * Issue #97 — resolve the hosting [android.app.Activity] from a Compose
- * [android.content.Context], which under enableEdgeToEdge + MaterialTheme is
- * a ContextThemeWrapper rather than the Activity itself. Walks the
- * ContextWrapper chain; null if none is an Activity (e.g. preview / test).
- */
-private tailrec fun android.content.Context.findActivity(): android.app.Activity? = when (this) {
-    is android.app.Activity -> this
-    is android.content.ContextWrapper -> baseContext.findActivity()
-    else -> null
 }

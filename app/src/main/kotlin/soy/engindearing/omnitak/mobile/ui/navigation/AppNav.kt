@@ -1,9 +1,11 @@
 package soy.engindearing.omnitak.mobile.ui.navigation
 
+import android.view.WindowManager
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -49,6 +51,40 @@ fun AppNav() {
     val app = LocalContext.current.applicationContext as OmniTAKApp
     val prefs by app.userPrefsStore.prefs.collectAsState(initial = UserPrefs())
     val scope = rememberCoroutineScope()
+
+    // Issue #97 — keep-screen-on, hoisted to the single-Activity / NavHost
+    // scope. AppNav hosts every destination, so applying FLAG_KEEP_SCREEN_ON
+    // here keeps the screen awake no matter which tab is showing (map, chat,
+    // ONVIF camera, mesh topology, …) for as long as OmniTAK is foreground —
+    // the acceptance bar in #97. A previous attempt scoped this to MapScreen's
+    // own DisposableEffect, so the flag was torn down the instant the operator
+    // left the map (the reported failure mode, relocated). FLAG_KEEP_SCREEN_ON
+    // is a window flag that the framework stops honoring while backgrounded, so
+    // foreground-only behavior is preserved for free; no WakeLock needed.
+    //
+    // The Compose context under enableEdgeToEdge + MaterialTheme is a
+    // ContextThemeWrapper, not the Activity, so walk the ContextWrapper chain
+    // to the real window. `decorView.keepScreenOn` is a belt-and-suspenders
+    // path that does not depend on resolving the Activity at all.
+    val keepScreenOn = prefs.keepScreenOn
+    val appNavContext = LocalContext.current
+    DisposableEffect(keepScreenOn) {
+        val window = appNavContext.findActivity()?.window
+        if (keepScreenOn) {
+            window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            window?.decorView?.keepScreenOn = true
+        } else {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            window?.decorView?.keepScreenOn = false
+        }
+        onDispose {
+            // Only fires when AppNav itself leaves composition (process /
+            // Activity teardown) — not on tab changes — so the flag persists
+            // across navigation while the setting is on.
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            window?.decorView?.keepScreenOn = false
+        }
+    }
 
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
@@ -376,4 +412,16 @@ fun AppNav() {
             onDismiss = { app.pendingProfileImport.value = null },
         )
     }
+}
+
+/**
+ * Issue #97 — resolve the hosting [android.app.Activity] from a Compose
+ * [android.content.Context]. Under enableEdgeToEdge + MaterialTheme that
+ * context is a ContextThemeWrapper rather than the Activity itself, so walk
+ * the ContextWrapper chain. Null if none is an Activity (e.g. preview / test).
+ */
+private tailrec fun android.content.Context.findActivity(): android.app.Activity? = when (this) {
+    is android.app.Activity -> this
+    is android.content.ContextWrapper -> baseContext.findActivity()
+    else -> null
 }

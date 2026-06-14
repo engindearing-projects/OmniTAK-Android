@@ -44,7 +44,18 @@
   window.addEventListener('resize',_fitViewport);
   document.addEventListener('DOMContentLoaded',_fitViewport);
   function _color(a){return a==='f'?'#4ADE80':a==='h'?'#F44336':a==='n'?'#FFC107':'#B39DDB'}
-  function _billboard(a,k,sidc){
+  // #98 — ATAK Spot Map dot. When an entity carries a `spot` hex colour (from a
+  // <usericon iconsetpath="COT_MAPPING_SPOTMAP/…"> marker) render a filled,
+  // outlined dot instead of the MIL-STD glyph, matching the 2D MapLibre +
+  // native picker rendering so the globe stays in parity.
+  function _spotDot(hex){const sk='spot|'+hex;if(_state.billboardCache.has(sk))return _state.billboardCache.get(sk);
+    const c=document.createElement('canvas');c.width=56;c.height=56;const ctx=c.getContext('2d');
+    ctx.shadowColor='rgba(0,0,0,0.5)';ctx.shadowBlur=4;ctx.fillStyle=hex;ctx.beginPath();ctx.arc(28,28,18,0,Math.PI*2);ctx.fill();
+    ctx.shadowBlur=0;const lum=_luma(hex);ctx.lineWidth=3;ctx.strokeStyle=lum>0.6?'#000':'#fff';ctx.beginPath();ctx.arc(28,28,18,0,Math.PI*2);ctx.stroke();
+    const url=c.toDataURL('image/png');_state.billboardCache.set(sk,url);return url;}
+  function _luma(hex){const h=hex.replace('#','');if(h.length<6)return 1;const r=parseInt(h.substr(0,2),16)/255,g=parseInt(h.substr(2,2),16)/255,b=parseInt(h.substr(4,2),16)/255;return 0.299*r+0.587*g+0.114*b;}
+  function _billboard(a,k,sidc,spot){
+    if(spot&&k!=='aircraft'){return _spotDot(spot);}
     if(sidc&&window.ms&&k!=='aircraft'){const sk='sidc|'+sidc;if(_state.billboardCache.has(sk))return _state.billboardCache.get(sk);
       try{const sym=new window.ms.Symbol(sidc,{size:32,infoBackground:'transparent',infoColor:'white'});const url=sym.asCanvas().toDataURL('image/png');_state.billboardCache.set(sk,url);return url;}catch(e){console.warn('milsymbol failed for',sidc,e);}}
     const key=a+'|'+(k||'');if(_state.billboardCache.has(key))return _state.billboardCache.get(key);
@@ -125,10 +136,10 @@
       const rot=(typeof e.heading==='number')?-e.heading*Math.PI/180:0;
       let entity=_state.entities.get(e.uid);
       if(!entity){entity=v.entities.add({id:e.uid,position:pos,
-        billboard:{image:_billboard(e.affiliation||'u',e.kind,e.sidc),verticalOrigin:Cesium.VerticalOrigin.CENTER,heightReference:useGround?Cesium.HeightReference.CLAMP_TO_GROUND:Cesium.HeightReference.NONE,disableDepthTestDistance:Number.POSITIVE_INFINITY,scale:e.kind==='aircraft'?1.5:0.7,rotation:rot},
+        billboard:{image:_billboard(e.affiliation||'u',e.kind,e.sidc,e.spot),verticalOrigin:Cesium.VerticalOrigin.CENTER,heightReference:useGround?Cesium.HeightReference.CLAMP_TO_GROUND:Cesium.HeightReference.NONE,disableDepthTestDistance:Number.POSITIVE_INFINITY,scale:e.kind==='aircraft'?1.5:0.7,rotation:rot},
         label:e.callsign?{text:e.callsign,font:'12px -apple-system, sans-serif',fillColor:Cesium.Color.WHITE,outlineColor:Cesium.Color.BLACK,outlineWidth:2,style:Cesium.LabelStyle.FILL_AND_OUTLINE,pixelOffset:new Cesium.Cartesian2(0,-32),heightReference:useGround?Cesium.HeightReference.CLAMP_TO_GROUND:Cesium.HeightReference.NONE,disableDepthTestDistance:Number.POSITIVE_INFINITY}:undefined,
       });_state.entities.set(e.uid,entity);}
-      else{entity.position=pos;entity.billboard.image=_billboard(e.affiliation||'u',e.kind,e.sidc);entity.billboard.heightReference=useGround?Cesium.HeightReference.CLAMP_TO_GROUND:Cesium.HeightReference.NONE;entity.billboard.rotation=rot;if(entity.label&&e.callsign)entity.label.text=e.callsign;}
+      else{entity.position=pos;entity.billboard.image=_billboard(e.affiliation||'u',e.kind,e.sidc,e.spot);entity.billboard.heightReference=useGround?Cesium.HeightReference.CLAMP_TO_GROUND:Cesium.HeightReference.NONE;entity.billboard.rotation=rot;if(entity.label&&e.callsign)entity.label.text=e.callsign;}
     },
     setEntities(arg){const list=_parse(arg);if(!Array.isArray(list))return;const seen=new Set();
       for(const e of list){if(e&&e.uid){seen.add(e.uid);window.OmniBridge.upsertEntity(e);}}

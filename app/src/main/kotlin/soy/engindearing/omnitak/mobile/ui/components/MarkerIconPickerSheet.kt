@@ -3,6 +3,9 @@ package soy.engindearing.omnitak.mobile.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -48,32 +51,48 @@ import soy.engindearing.omnitak.mobile.data.symbology.Affiliation
 import soy.engindearing.omnitak.mobile.data.symbology.CoTTypeDefinition
 import soy.engindearing.omnitak.mobile.data.symbology.MilStdIconCache
 import soy.engindearing.omnitak.mobile.data.symbology.MilStdIconService
+import soy.engindearing.omnitak.mobile.data.symbology.TakIconRegistry
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalBackground
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalSurface
 
 /**
+ * Issue #98 — what the icon picker hands back. Either a MIL-STD-2525 symbol
+ * (carries only a CoT [type]) or a standard TAK icon-suite icon (Spot Map
+ * today; Markers/Google when a clean asset pack lands), which additionally
+ * carries the `<usericon iconsetpath>` and optional swatch [argbHex] so the
+ * placed marker round-trips byte-for-byte with ATAK / iTAK.
+ */
+data class MarkerIconChoice(
+    val cotType: String,
+    val iconsetPath: String? = null,
+    val argbHex: String? = null,
+    val label: String,
+)
+
+/**
  * Issue #98 (Phase 1) — TAK icon-suite picker.
  *
- * Modal bottom sheet that exposes the full MIL-STD-2525 catalogue
- * ([MilStdIconService.getAllDefinitions], 108 symbols loaded from
- * `assets/cot_types.json`) so the operator can pick a *specific* CoT type
- * — infantry, armor, aircraft, vessel — when placing a marker, instead of
- * being limited to a generic per-affiliation point. The chosen CoT type is
- * handed back as a raw string and flows straight into the placed
- * [soy.engindearing.omnitak.mobile.data.CoTEvent.type], so the symbol
- * renders through the same [soy.engindearing.omnitak.mobile.ui.components.ContactSymbolLayer]
- * / Cesium milsymbol path that received markers already use — closing the
- * "standard TAK icon sets … selectable when placing markers" half of #98.
+ * Modal bottom sheet exposing the standard TAK icon sets so the operator can
+ * pick a *specific* symbol when placing a marker instead of being limited to a
+ * generic per-affiliation point:
+ *  - the standard **Spot Map** set (ATAK's coloured points, the most common
+ *    script-pushed iconset) — selecting one emits the canonical `b-m-p-s-m`
+ *    CoT type + `COT_MAPPING_SPOTMAP/{color}` `usericon` path so peers render
+ *    the identical dot; and
+ *  - the full **MIL-STD-2525** catalogue ([MilStdIconService.getAllDefinitions],
+ *    108 symbols from `assets/cot_types.json`) — infantry, armor, aircraft, …
+ *
+ * The choice is handed back as a [MarkerIconChoice] and flows into the placed
+ * [soy.engindearing.omnitak.mobile.data.CoTEvent], so the symbol renders
+ * through the same [ContactSymbolLayer] / Cesium path received markers use —
+ * closing the "standard TAK icon sets … selectable when placing markers" half
+ * of #98. (Markers / Google bitmap packs are modeled in [TakIconRegistry] but
+ * not bundled — GPL asset blocker, see that file.)
  *
  * Modal-only (never compresses the full-screen map, per
  * `feedback_omnitak_fullscreen_map`). Mirrors the FEMA palette
- * ([FemaMarkerPaletteSheet]) styling so the two marker pickers feel like
- * one family.
- *
- * The catalogue is grouped by affiliation. A free-text filter narrows by
- * label or CoT type so the long list stays usable one-handed. Each tile
- * rasterises its SVG via [MilStdIconCache] off the main thread.
+ * ([FemaMarkerPaletteSheet]) styling so the marker pickers feel like one family.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -81,7 +100,10 @@ fun MarkerIconPickerSheet(
     visible: Boolean,
     /** Highlighted on open so the operator sees their current choice. */
     selectedCotType: String?,
-    onPick: (CoTTypeDefinition) -> Unit,
+    /** The marker's current iconset path, so a Spot Map pick stays highlighted
+     *  on re-open even though several spot colours share one CoT type. */
+    selectedIconsetPath: String? = null,
+    onPick: (MarkerIconChoice) -> Unit,
     onDismiss: () -> Unit,
 ) {
     if (!visible) return
@@ -119,17 +141,52 @@ fun MarkerIconPickerSheet(
                 style = MaterialTheme.typography.titleLarge,
             )
             Text(
+                "Pick the symbol this marker should use. Sent over CoT so peers see the same icon.",
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+                fontSize = 11.sp,
+                modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
+            )
+
+            // ── Spot Map set ──────────────────────────────────────────────
+            // ATAK's coloured points — the most common script-pushed iconset.
+            // A horizontal swatch row keeps it compact above the MIL-STD grid.
+            Text(
+                "SPOT MAP",
+                color = TacticalAccent,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(top = 6.dp, bottom = 10.dp),
+            ) {
+                for (spot in TakIconRegistry.selectableSpotIcons) {
+                    SpotSwatch(
+                        spot = spot,
+                        selected = selectedIconsetPath?.equals(spot.iconsetPath, ignoreCase = true) == true,
+                        onClick = {
+                            onPick(
+                                MarkerIconChoice(
+                                    cotType = TakIconRegistry.SpotIcon.COT_TYPE,
+                                    iconsetPath = spot.iconsetPath,
+                                    argbHex = spot.argbHex,
+                                    label = "Spot ${spot.displayName}",
+                                ),
+                            )
+                        },
+                    )
+                }
+            }
+
+            Text(
                 "MIL-STD-2525 · ${all.size} SYMBOLS",
                 color = TacticalAccent,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-            Text(
-                "Pick the symbol this marker should use. Sent over CoT so peers see the same icon.",
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
-                fontSize = 11.sp,
-                modifier = Modifier.padding(top = 2.dp, bottom = 8.dp),
+                modifier = Modifier.padding(bottom = 6.dp),
             )
 
             OutlinedTextField(
@@ -165,14 +222,60 @@ fun MarkerIconPickerSheet(
                     items(filtered, key = { it.value }) { def ->
                         IconTile(
                             def = def,
-                            selected = def.value == selectedCotType,
-                            onClick = { onPick(def) },
+                            // A MIL-STD tile is the active choice only when the
+                            // marker carries no iconset path (a Spot Map pick
+                            // shares the b-m-p-s-m type but owns the highlight).
+                            selected = selectedIconsetPath == null && def.value == selectedCotType,
+                            onClick = {
+                                onPick(
+                                    MarkerIconChoice(cotType = def.value, label = def.label),
+                                )
+                            },
                         )
                     }
                 }
             }
             Spacer(Modifier.height(16.dp))
         }
+    }
+}
+
+/** A single Spot Map colour swatch — a filled dot the operator taps to place
+ *  an ATAK spot point. Matches the runtime-rendered dot in [TakIconRegistry]. */
+@Composable
+private fun SpotSwatch(
+    spot: TakIconRegistry.SpotIcon,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (selected) TacticalAccent.copy(alpha = 0.18f) else TacticalSurface)
+            .border(
+                width = if (selected) 2.dp else 1.dp,
+                color = if (selected) TacticalAccent else spot.color.copy(alpha = 0.5f),
+                shape = RoundedCornerShape(10.dp),
+            )
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp, horizontal = 8.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .clip(CircleShape)
+                .background(spot.color)
+                .border(1.dp, Color.Black.copy(alpha = 0.4f), CircleShape),
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            spot.displayName,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
+            fontSize = 9.sp,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+        )
     }
 }
 
