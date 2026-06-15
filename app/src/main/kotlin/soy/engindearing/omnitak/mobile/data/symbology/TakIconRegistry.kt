@@ -15,6 +15,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import soy.engindearing.omnitak.mobile.R
+import soy.engindearing.omnitak.mobile.data.FemaIconCatalog
 import java.io.ByteArrayOutputStream
 
 /**
@@ -80,6 +81,13 @@ object TakIconRegistry {
          *  from ATAK's iconsets DB. Bundled — Material-Symbols (Apache-2.0)
          *  vector drawables, see [GoogleIcon]. */
         GOOGLE("f7f71666-8b28-4b57-9fbb-e38e61d33b79", "Google", bundled = true),
+
+        /** FEMA / ICS marker catalog from #29. Path prefix `COT_MAPPING_FEMA`.
+         *  Bundled — rendered at runtime as category-accented dots. Proper
+         *  per-glyph SVG artwork is tracked in #46; this entry wires up the
+         *  resolution path so inbound FEMA markers are handled by the TAK-suite
+         *  path rather than falling through to the MIL-STD-2525 default. */
+        FEMA("COT_MAPPING_FEMA", "FEMA/ICS", bundled = true),
     }
 
     /**
@@ -259,6 +267,19 @@ object TakIconRegistry {
     }
 
     /**
+     * #46 — Resolve a [FemaIconCatalog.FemaIcon] from a `usericon` iconset path.
+     * Returns null when the path is not a `COT_MAPPING_FEMA/…` path.
+     *
+     * NOTE on artwork: this currently renders FEMA markers as a category-accented
+     * colored dot (same runtime approach as Spot Map). Per-glyph SVG artwork for
+     * each of the 12 FEMA kinds needs to be sourced and dropped into
+     * `app/src/main/assets/fema/COT_MAPPING_FEMA/<category>/<kind>.svg`, then
+     * this method updated to rasterise from the asset bundle. See #46.
+     */
+    fun resolveFemaIcon(iconsetPath: String?): FemaIconCatalog.FemaIcon? =
+        if (iconsetPath != null) FemaIconCatalog.iconByIconsetPath(iconsetPath) else null
+
+    /**
      * Resolve a renderable bitmap for a marker. Returns null when no TAK-suite
      * icon applies, so the caller falls back to MIL-STD-2525 affiliation art.
      *
@@ -290,7 +311,15 @@ object TakIconRegistry {
             val color = argb ?: SpotIcon.WHITE.argb
             return spotDot(color, sizePx, "spot|type|$color")
         }
-        // 3. Markers / Google bitmap packs — Material-Symbols (Apache-2.0)
+        // 3. FEMA / ICS catalog — rendered as a category-accented coloured dot.
+        //    No Context needed (runtime-rendered like Spot Map). TODO #46: once
+        //    per-glyph SVG assets land in app/src/main/assets/fema/, switch to
+        //    asset rasterisation here and remove the dot fallback.
+        resolveFemaIcon(iconsetPath)?.let { femaIcon ->
+            val accentArgb = femaIcon.category.accentArgb
+            return spotDot(accentArgb, sizePx, "fema|${femaIcon.kind.raw}|$sizePx")
+        }
+        // 4. Markers / Google bitmap packs — Material-Symbols (Apache-2.0)
         //    vector glyphs on a rounded badge. Needs a Context to decode.
         if (context != null) {
             resolveBadgeIcon(iconsetPath)?.let { return badge(context, it, sizePx) }
@@ -306,7 +335,8 @@ object TakIconRegistry {
     fun handles(cotType: String?, iconsetPath: String?): Boolean =
         (iconsetPath != null && SpotIcon.fromIconsetPath(iconsetPath) != null) ||
             cotType == SpotIcon.COT_TYPE ||
-            resolveBadgeIcon(iconsetPath) != null
+            resolveBadgeIcon(iconsetPath) != null ||
+            resolveFemaIcon(iconsetPath) != null
 
     /** Convenience: the rendered glyph for a selectable Spot Map icon (picker
      *  swatches, current-symbol rows). */
@@ -328,6 +358,9 @@ object TakIconRegistry {
                 return "takicon-spot-${argb ?: spot.argb}"
             }
             resolveBadgeIcon(iconsetPath)?.let { return "takicon-${it.pack.name.lowercase()}-${it.token}" }
+            // #46/#47: FEMA iconset paths get a stable per-kind key so each of the
+            // 12 kinds is registered as a distinct image in the MapLibre style.
+            resolveFemaIcon(iconsetPath)?.let { return "takicon-fema-${it.kind.raw}" }
         }
         if (cotType == SpotIcon.COT_TYPE) return "takicon-spot-${argb ?: SpotIcon.WHITE.argb}"
         return null

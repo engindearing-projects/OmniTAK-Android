@@ -46,12 +46,12 @@ import androidx.compose.ui.graphics.vector.ImageVector
 object FemaIconCatalog {
 
     /** SAR / incident-command grouping shown as palette sections. */
-    enum class Category(val displayName: String, val accent: Color) {
-        INCIDENT_COMMAND("Command", Color(0xFFFF9800)),  // orange
-        MEDICAL("Medical", Color(0xFFF44336)),           // red
-        AVIATION("Aviation", Color(0xFF00BCD4)),         // cyan
-        VEHICLES("Vehicles", Color(0xFFFFEB3B)),         // yellow
-        SUPPORT("Support", Color(0xFF4CAF50)),           // green
+    enum class Category(val displayName: String, val accent: Color, val accentArgb: Int) {
+        INCIDENT_COMMAND("Command", Color(0xFFFF9800), 0xFFFF9800.toInt()),  // orange
+        MEDICAL("Medical", Color(0xFFF44336), 0xFFF44336.toInt()),           // red
+        AVIATION("Aviation", Color(0xFF00BCD4), 0xFF00BCD4.toInt()),         // cyan
+        VEHICLES("Vehicles", Color(0xFFFFEB3B), 0xFFFFEB3B.toInt()),         // yellow
+        SUPPORT("Support", Color(0xFF4CAF50), 0xFF4CAF50.toInt()),           // green
     }
 
     /**
