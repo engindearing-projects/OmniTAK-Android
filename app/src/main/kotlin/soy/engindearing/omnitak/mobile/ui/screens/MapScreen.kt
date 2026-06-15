@@ -148,6 +148,14 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     // doesn't have to know about FEMA-specific fields.
     var femaPaletteLatLng by remember { mutableStateOf<LatLng?>(null) }
     var editingMarker by remember { mutableStateOf<CoTEvent?>(null) }
+    var selfMarkerEditOpen by remember { mutableStateOf(false) }
+    var manualSelfFix by remember { mutableStateOf<Pair<Double, Double>?>(null) }
+    val effectiveSelfFix: soy.engindearing.omnitak.mobile.data.SelfFix? = manualSelfFix?.let { (lat, lon) ->
+        soy.engindearing.omnitak.mobile.data.SelfFix(
+            lat = lat, lon = lon, altitudeM = selfFix?.altitudeM ?: 0.0,
+            speedKmh = 0.0, accuracyM = Float.NaN, timeMs = System.currentTimeMillis()
+        )
+    } ?: selfFix
     var recenterTick by remember { mutableStateOf(0) }
     var zoomInTick by remember { mutableStateOf(0) }
     var zoomOutTick by remember { mutableStateOf(0) }
@@ -571,11 +579,13 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             followMeActive = followMeActive,
             useMilStdSelfSymbol = userPrefs.useMilStdSelfSymbol,
             selfTeamColor = userPrefs.team,
+            selfMarkerTriangle = userPrefs.selfMarkerTriangle,
             // Issue #75 — feeds the puck so a restored fix renders
             // immediately on cold start (dimmed when stale) and the
             // forced foreground-resume fix lands without waiting on the
             // LocationComponent's internal engine.
-            selfFix = selfFix,
+            selfFix = effectiveSelfFix,
+            onSelfMarkerTap = { selfMarkerEditOpen = true },
             onStyleReady = { _, style ->
                 soy.engindearing.omnitak.mobile.ui.components.KmlOverlayRenderer
                     .apply(style, kmlOverlays, app.kmlOverlayStore)
@@ -1200,7 +1210,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         // (LocationProvider). Until a fix arrives we show "Acquiring
         // fix…" so users in Germany don't see San Francisco (issue #10).
         if (callsignCardVisible) {
-            val fix = selfFix
+            val fix = effectiveSelfFix
             SelfPositionCard(
                 callsign = userPrefs.callsign,
                 coordinateLabel = if (fix != null) {
@@ -1223,6 +1233,31 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     .align(Alignment.BottomEnd)
                     .padding(end = 12.dp, bottom = 96.dp),
             )
+        }
+
+        if (manualSelfFix != null) {
+            androidx.compose.foundation.layout.Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = 48.dp),
+                contentAlignment = Alignment.TopCenter,
+            ) {
+                androidx.compose.material3.Surface(
+                    modifier = Modifier
+                        .clickable { manualSelfFix = null }
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(20.dp),
+                    color = soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent.copy(alpha = 0.15f),
+                    tonalElevation = 2.dp,
+                ) {
+                    androidx.compose.material3.Text(
+                        "Manual position · tap to resume GPS",
+                        color = soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                }
+            }
         }
 
         ToolsDrawer(
@@ -1530,6 +1565,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             // Issue #98 — re-open an existing marker on the symbol it carries.
             initialCotType = editingMarker?.type,
             initialIconsetPath = editingMarker?.iconsetPath,
+            initialCourseHeading = editingMarker?.courseHeading,
             editing = editingMarker != null,
             onSave = { result ->
                 val ll = markerSheetLatLng
@@ -1552,6 +1588,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         // the identical dot; null for MIL-STD picks.
                         iconsetPath = result.iconsetPath,
                         colorArgb = result.argbHex?.toLong(16)?.toInt(),
+                        courseHeading = result.courseHeading ?: editingMarker?.courseHeading,
                     )
                     app.contactStore.ingest(event)
                     val verb = if (editingMarker != null) Loc.t("marker.verb.updated")
@@ -1614,6 +1651,29 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 editingMarker = null
             },
         )
+
+        if (selfMarkerEditOpen) {
+            MarkerEditSheet(
+                visible = true,
+                latLng = effectiveSelfFix?.let { org.maplibre.android.geometry.LatLng(it.lat, it.lon) },
+                initialCallsign = userPrefs.callsign,
+                initialAffiliation = soy.engindearing.omnitak.mobile.data.CoTAffiliation.FRIEND,
+                editing = true,
+                editingSelf = true,
+                initialSelfLat = effectiveSelfFix?.lat,
+                initialSelfLon = effectiveSelfFix?.lon,
+                onSave = { result ->
+                    prefScope.launch { app.userPrefsStore.update { it.copy(callsign = result.callsign) } }
+                    val newLat = result.selfLatOverride
+                    val newLon = result.selfLonOverride
+                    if (newLat != null && newLon != null) {
+                        manualSelfFix = newLat to newLon
+                    }
+                    selfMarkerEditOpen = false
+                },
+                onDismiss = { selfMarkerEditOpen = false },
+            )
+        }
 
         // "Go to Coordinate" — TWD97 (7+7 / 5+5) / MGRS / Lat-Lon entry.
         if (coordEntryOpen) {

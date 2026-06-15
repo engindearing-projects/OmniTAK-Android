@@ -83,6 +83,8 @@ data class CoTEvent(
     val colorArgb: Int? = null,
     /** TAK team name from `<__group name="Red|Orange|…"/>`. Null when absent. */
     val teamName: String? = null,
+    /** Course heading in degrees (0–360) from `<track course="…"/>`. Null when absent. */
+    val courseHeading: Double? = null,
     /** TAK team role from `<__group role="Team Member|…"/>`. Null when absent. */
     val teamRole: String? = null,
 ) {

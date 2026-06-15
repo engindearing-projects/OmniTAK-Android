@@ -85,6 +85,14 @@ internal object LocStrings {
         // Self position
         "settings.milStdSymbol" to "MIL-STD-2525 symbol",
         "settings.milStdSymbol.desc" to "Render your own pip as a friendly-combat ground frame (a-f-G-U-C) instead of the legacy tactical disc. Affects only the map; PPLI broadcast is unchanged.",
+        "settings.triangleSelfMarker" to "Triangle self-marker",
+        "settings.triangleSelfMarker.desc" to "Rotates with compass heading",
+        "marker.heading" to "Heading (°)",
+        "marker.editSelfPosition" to "Edit Self Position",
+        "marker.selfLat" to "Latitude",
+        "marker.selfLon" to "Longitude",
+        "map.manualPositionActive" to "Manual position active",
+        "map.tapToResumeGps" to "Tap to resume GPS",
 
         // Drone detection
         "settings.faaRemoteIdScanner" to "FAA Remote ID scanner",
@@ -198,6 +206,14 @@ internal object LocStrings {
 
         "settings.milStdSymbol" to "MIL-STD-2525 符號",
         "settings.milStdSymbol.desc" to "將您自身的標記繪製為友軍地面戰鬥框架（a-f-G-U-C），取代舊版戰術圓點。僅影響地圖；PPLI 廣播維持不變。",
+        "settings.triangleSelfMarker" to "三角形自我標記",
+        "settings.triangleSelfMarker.desc" to "隨羅盤方向旋轉",
+        "marker.heading" to "方向 (°)",
+        "marker.editSelfPosition" to "編輯自身位置",
+        "marker.selfLat" to "緯度",
+        "marker.selfLon" to "經度",
+        "map.manualPositionActive" to "手動定位啟用中",
+        "map.tapToResumeGps" to "點擊以恢復 GPS",
 
         "settings.faaRemoteIdScanner" to "FAA Remote ID 掃描器",
         "settings.faaRemoteId.desc" to "監聽附近無人機（DJI Mavic、Skydio、Autel）透過藍芽廣播的 FAA Remote ID。偵測到的無人機將以未知空域 UAS 目標顯示在地圖上。可接收藍芽廣播的 Remote ID 子集；WiFi 訊號廣播需搭配 gy6 感測器。藍芽掃描會消耗電池。",

@@ -39,6 +39,7 @@ object CoTParser {
         var remarks: String? = null
         var iconsetPath: String? = null
         var colorArgb: Int? = null
+        var courseHeading: Double? = null
 
         var ev = parser.eventType
         while (ev != XmlPullParser.END_DOCUMENT) {
@@ -81,6 +82,10 @@ object CoTParser {
                     "color" -> {
                         colorArgb = parser.getAttributeValue(null, "argb")?.toIntOrNull() ?: colorArgb
                     }
+                    // Course heading from <track course="270.0" speed="0.0"/>
+                    "track" -> {
+                        courseHeading = parser.getAttributeValue(null, "course")?.toDoubleOrNull() ?: courseHeading
+                    }
                 }
             }
             ev = parser.next()
@@ -104,6 +109,7 @@ object CoTParser {
             teamRole = teamRole,
             iconsetPath = iconsetPath,
             colorArgb = colorArgb,
+            courseHeading = courseHeading,
         )
     }.getOrNull()
 }

@@ -71,6 +71,12 @@ data class MarkerEditResult(
     /** 8-hex opaque ARGB for the CoT `<color argb>` element (Spot Map swatch).
      *  Null for MIL-STD picks, which carry their look in the symbol itself. */
     val argbHex: String? = null,
+    /** Course heading in degrees (0–360), or null if not set. */
+    val courseHeading: Double? = null,
+    /** When editingSelf, the new latitude the operator typed. */
+    val selfLatOverride: Double? = null,
+    /** When editingSelf, the new longitude the operator typed. */
+    val selfLonOverride: Double? = null,
 )
 
 /**
@@ -97,7 +103,15 @@ fun MarkerEditSheet(
     /** Issue #98 — the marker's current `usericon` iconset path (Spot Map),
      *  so an existing spot marker re-opens with its swatch highlighted. */
     initialIconsetPath: String? = null,
+    /** Current course heading in degrees for this marker. */
+    initialCourseHeading: Double? = null,
     editing: Boolean = false,
+    /** When true, shows lat/lon override fields (for self-marker repositioning). */
+    editingSelf: Boolean = false,
+    /** Initial latitude for self-position editing. */
+    initialSelfLat: Double? = null,
+    /** Initial longitude for self-position editing. */
+    initialSelfLon: Double? = null,
     onSave: (MarkerEditResult) -> Unit,
     onDelete: (() -> Unit)? = null,
     /** When non-null, renders a "Pursue with UAS" button — Map screen
@@ -135,6 +149,9 @@ fun MarkerEditSheet(
         )
     }
     var iconPickerOpen by remember { mutableStateOf(false) }
+    var headingText by remember(initialCourseHeading) { mutableStateOf(initialCourseHeading?.let { "%.0f".format(it) } ?: "") }
+    var selfLatText by remember(initialSelfLat) { mutableStateOf(initialSelfLat?.let { "%.6f".format(it) } ?: "") }
+    var selfLonText by remember(initialSelfLon) { mutableStateOf(initialSelfLon?.let { "%.6f".format(it) } ?: "") }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -257,6 +274,37 @@ fun MarkerEditSheet(
                     .height(96.dp),
             )
 
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(
+                value = headingText,
+                onValueChange = { headingText = it.filter { ch -> ch.isDigit() || ch == '.' } },
+                label = { Text("Heading (°)") },
+                singleLine = true,
+                colors = tacticalFieldColors(),
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            if (editingSelf) {
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = selfLatText,
+                    onValueChange = { selfLatText = it.filter { ch -> ch.isDigit() || ch == '.' || ch == '-' } },
+                    label = { Text("Latitude") },
+                    singleLine = true,
+                    colors = tacticalFieldColors(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = selfLonText,
+                    onValueChange = { selfLonText = it.filter { ch -> ch.isDigit() || ch == '.' || ch == '-' } },
+                    label = { Text("Longitude") },
+                    singleLine = true,
+                    colors = tacticalFieldColors(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
             Spacer(Modifier.height(24.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -283,6 +331,8 @@ fun MarkerEditSheet(
                 Spacer(Modifier.width(8.dp))
                 Button(
                     onClick = {
+                        val selfLat = selfLatText.toDoubleOrNull()
+                        val selfLon = selfLonText.toDoubleOrNull()
                         onSave(
                             MarkerEditResult(
                                 callsign = callsign.trim().ifEmpty { "Marker" },
@@ -292,6 +342,9 @@ fun MarkerEditSheet(
                                 cotType = cotType,
                                 iconsetPath = iconsetPath,
                                 argbHex = argbHex,
+                                courseHeading = headingText.toDoubleOrNull(),
+                                selfLatOverride = if (editingSelf) selfLat else null,
+                                selfLonOverride = if (editingSelf) selfLon else null,
                             )
                         )
                     },

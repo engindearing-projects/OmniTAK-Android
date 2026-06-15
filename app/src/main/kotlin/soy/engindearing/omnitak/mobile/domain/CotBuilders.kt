@@ -76,6 +76,9 @@ object CotBuilders {
             if (event.remarks.isNotBlank()) {
                 append("<remarks>").append(CotXml.escape(event.remarks)).append("</remarks>")
             }
+            event.courseHeading?.let {
+                append("<track course=\"").append(it).append("\" speed=\"0.0\"/>")
+            }
             destUids.forEach { append("<dest uid=\"").append(CotXml.escape(it)).append("\"/>") }
             append("</detail>")
         }

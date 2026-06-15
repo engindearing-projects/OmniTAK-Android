@@ -279,6 +279,29 @@ fun SettingsScreen(
                     onCheckedChange = { v -> mutate { it.copy(useMilStdSelfSymbol = v) } },
                 )
             }
+            Spacer(Modifier.height(8.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Triangle self-marker",
+                        color = MaterialTheme.colorScheme.onBackground,
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Text(
+                        "Rotates with compass heading",
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Switch(
+                    checked = prefs.selfMarkerTriangle,
+                    onCheckedChange = { v -> mutate { it.copy(selfMarkerTriangle = v) } },
+                    enabled = !prefs.useMilStdSelfSymbol,
+                )
+            }
 
             SectionHeader(Loc.t("settings.section.droneDetection"))
             Row(

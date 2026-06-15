@@ -138,6 +138,9 @@ data class UserPrefs(
      *  foreground. Fixes the bug where the setting was present but
      *  FLAG_KEEP_SCREEN_ON was never actually applied. Default off. */
     val keepScreenOn: Boolean = false,
+    /** When true, render the self-marker as a triangle pointing in heading
+     *  direction instead of the MIL-STD disc / puck. Rotates with compass. */
+    val selfMarkerTriangle: Boolean = false,
 )
 
 class UserPrefsStore(private val context: Context) {
@@ -180,6 +183,7 @@ class UserPrefsStore(private val context: Context) {
     // Issue #95 — north-up lock; #97 — keep-screen-on
     private val KEY_NORTH_UP_LOCKED = booleanPreferencesKey("north_up_locked")
     private val KEY_KEEP_SCREEN_ON  = booleanPreferencesKey("keep_screen_on")
+    private val KEY_SELF_MARKER_TRIANGLE = booleanPreferencesKey("selfMarkerTriangle")
 
     val prefs: Flow<UserPrefs> = context.userPrefsDataStore.data.map { p -> readFrom(p) }
 
@@ -223,6 +227,7 @@ class UserPrefsStore(private val context: Context) {
             if (next.lastCameraZoom != null) p[KEY_CAMERA_ZOOM] = next.lastCameraZoom.toString()
             p[KEY_NORTH_UP_LOCKED] = next.northUpLocked
             p[KEY_KEEP_SCREEN_ON]  = next.keepScreenOn
+            p[KEY_SELF_MARKER_TRIANGLE] = next.selfMarkerTriangle
         }
     }
 
@@ -342,6 +347,7 @@ class UserPrefsStore(private val context: Context) {
         lastCameraZoom = p[KEY_CAMERA_ZOOM]?.toDoubleOrNull(),
         northUpLocked  = p[KEY_NORTH_UP_LOCKED] ?: false,
         keepScreenOn   = p[KEY_KEEP_SCREEN_ON]  ?: false,
+        selfMarkerTriangle = p[KEY_SELF_MARKER_TRIANGLE] ?: false,
     )
 
     // ATAK / OpenTakServer canonical team names are Title Case ("Cyan",
