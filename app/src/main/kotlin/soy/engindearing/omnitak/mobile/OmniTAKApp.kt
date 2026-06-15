@@ -468,6 +468,11 @@ class OmniTAKApp : Application() {
     val rasterOverlayStore: soy.engindearing.omnitak.mobile.data.RasterOverlayStore by lazy {
         soy.engindearing.omnitak.mobile.data.RasterOverlayStore(this)
     }
+    /** Downloaded offline map regions (#120) — each is an MBTiles file served
+     *  by the shared MBTilesServer so the map works with no network. */
+    val offlineRegionStore: soy.engindearing.omnitak.mobile.data.offline.OfflineRegionStore by lazy {
+        soy.engindearing.omnitak.mobile.data.offline.OfflineRegionStore(this)
+    }
 
     /** Single Remote ID track roster shared by the phone scanner and the
      *  gyb sensor. One store means either source refreshes a drone's

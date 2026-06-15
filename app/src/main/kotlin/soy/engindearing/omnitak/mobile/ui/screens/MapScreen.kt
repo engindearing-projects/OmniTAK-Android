@@ -219,6 +219,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     // callsignCardVisible, followMeActive are now read from userPrefs (above)
     // so they survive relaunch.
     var layersSheetOpen by remember { mutableStateOf(false) }
+    // #120 — offline map download sheet.
+    var offlineMapsOpen by remember { mutableStateOf(false) }
+    val offlineRegions by app.offlineRegionStore.regions.collectAsState()
     var teamsPanelOpen by remember { mutableStateOf(false) }
     var panTarget by remember { mutableStateOf<LatLng?>(null) }
     var panTargetTick by remember { mutableStateOf(0) }
@@ -337,6 +340,18 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         mapboxMap?.getStyle { style ->
             soy.engindearing.omnitak.mobile.ui.components.KmlOverlayRenderer
                 .applyRaster(style, rasterImagery, app.rasterOverlayStore)
+        }
+    }
+    // #120 — re-apply downloaded offline regions (cached MBTiles) when the
+    // set changes. OfflineTilePolicy decides whether cache wins (offline) or
+    // simply layers in (online). Device-pending: the on-map render itself.
+    LaunchedEffect(offlineRegions) {
+        mapboxMap?.getStyle { style ->
+            val decision = soy.engindearing.omnitak.mobile.data.offline.OfflineTilePolicy.decide(
+                offlineRegions, app.offlineRegionStore.networkAvailable(),
+            )
+            soy.engindearing.omnitak.mobile.ui.components.KmlOverlayRenderer
+                .applyOfflineRegions(style, offlineRegions, app.offlineRegionStore, decision)
         }
     }
     // Frame raster/MBTiles bounds on request.
@@ -2004,7 +2019,31 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     scope.launch { app.userPrefsStore.setMeshNodesLayerVisible(v) }
                 },
                 onToggle3d = { v -> mutatePref { it.copy(map3dEnabled = v) } },
+                onOpenOfflineMaps = {
+                    layersSheetOpen = false
+                    offlineMapsOpen = true
+                },
                 onDismiss = { layersSheetOpen = false },
+            )
+        }
+
+        // #120 — offline map download. The default region is the current
+        // viewport (read from the live map projection); null until the map
+        // is ready, which the sheet handles gracefully.
+        if (offlineMapsOpen) {
+            val viewportBbox = remember(offlineMapsOpen) {
+                mapboxMap?.projection?.visibleRegion?.latLngBounds?.let { b ->
+                    soy.engindearing.omnitak.mobile.data.offline.BoundingBox(
+                        north = b.getLatNorth(), south = b.getLatSouth(),
+                        east = b.getLonEast(), west = b.getLonWest(),
+                    )
+                }
+            }
+            soy.engindearing.omnitak.mobile.ui.components.OfflineMapsSheet(
+                initialBbox = viewportBbox,
+                provider = userPrefs.mapProvider,
+                customTileUrl = userPrefs.customTileUrl,
+                onDismiss = { offlineMapsOpen = false },
             )
         }
 

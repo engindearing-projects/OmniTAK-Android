@@ -188,4 +188,47 @@ object KmlOverlayRenderer {
             )
         }
     }
+
+    // Downloaded offline regions (#120). Each region is an MBTiles file
+    // served by the same in-app tile server, so it renders exactly like an
+    // imported MBTiles overlay — just a raster source/layer. The
+    // OfflineTilePolicy decision controls whether these sit above the live
+    // basemap (offline → cache wins) or are simply present (online).
+    private val installedOffline = mutableSetOf<String>()
+
+    fun applyOfflineRegions(
+        style: Style,
+        regions: List<soy.engindearing.omnitak.mobile.data.offline.OfflineRegion>,
+        store: soy.engindearing.omnitak.mobile.data.offline.OfflineRegionStore,
+        decision: soy.engindearing.omnitak.mobile.data.offline.OfflineDecision,
+    ) {
+        val wanted = decision.activeRegionIds.toSet()
+        for (id in installedOffline - wanted) {
+            style.removeLayer("offlinelyr-$id")
+            style.removeSource("offlinesrc-$id")
+        }
+        installedOffline.clear()
+        installedOffline.addAll(wanted)
+
+        for (region in regions) {
+            if (region.id !in wanted) continue
+            val sourceId = "offlinesrc-${region.id}"
+            val layerId = "offlinelyr-${region.id}"
+            if (style.getSource(sourceId) == null) {
+                val template = store.tileUrlTemplate(region) ?: continue
+                val tileSet = TileSet("2.1.0", template).apply {
+                    minZoom = region.minZoom.toFloat()
+                    maxZoom = region.maxZoom.toFloat()
+                }
+                style.addSource(RasterSource(sourceId, tileSet, 256))
+                // When offline, draw cached tiles on top so they win over the
+                // (unreachable) live basemap; online, let it layer normally.
+                style.addLayer(RasterLayer(layerId, sourceId))
+            }
+            style.getLayerAs<RasterLayer>(layerId)?.setProperties(
+                PropertyFactory.visibility(Property.VISIBLE),
+                PropertyFactory.rasterOpacity(1.0f),
+            )
+        }
+    }
 }

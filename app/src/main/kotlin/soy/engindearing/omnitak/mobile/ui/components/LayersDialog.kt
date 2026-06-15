@@ -44,6 +44,7 @@ fun LayersDialog(
     onToggleCallsignCard: (Boolean) -> Unit,
     onToggleMeshNodes: (Boolean) -> Unit = {},
     onToggle3d: (Boolean) -> Unit = {},
+    onOpenOfflineMaps: (() -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
@@ -65,6 +66,20 @@ fun LayersDialog(
                 LayerRow("Aircraft (ADSB)", aircraftVisible, onToggleAircraft)
                 LayerRow("Lat/Lon grid", gridEnabled, onToggleGrid)
                 LayerRow("Callsign card", callsignCardVisible, onToggleCallsignCard)
+                if (onOpenOfflineMaps != null) {
+                    TextButton(
+                        onClick = onOpenOfflineMaps,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp),
+                    ) {
+                        Text(
+                            "Offline maps…",
+                            color = TacticalAccent,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                }
             }
         },
         confirmButton = {
