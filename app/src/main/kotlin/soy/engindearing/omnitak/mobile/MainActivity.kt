@@ -188,6 +188,11 @@ class MainActivity : ComponentActivity() {
                         password = null,
                         certificateName = enrolled.certificateName,
                         certificatePassword = enrolled.certificatePassword,
+                        // Pin the enrollment CA so the connection validates the server's
+                        // private-CA cert (ArgusTAK). Without this the connect path falls
+                        // back to the system trust store and fails CertPathValidator.
+                        // Matches EnrollServerScreen / ServerQrScanScreen.
+                        caCertificateName = enrolled.caCertificateName,
                     ),
                 )
                 Log.i("OmniTAK", "Enrolled + added server '${cfg.name}' from $uri")
