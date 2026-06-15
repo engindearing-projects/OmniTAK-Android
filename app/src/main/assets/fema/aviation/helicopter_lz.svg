@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- ICS Helicopter LZ: cyan circle with bold H (LZ convention) -->
+  <circle cx="32" cy="32" r="28" fill="#00BCD4" stroke="#000" stroke-width="2.5"/>
+  <!-- Bold H for helicopter landing zone -->
+  <rect x="15" y="14" width="8" height="36" rx="2" fill="#FFF"/>
+  <rect x="41" y="14" width="8" height="36" rx="2" fill="#FFF"/>
+  <rect x="15" y="26" width="34" height="12" rx="2" fill="#FFF"/>
+  <!-- Small rotor arcs top to indicate helicopter -->
+  <path d="M20,10 Q32,4 44,10" fill="none" stroke="#000" stroke-width="2" stroke-linecap="round"/>
+</svg>

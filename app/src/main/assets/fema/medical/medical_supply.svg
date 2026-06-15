@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- ICS Medical Supply: red rectangle (cache box) with cross + pill symbol -->
+  <rect x="8" y="16" width="48" height="36" rx="4" fill="#F44336" stroke="#000" stroke-width="2.5"/>
+  <!-- Handle on top (medic kit handle) -->
+  <rect x="20" y="9" width="24" height="10" rx="4" fill="none" stroke="#000" stroke-width="2.5"/>
+  <!-- White cross smaller, centered -->
+  <rect x="26" y="22" width="12" height="24" rx="2" fill="#FFF"/>
+  <rect x="20" y="28" width="24" height="12" rx="2" fill="#FFF"/>
+</svg>

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- ICS Communications Hub: green diamond with antenna/signal arcs -->
+  <polygon points="32,4 60,32 32,60 4,32" fill="#4CAF50" stroke="#000" stroke-width="2.5"/>
+  <!-- Antenna mast -->
+  <line x1="32" y1="18" x2="32" y2="46" stroke="#FFF" stroke-width="3" stroke-linecap="round"/>
+  <!-- Signal arcs left -->
+  <path d="M26,22 Q18,32 26,42" fill="none" stroke="#FFF" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M20,18 Q8,32 20,46" fill="none" stroke="#FFF" stroke-width="2" stroke-linecap="round" opacity="0.6"/>
+  <!-- Signal arcs right -->
+  <path d="M38,22 Q46,32 38,42" fill="none" stroke="#FFF" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M44,18 Q56,32 44,46" fill="none" stroke="#FFF" stroke-width="2" stroke-linecap="round" opacity="0.6"/>
+  <!-- Base dot -->
+  <circle cx="32" cy="46" r="3" fill="#FFF"/>
+</svg>

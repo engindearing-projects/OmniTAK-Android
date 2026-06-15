@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- ICS Staging Area: orange square with "S" marking and double arrows -->
+  <rect x="8" y="8" width="48" height="48" rx="4" fill="#FF9800" stroke="#000" stroke-width="2.5"/>
+  <!-- Box/staging grid lines -->
+  <line x1="8" y1="32" x2="56" y2="32" stroke="#000" stroke-width="1.5"/>
+  <line x1="32" y1="8" x2="32" y2="56" stroke="#000" stroke-width="1.5"/>
+  <!-- Inbound arrow top-left -->
+  <path d="M16,16 L16,26 L26,26" fill="none" stroke="#FFF" stroke-width="2" stroke-linecap="round"/>
+  <!-- Inbound arrow bottom-right -->
+  <path d="M48,48 L48,38 L38,38" fill="none" stroke="#FFF" stroke-width="2" stroke-linecap="round"/>
+</svg>

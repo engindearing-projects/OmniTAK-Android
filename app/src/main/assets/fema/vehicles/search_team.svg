@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- ICS Search Team: yellow circle with 3 person silhouettes and magnifier -->
+  <circle cx="32" cy="32" r="28" fill="#FFEB3B" stroke="#000" stroke-width="2.5"/>
+  <!-- Three person silhouettes in a row -->
+  <!-- Left person -->
+  <circle cx="18" cy="24" r="5" fill="#212121"/>
+  <path d="M13,42 Q18,30 23,42" fill="#212121"/>
+  <!-- Center person -->
+  <circle cx="32" cy="22" r="5" fill="#212121"/>
+  <path d="M27,42 Q32,28 37,42" fill="#212121"/>
+  <!-- Right person -->
+  <circle cx="46" cy="24" r="5" fill="#212121"/>
+  <path d="M41,42 Q46,30 51,42" fill="#212121"/>
+  <!-- Magnifier overlay bottom-right -->
+  <circle cx="48" cy="46" r="7" fill="none" stroke="#000" stroke-width="2.5"/>
+  <line x1="53" y1="51" x2="58" y2="56" stroke="#000" stroke-width="3" stroke-linecap="round"/>
+</svg>

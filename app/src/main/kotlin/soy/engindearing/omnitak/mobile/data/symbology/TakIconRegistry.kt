@@ -311,13 +311,18 @@ object TakIconRegistry {
             val color = argb ?: SpotIcon.WHITE.argb
             return spotDot(color, sizePx, "spot|type|$color")
         }
-        // 3. FEMA / ICS catalog — rendered as a category-accented coloured dot.
-        //    No Context needed (runtime-rendered like Spot Map). TODO #46: once
-        //    per-glyph SVG assets land in app/src/main/assets/fema/, switch to
-        //    asset rasterisation here and remove the dot fallback.
+        // 3. FEMA / ICS catalog — rasterised from per-kind SVG glyphs (#46).
+        //    Context is required; fall through to the dot only when context
+        //    is null (should not happen in production — the symbol layer always
+        //    has a context). If the SVG asset is somehow absent (corrupted APK),
+        //    the dot ensures the marker still renders rather than disappearing.
         resolveFemaIcon(iconsetPath)?.let { femaIcon ->
-            val accentArgb = femaIcon.category.accentArgb
-            return spotDot(accentArgb, sizePx, "fema|${femaIcon.kind.raw}|$sizePx")
+            if (context != null) {
+                val bmp = FemaIconCache.bitmapFor(context, femaIcon.kind, sizePx)
+                if (bmp != null) return bmp
+            }
+            // Fallback dot — context null or asset missing.
+            return spotDot(femaIcon.category.accentArgb, sizePx, "fema-dot|${femaIcon.kind.raw}|$sizePx")
         }
         // 4. Markers / Google bitmap packs — Material-Symbols (Apache-2.0)
         //    vector glyphs on a rounded badge. Needs a Context to decode.

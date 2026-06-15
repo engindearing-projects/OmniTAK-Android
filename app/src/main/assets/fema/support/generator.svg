@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- ICS Generator: green rectangle with lightning bolt -->
+  <rect x="8" y="14" width="48" height="36" rx="5" fill="#4CAF50" stroke="#000" stroke-width="2.5"/>
+  <!-- Lightning bolt centered -->
+  <polygon points="38,16 26,34 33,34 26,52 42,30 34,30" fill="#FFEB3B" stroke="#F57F17" stroke-width="1.5"/>
+  <!-- Output terminal lines -->
+  <line x1="14" y1="26" x2="8" y2="26" stroke="#FFF" stroke-width="2" stroke-linecap="round"/>
+  <line x1="14" y1="38" x2="8" y2="38" stroke="#FFF" stroke-width="2" stroke-linecap="round"/>
+  <line x1="50" y1="26" x2="56" y2="26" stroke="#FFF" stroke-width="2" stroke-linecap="round"/>
+  <line x1="50" y1="38" x2="56" y2="38" stroke="#FFF" stroke-width="2" stroke-linecap="round"/>
+</svg>
