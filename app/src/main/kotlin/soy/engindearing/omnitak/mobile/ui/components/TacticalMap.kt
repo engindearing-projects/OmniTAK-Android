@@ -115,6 +115,11 @@ fun TacticalMap(
      *  caller can re-apply style-level content (e.g. KML vector overlays)
      *  that a setStyle wipes. */
     onStyleReady: ((org.maplibre.android.maps.MapLibreMap, Style) -> Unit)? = null,
+    /** Issue #89 — system status-bar inset height in dp. Under
+     *  enableEdgeToEdge the map draws under the status bar, so the built-in
+     *  MapLibre compass margin adds this on top of [COMPASS_TOP_MARGIN_DP]
+     *  to clear the (inset-shifted) ATAKStatusBar on tall-notch devices. */
+    topInsetDp: Float = 0f,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -200,7 +205,10 @@ fun TacticalMap(
                     // pixels; 4 dp matches MapLibre's built-in side defaults
                     // so only the top changes.
                     val density = context.resources.displayMetrics.density
-                    val compassTopPx = (COMPASS_TOP_MARGIN_DP * density + 0.5f).toInt()
+                    // Issue #89 — add the status-bar inset so the compass clears
+                    // the ATAKStatusBar after enableEdgeToEdge pushes it down.
+                    val compassTopPx =
+                        ((COMPASS_TOP_MARGIN_DP + topInsetDp) * density + 0.5f).toInt()
                     val sideMarginPx = (4 * density + 0.5f).toInt()
                     setCompassMargins(sideMarginPx, compassTopPx, sideMarginPx, sideMarginPx)
                 }

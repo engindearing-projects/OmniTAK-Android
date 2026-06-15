@@ -25,9 +25,13 @@ import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
@@ -86,9 +90,25 @@ import java.util.Locale
 private val FALLBACK_GLOBAL_VIEW = LatLng(0.0, 0.0)
 private const val FALLBACK_GLOBAL_ZOOM = 2.0
 
+// Issue #76 — screen-space tolerance for tapping a drawing's outline/rim.
+// ~24px ≈ finger-tip slack on a mid-density device; lines/rims are thin so
+// this keeps a 3px stroke comfortably grabbable.
+private const val DRAWING_TAP_TOLERANCE_PX = 24f
+
+// Issue #76 — if a contact is within this screen radius of the tap, the
+// drawing hit-test defers so the marker's edit sheet wins. Matches
+// TacticalMap.TAP_HIT_RADIUS_PX (the contact hit radius).
+private const val CONTACT_TAP_DEFER_PX = 72.0
+
 @Composable
 fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     val app = LocalContext.current.applicationContext as OmniTAKApp
+    // Issue #89 — status-bar inset in dp. enableEdgeToEdge lets content draw
+    // under the system bars; overlays anchored near the top (compass, MapLibre
+    // built-in compass) add this so they clear the shifted ATAKStatusBar.
+    val statusBarTopInsetDp = WindowInsets.statusBars
+        .asPaddingValues()
+        .calculateTopPadding()
     val active by app.serverManager.activeServer.collectAsState()
     val connState by app.serverManager.connectionState.collectAsState()
     val allServers by app.serverManager.servers.collectAsState()
@@ -181,6 +201,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     var drawingKind by remember { mutableStateOf<DrawingKind?>(null) }
     var drawingPoints by remember { mutableStateOf<List<LatLng>>(emptyList()) }
     var drawingPickerOpen by remember { mutableStateOf(false) }
+    // Issue #76 — tap-to-select a placed drawing for edit/move/delete.
+    // selectedDrawingId holds the tapped shape (drives the DrawingEditSheet);
+    // movingDrawingId, when set, flips the map into drag-to-reposition mode.
+    var selectedDrawingId by remember { mutableStateOf<String?>(null) }
+    var movingDrawingId by remember { mutableStateOf<String?>(null) }
     // GAP-110 — gridEnabled, drawingsVisible, aircraftVisible, contactsVisible,
     // callsignCardVisible, followMeActive are now read from userPrefs (above)
     // so they survive relaunch.
@@ -451,6 +476,10 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             onLongPress = handleMapLongPress,
             onContactTap = handleContactTap,
             onCameraChanged = handleCameraChanged,
+            // Issue #79 — render saved drawings on the globe too (parity with
+            // the 2D engine). The in-progress draft lives only during 2D
+            // drawing input, so the globe just shows committed shapes.
+            drawings = if (drawingsVisible) drawings else emptyList(),
             initialCamera = cesiumSeed,
             // Same control ticks the 2D map uses — make +/- and "center on
             // me" drive the globe (VC 77: buttons did nothing on 3D).
@@ -538,6 +567,54 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         drawingPoints = drawingPoints + latLng
                         true
                     }
+                    // Issue #76 — a tap that didn't hit a waypoint and isn't in
+                    // a placement mode hit-tests placed drawings so the operator
+                    // can select one to edit / move / delete. Skip while moving.
+                    movingDrawingId == null && drawingsVisible -> {
+                        val map = mapboxMap
+                        if (map == null) {
+                            false
+                        } else {
+                            val tap = map.projection.toScreenLocation(latLng)
+                            // Defer to markers: if a visible contact sits under
+                            // the tap, let the contact handler open its sheet
+                            // (markers are the more precise target and own the
+                            // single-tap → edit flow).
+                            val contactUnderTap = visibleContacts.any { c ->
+                                val p = map.projection.toScreenLocation(LatLng(c.lat, c.lon))
+                                kotlin.math.hypot(
+                                    (p.x - tap.x).toDouble(),
+                                    (p.y - tap.y).toDouble(),
+                                ) < CONTACT_TAP_DEFER_PX
+                            }
+                            val hit = if (contactUnderTap) {
+                                null
+                            } else {
+                                val projected = drawings.map { d ->
+                                    soy.engindearing.omnitak.mobile.domain.DrawingHitTest.Projected(
+                                        id = d.id,
+                                        kind = d.kind,
+                                        points = d.points.map { (lat, lon) ->
+                                            val p = map.projection.toScreenLocation(LatLng(lat, lon))
+                                            p.x to p.y
+                                        },
+                                    )
+                                }
+                                soy.engindearing.omnitak.mobile.domain.DrawingHitTest.hitId(
+                                    drawings = projected,
+                                    px = tap.x,
+                                    py = tap.y,
+                                    tolerancePx = DRAWING_TAP_TOLERANCE_PX,
+                                )
+                            }
+                            if (hit != null) {
+                                selectedDrawingId = hit
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                    }
                     else -> false
                 }
             },
@@ -587,6 +664,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             // Issue #95 — north-up lock + tap-to-reset support.
             northUpLocked = userPrefs.northUpLocked,
             snapNorthTrigger = snapNorthTick,
+            // Issue #89 — feed the status-bar inset so the built-in MapLibre
+            // compass margin clears the inset-shifted ATAKStatusBar.
+            topInsetDp = statusBarTopInsetDp.value,
         )
         // Plugin map overlays on the MAPLIBRE engine. The handle is the live
         // MapLibreMap (captured via onMapReady above; null briefly until the
@@ -957,6 +1037,16 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             onCancelled = { lassoMode = false },
         )
 
+        // Issue #76 — drag-to-reposition the selected drawing. Rendered above
+        // the map (like the lasso) so it owns the drag while active; inert
+        // (returns immediately) when no drawing is being moved.
+        soy.engindearing.omnitak.mobile.ui.components.DrawingMoveOverlay(
+            drawing = movingDrawingId?.let { id -> drawings.firstOrNull { it.id == id } },
+            mapboxMap = mapboxMap,
+            onMoved = { moved -> app.drawingStore.update(moved) },
+            onDone = { movingDrawingId = null },
+        )
+
         // Issue #16 — selection pill. Surfaces "N selected" whenever
         // there's an active lasso selection. Tap → action sheet.
         if (lassoSelection.totalCount > 0) {
@@ -1173,7 +1263,12 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .align(Alignment.TopCenter),
+                .align(Alignment.TopCenter)
+                // Issue #89 — MainActivity uses enableEdgeToEdge, so the map
+                // (and this top chrome) draws under the system status bar.
+                // Pad by the status-bar inset so the ATAKStatusBar clears the
+                // clock / notch on every device instead of being occluded.
+                .statusBarsPadding(),
         ) {
             ATAKStatusBar(
                 serverName = headerLabel,
@@ -1291,7 +1386,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             },
             modifier = Modifier
                 .align(Alignment.TopStart)
-                .padding(start = 12.dp, top = 72.dp),
+                // Issue #89 — the ATAKStatusBar shifts down by the status-bar
+                // inset under enableEdgeToEdge, so the compass (which sits just
+                // below it) must shift by the same amount or it overlaps the
+                // bar on tall-notch devices.
+                .padding(start = 12.dp, top = 72.dp + statusBarTopInsetDp),
         )
 
         // Map control stack — zoom in / zoom out / center-on-me — at the
@@ -1755,6 +1854,26 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     toast("Drawing ${kind.name.lowercase()} — tap to add points")
                 },
                 onDismiss = { drawingPickerOpen = false },
+            )
+        }
+
+        // Issue #76 — edit / move / delete sheet for a tapped drawing. Resolves
+        // the live drawing each recomposition so an external change (lasso
+        // delete) closes the sheet instead of editing a ghost.
+        val selectedDrawing = selectedDrawingId?.let { id -> drawings.firstOrNull { it.id == id } }
+        if (selectedDrawing != null) {
+            soy.engindearing.omnitak.mobile.ui.components.DrawingEditSheet(
+                drawing = selectedDrawing,
+                onApply = { updated -> app.drawingStore.update(updated) },
+                onMove = {
+                    movingDrawingId = selectedDrawing.id
+                    toast("Drag the ${selectedDrawing.kind.name.lowercase()} to move it")
+                },
+                onDelete = {
+                    app.drawingStore.remove(selectedDrawing.id)
+                    toast("Deleted ${selectedDrawing.kind.name.lowercase()}")
+                },
+                onDismiss = { selectedDrawingId = null },
             )
         }
 
