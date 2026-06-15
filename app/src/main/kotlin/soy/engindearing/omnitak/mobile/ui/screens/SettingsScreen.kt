@@ -2,7 +2,9 @@ package soy.engindearing.omnitak.mobile.ui.screens
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -27,6 +29,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -55,6 +58,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.OmniTAKApp
 import soy.engindearing.omnitak.mobile.i18n.Loc
@@ -63,6 +67,7 @@ import soy.engindearing.omnitak.mobile.data.DistanceUnit
 import soy.engindearing.omnitak.mobile.data.MapProvider
 import soy.engindearing.omnitak.mobile.data.UserPrefs
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
+import soy.engindearing.omnitak.mobile.domain.IconPackImporter
 import androidx.compose.material.icons.filled.ManageAccounts
 import androidx.compose.material3.Icon
 import soy.engindearing.omnitak.mobile.ui.components.GybDeviceSheet
@@ -555,6 +560,67 @@ fun SettingsScreen(
                         )
                     }
                 }
+            }
+
+            // Issue #114 — icon-pack import. SAF picker routes the picked .zip
+            // to IconPackImporter on a background thread, then toasts the result.
+            // Registry.register() is called inside importStream, so the picker
+            // sees the new pack on its next recomposition.
+            SectionHeader("Symbology")
+            val iconPackCtx = LocalContext.current
+            val iconPackLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.OpenDocument(),
+            ) { uri: Uri? ->
+                if (uri == null) return@rememberLauncherForActivityResult
+                scope.launch(Dispatchers.IO) {
+                    val importer = IconPackImporter(iconPackCtx)
+                    val stream = runCatching {
+                        iconPackCtx.contentResolver.openInputStream(uri)
+                    }.getOrNull()
+                    val result = if (stream != null) {
+                        stream.use { importer.importStream(it, uri.lastPathSegment ?: "pack.zip") }
+                    } else {
+                        IconPackImporter.ImportResult.Failure("Could not open the selected file")
+                    }
+                    val msg = when (result) {
+                        is IconPackImporter.ImportResult.Success ->
+                            "Icon pack \"${result.pack.name}\" imported (${result.pack.icons.size} icons)"
+                        is IconPackImporter.ImportResult.Failure ->
+                            "Import failed: ${result.reason}"
+                    }
+                    launch(Dispatchers.Main) {
+                        Toast.makeText(iconPackCtx, msg, Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { iconPackLauncher.launch(arrayOf("application/zip", "application/octet-stream")) }
+                    .padding(vertical = 10.dp, horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                androidx.compose.material3.Icon(
+                    Icons.Filled.FileUpload,
+                    contentDescription = null,
+                    tint = TacticalAccent,
+                    modifier = Modifier.size(22.dp),
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Import icon pack (.zip)", color = MaterialTheme.colorScheme.onBackground)
+                    Text(
+                        "Add a custom ATAK iconset to the marker picker",
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                androidx.compose.material3.Icon(
+                    Icons.Filled.ChevronRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+                )
             }
 
             // Issue #95 / #97 — map behaviour toggles.
