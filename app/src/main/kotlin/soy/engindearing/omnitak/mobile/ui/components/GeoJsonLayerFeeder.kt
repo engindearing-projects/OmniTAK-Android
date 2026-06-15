@@ -25,7 +25,17 @@ object GeoJsonLayerFeeder {
      *  Returns false when the style/source isn't ready (caller may log). */
     fun push(map: MapLibreMap, sourceId: String, features: JSONArray): Boolean {
         val style = map.style ?: return false
-        return push(style, sourceId, features)
+        val ok = push(style, sourceId, features)
+        // Issues #77 / #80 — force a GL frame after updating source data.
+        // On some Mali/Adreno drivers (reported on Pixel 9 Pro v0.35.5)
+        // GeoJsonSource.setGeoJson on a source whose layer is baked into the
+        // style JSON does NOT schedule a repaint, so a dropped marker / new
+        // drawing stays invisible until a full style reload happens to repaint
+        // (e.g. toggling 3D Terrain). triggerRepaint forces the frame so the
+        // layer paints immediately, with no reload needed. It's a no-op when
+        // the map is already drawing, so it's safe on every push.
+        if (ok) map.triggerRepaint()
+        return ok
     }
 
     /** Same as [push] for callers that already hold the [Style]. */
