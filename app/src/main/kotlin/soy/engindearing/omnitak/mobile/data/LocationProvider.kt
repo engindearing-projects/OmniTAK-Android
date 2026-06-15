@@ -31,6 +31,27 @@ class LocationProvider(private val context: Context) {
     private val _fix = MutableStateFlow<SelfFix?>(null)
     val fix: StateFlow<SelfFix?> = _fix.asStateFlow()
 
+    // #82 — manual self-position override. When the operator taps the
+    // self-marker and drops it somewhere (MapScreen's reposition sheet),
+    // the chosen coordinate lands here as the single source of truth for
+    // "where we say we are." Non-null means manual mode is active:
+    //  - the map puck + SelfPositionCard render this instead of GPS, and
+    //  - SelfPositionBroadcaster broadcasts THIS in PPLI so teammates and
+    //    the TAK server see the operator where they placed themselves, not
+    //    at their real GPS spot (iOS PositionBroadcastService parity).
+    // Clearing it ("resume GPS") reverts every consumer to the live fix.
+    private val _manualFix = MutableStateFlow<SelfFix?>(null)
+    val manualFix: StateFlow<SelfFix?> = _manualFix.asStateFlow()
+
+    /** #82 — enter manual mode at [fix] (set) or resume live GPS (null). */
+    fun setManualFix(fix: SelfFix?) {
+        _manualFix.value = fix
+    }
+
+    /** #82 — the position every consumer should treat as authoritative:
+     *  the manual override when active, else the live GPS fix. */
+    fun effectiveFix(): SelfFix? = _manualFix.value ?: _fix.value
+
     private val callback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
             result.lastLocation?.let { offerFix(it.toSelfFix()) }

@@ -37,6 +37,14 @@ class SelfPositionBroadcaster internal constructor(
     private val updatePrefs: suspend ((UserPrefs) -> UserPrefs) -> Unit,
     private val sendCoT: suspend (String) -> Boolean,
     private val locationFix: StateFlow<SelfFix?>,
+    // #82 — manual self-position override. When non-null, PPLI broadcasts
+    // this coordinate instead of the live GPS fix so teammates / the TAK
+    // server see the operator where they manually placed themselves (the
+    // self-marker reposition flow). Returns null in normal GPS mode, which
+    // falls through to the existing live-fix → persisted-fix selection.
+    // A lambda (like meshBroadcastEnabled) so toggling manual mode on a
+    // running broadcaster takes effect on the next tick without a restart.
+    private val manualFixProvider: () -> SelfFix? = { null },
     // Issue #11 — supplies the device's real battery percentage (0..100).
     // Returns null when unknown (no Context yet, BatteryManager error, or
     // a tester-friendly default for unit tests). The previous hardcoded
@@ -71,6 +79,7 @@ class SelfPositionBroadcaster internal constructor(
         prefsStore: UserPrefsStore,
         sendCoT: suspend (String) -> Boolean,
         locationFix: StateFlow<SelfFix?>,
+        manualFixProvider: () -> SelfFix? = { null },
         batteryProvider: () -> Int? = { null },
         intervalMs: Long = DEFAULT_INTERVAL_MS,
         staleSeconds: Long = DEFAULT_STALE_SECONDS,
@@ -84,6 +93,7 @@ class SelfPositionBroadcaster internal constructor(
         updatePrefs = { mutator -> prefsStore.update(mutator) },
         sendCoT = sendCoT,
         locationFix = locationFix,
+        manualFixProvider = manualFixProvider,
         batteryProvider = batteryProvider,
         intervalMs = intervalMs,
         staleSeconds = staleSeconds,
@@ -127,7 +137,11 @@ class SelfPositionBroadcaster internal constructor(
     private suspend fun currentPrefs(): UserPrefs = prefsFlow.first()
 
     internal suspend fun broadcastOnce(prefs: UserPrefs) {
-        val fix = locationFix.value
+        // #82 — a manual self-position override wins over live GPS so PPLI
+        // reports where the operator placed themselves. It carries no real
+        // accuracy (Float.NaN → unknown CE), so peers don't read a manual
+        // drop as a precise GPS lock.
+        val fix = manualFixProvider() ?: locationFix.value
         val lat: Double
         val lon: Double
         val hae: Double

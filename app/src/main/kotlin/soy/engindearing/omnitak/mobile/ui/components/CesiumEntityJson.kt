@@ -34,6 +34,13 @@ internal fun buildCesiumEntitiesJson(
     selfLon: Double?,
     selfCallsign: String,
     context: Context? = null,
+    // #83 — when true the self entity carries a `triangle` flag + heading so
+    // the globe draws a heading-rotated triangle instead of the friendly
+    // affiliation circle, matching the 2D puck's triangle style.
+    selfTriangle: Boolean = false,
+    // #83 — device compass heading (deg CW from north) for the triangle.
+    // null → unknown, the triangle points north (parity with a no-fix puck).
+    selfHeadingDeg: Float? = null,
 ): String {
     val arr = JSONArray()
     if (selfLat != null && selfLon != null && !selfLat.isNaN() && !selfLon.isNaN()) {
@@ -45,6 +52,13 @@ internal fun buildCesiumEntitiesJson(
                 put("callsign", selfCallsign)
                 put("affiliation", "f")
                 put("kind", "self")
+                // #83 — triangle style + heading. The JS side draws a
+                // heading-rotated triangle for kind:self when `triangle` is set
+                // (the entity rotation already reads `heading`).
+                if (selfTriangle) {
+                    put("triangle", true)
+                    put("heading", (selfHeadingDeg ?: 0f).toDouble())
+                }
             },
         )
     }

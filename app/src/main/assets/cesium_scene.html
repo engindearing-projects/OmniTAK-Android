@@ -54,7 +54,20 @@
     ctx.shadowBlur=0;const lum=_luma(hex);ctx.lineWidth=3;ctx.strokeStyle=lum>0.6?'#000':'#fff';ctx.beginPath();ctx.arc(28,28,18,0,Math.PI*2);ctx.stroke();
     const url=c.toDataURL('image/png');_state.billboardCache.set(sk,url);return url;}
   function _luma(hex){const h=hex.replace('#','');if(h.length<6)return 1;const r=parseInt(h.substr(0,2),16)/255,g=parseInt(h.substr(2,2),16)/255,b=parseInt(h.substr(4,2),16)/255;return 0.299*r+0.587*g+0.114*b;}
-  function _billboard(a,k,sidc,spot,icon){
+  // #83 — triangle self-marker glyph, parity with the 2D puck's triangle
+  // style. Points "up" (toward 0/north in the bitmap); the billboard is then
+  // rotated by the device heading (e.heading) just like the 2D RenderMode.
+  // COMPASS puck, so the apex tracks where the operator faces.
+  function _selfTriangle(){const sk='selftri';if(_state.billboardCache.has(sk))return _state.billboardCache.get(sk);
+    const c=document.createElement('canvas');c.width=56;c.height=56;const ctx=c.getContext('2d');
+    const color=_color('f');ctx.lineWidth=4;ctx.strokeStyle=color;ctx.fillStyle=color+'88';
+    ctx.shadowColor='rgba(0,0,0,0.5)';ctx.shadowBlur=4;
+    ctx.beginPath();ctx.moveTo(28,6);ctx.lineTo(48,50);ctx.lineTo(28,40);ctx.lineTo(8,50);ctx.closePath();ctx.fill();ctx.stroke();
+    const url=c.toDataURL('image/png');_state.billboardCache.set(sk,url);return url;}
+  function _billboard(a,k,sidc,spot,icon,triangle){
+    // #83 — operator's own triangle self-marker beats every other glyph
+    // branch when the triangle style pref is on.
+    if(triangle){return _selfTriangle();}
     // #98 — a pre-rendered TAK icon-suite badge (Markers / Google) arrives as a
     // ready data-URL from the Kotlin side, the same bitmap the 2D map registers,
     // so the globe matches it byte-for-byte without re-drawing the glyph here.
@@ -140,10 +153,10 @@
       const rot=(typeof e.heading==='number')?-e.heading*Math.PI/180:0;
       let entity=_state.entities.get(e.uid);
       if(!entity){entity=v.entities.add({id:e.uid,position:pos,
-        billboard:{image:_billboard(e.affiliation||'u',e.kind,e.sidc,e.spot,e.icon),verticalOrigin:Cesium.VerticalOrigin.CENTER,heightReference:useGround?Cesium.HeightReference.CLAMP_TO_GROUND:Cesium.HeightReference.NONE,disableDepthTestDistance:Number.POSITIVE_INFINITY,scale:e.kind==='aircraft'?1.5:0.7,rotation:rot},
+        billboard:{image:_billboard(e.affiliation||'u',e.kind,e.sidc,e.spot,e.icon,e.triangle),verticalOrigin:Cesium.VerticalOrigin.CENTER,heightReference:useGround?Cesium.HeightReference.CLAMP_TO_GROUND:Cesium.HeightReference.NONE,disableDepthTestDistance:Number.POSITIVE_INFINITY,scale:e.kind==='aircraft'?1.5:0.7,rotation:rot},
         label:e.callsign?{text:e.callsign,font:'12px -apple-system, sans-serif',fillColor:Cesium.Color.WHITE,outlineColor:Cesium.Color.BLACK,outlineWidth:2,style:Cesium.LabelStyle.FILL_AND_OUTLINE,pixelOffset:new Cesium.Cartesian2(0,-32),heightReference:useGround?Cesium.HeightReference.CLAMP_TO_GROUND:Cesium.HeightReference.NONE,disableDepthTestDistance:Number.POSITIVE_INFINITY}:undefined,
       });_state.entities.set(e.uid,entity);}
-      else{entity.position=pos;entity.billboard.image=_billboard(e.affiliation||'u',e.kind,e.sidc,e.spot,e.icon);entity.billboard.heightReference=useGround?Cesium.HeightReference.CLAMP_TO_GROUND:Cesium.HeightReference.NONE;entity.billboard.rotation=rot;if(entity.label&&e.callsign)entity.label.text=e.callsign;}
+      else{entity.position=pos;entity.billboard.image=_billboard(e.affiliation||'u',e.kind,e.sidc,e.spot,e.icon,e.triangle);entity.billboard.heightReference=useGround?Cesium.HeightReference.CLAMP_TO_GROUND:Cesium.HeightReference.NONE;entity.billboard.rotation=rot;if(entity.label&&e.callsign)entity.label.text=e.callsign;}
     },
     setEntities(arg){const list=_parse(arg);if(!Array.isArray(list))return;const seen=new Set();
       for(const e of list){if(e&&e.uid){seen.add(e.uid);window.OmniBridge.upsertEntity(e);}}

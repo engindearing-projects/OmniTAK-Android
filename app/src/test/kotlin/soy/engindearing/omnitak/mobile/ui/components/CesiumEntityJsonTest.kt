@@ -28,6 +28,51 @@ class CesiumEntityJsonTest {
     }
 
     @Test
+    fun `self entity is not a triangle by default`() {
+        // #83 — without the triangle pref the self entity keeps the friendly
+        // affiliation frame (no triangle flag / heading), so existing globe
+        // users see no behaviour change.
+        val json = parse(buildCesiumEntitiesJson(
+            contacts = emptyList(),
+            selfLat = 47.65, selfLon = -117.42, selfCallsign = "OMNI-1",
+        ))
+        val self = json.getJSONObject(0)
+        assertFalse("no triangle flag when pref off", self.has("triangle"))
+        assertFalse("no heading when pref off", self.has("heading"))
+    }
+
+    @Test
+    fun `self entity carries triangle flag and heading when triangle style on`() {
+        // #83 — triangle self-marker parity with the 2D puck: the JS side draws
+        // a heading-rotated triangle when `triangle` is set, rotating by `heading`.
+        val json = parse(buildCesiumEntitiesJson(
+            contacts = emptyList(),
+            selfLat = 47.65, selfLon = -117.42, selfCallsign = "OMNI-1",
+            selfTriangle = true,
+            selfHeadingDeg = 137.5f,
+        ))
+        val self = json.getJSONObject(0)
+        assertEquals("self", self.getString("kind"))
+        assertTrue("triangle flag set", self.getBoolean("triangle"))
+        assertEquals(137.5, self.getDouble("heading"), 0.001)
+    }
+
+    @Test
+    fun `triangle self defaults heading to zero when device heading unknown`() {
+        // null device heading (no magnetometer / first frame) → triangle points
+        // north, matching a 2D puck with no compass fix yet.
+        val json = parse(buildCesiumEntitiesJson(
+            contacts = emptyList(),
+            selfLat = 47.65, selfLon = -117.42, selfCallsign = "OMNI-1",
+            selfTriangle = true,
+            selfHeadingDeg = null,
+        ))
+        val self = json.getJSONObject(0)
+        assertTrue("triangle flag set", self.getBoolean("triangle"))
+        assertEquals(0.0, self.getDouble("heading"), 0.001)
+    }
+
+    @Test
     fun `RID multirotor contact gets SUAPMHQ multirotor SIDC`() {
         // RemoteIdToCoTConverter emits a-u-A-M-H-Q for multirotor drones.
         // The catalogue maps it to SUAPMHQ---- which milsymbol can render

@@ -169,13 +169,14 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     var femaPaletteLatLng by remember { mutableStateOf<LatLng?>(null) }
     var editingMarker by remember { mutableStateOf<CoTEvent?>(null) }
     var selfMarkerEditOpen by remember { mutableStateOf(false) }
-    var manualSelfFix by remember { mutableStateOf<Pair<Double, Double>?>(null) }
-    val effectiveSelfFix: soy.engindearing.omnitak.mobile.data.SelfFix? = manualSelfFix?.let { (lat, lon) ->
-        soy.engindearing.omnitak.mobile.data.SelfFix(
-            lat = lat, lon = lon, altitudeM = selfFix?.altitudeM ?: 0.0,
-            speedKmh = 0.0, accuracyM = Float.NaN, timeMs = System.currentTimeMillis()
-        )
-    } ?: selfFix
+    // #82 — manual self-position override. Stored on LocationProvider (not
+    // local state) so it's the single source of truth: the puck + the
+    // SelfPositionCard render it AND SelfPositionBroadcaster broadcasts it in
+    // PPLI, so teammates see the operator where they placed themselves instead
+    // of at live GPS. Collecting the flow keeps the map in lockstep with what
+    // goes on the wire; null = live GPS (the "resume GPS" state).
+    val manualSelfFix by app.locationProvider.manualFix.collectAsState()
+    val effectiveSelfFix: soy.engindearing.omnitak.mobile.data.SelfFix? = manualSelfFix ?: selfFix
     var recenterTick by remember { mutableStateOf(0) }
     var zoomInTick by remember { mutableStateOf(0) }
     var zoomOutTick by remember { mutableStateOf(0) }
@@ -475,14 +476,33 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         // 3D Globe — photoreal Cesium WebView engine. Contacts (incl. dropped
         // pins) + self render as entities; long-press surfaces the same radial
         // menu the 2D/terrain engines use, tapping a contact opens its sheet.
+        // #83 — device compass heading drives the Cesium triangle self-marker's
+        // rotation (parity with the 2D RenderMode.COMPASS puck). Only run the
+        // magnetometer while the globe is up AND the triangle style is on, so
+        // the 2D engine and disc-marker users pay nothing for it.
+        val deviceHeading by app.headingProvider.headingDeg.collectAsState()
+        LaunchedEffect(userPrefs.selfMarkerTriangle) {
+            if (userPrefs.selfMarkerTriangle) app.headingProvider.start()
+            else app.headingProvider.stop()
+        }
+        DisposableEffect(Unit) {
+            onDispose { app.headingProvider.stop() }
+        }
         soy.engindearing.omnitak.mobile.ui.components.CesiumMapView(
             modifier = Modifier.fillMaxSize(),
             contacts = visibleContacts,
-            selfLat = selfFix?.lat,
-            selfLon = selfFix?.lon,
+            // #82 — show the manual override on the globe too (effectiveSelfFix),
+            // so the 3D puck and the broadcast agree with the 2D engine.
+            selfLat = effectiveSelfFix?.lat,
+            selfLon = effectiveSelfFix?.lon,
             selfCallsign = userPrefs.callsign,
             onLongPress = handleMapLongPress,
             onContactTap = handleContactTap,
+            // #82 — tap self entity on the globe opens the reposition sheet too.
+            onSelfMarkerTap = { selfMarkerEditOpen = true },
+            // #83 — triangle self-marker style + heading parity on the globe.
+            selfMarkerTriangle = userPrefs.selfMarkerTriangle,
+            selfHeadingDeg = deviceHeading,
             onCameraChanged = handleCameraChanged,
             // Issue #79 — render saved drawings on the globe too (parity with
             // the 2D engine). The in-progress draft lives only during 2D
@@ -1339,7 +1359,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             ) {
                 androidx.compose.material3.Surface(
                     modifier = Modifier
-                        .clickable { manualSelfFix = null }
+                        .clickable { app.locationProvider.setManualFix(null) }
                         .padding(horizontal = 16.dp, vertical = 4.dp),
                     shape = androidx.compose.foundation.shape.RoundedCornerShape(20.dp),
                     color = soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent.copy(alpha = 0.15f),
@@ -1766,7 +1786,20 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     val newLat = result.selfLatOverride
                     val newLon = result.selfLonOverride
                     if (newLat != null && newLon != null) {
-                        manualSelfFix = newLat to newLon
+                        // #82 — push the manual position into LocationProvider so
+                        // the puck, the card, and the PPLI broadcast all use it.
+                        // accuracyM = NaN marks it as a manual drop (unknown CE on
+                        // the wire); altitude inherits the last GPS fix's HAE.
+                        app.locationProvider.setManualFix(
+                            soy.engindearing.omnitak.mobile.data.SelfFix(
+                                lat = newLat,
+                                lon = newLon,
+                                altitudeM = selfFix?.altitudeM ?: 0.0,
+                                speedKmh = 0.0,
+                                accuracyM = Float.NaN,
+                                timeMs = System.currentTimeMillis(),
+                            )
+                        )
                     }
                     selfMarkerEditOpen = false
                 },

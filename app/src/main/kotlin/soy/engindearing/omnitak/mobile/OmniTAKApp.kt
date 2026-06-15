@@ -515,6 +515,12 @@ class OmniTAKApp : Application() {
             prefsStore = userPrefsStore,
             sendCoT = { xml -> serverManager.sendCoT(xml) },
             locationFix = fixFlow,
+            // #82 — when the operator manually repositions their self-marker,
+            // PPLI broadcasts that coordinate instead of live GPS. The override
+            // lives on LocationProvider as the shared source of truth (MapScreen
+            // writes it, the puck + card read it), so the broadcast can't drift
+            // from what's on screen.
+            manualFixProvider = { locationProvider.manualFix.value },
             batteryProvider = ::readDeviceBatteryPercent,
             sendToMesh = { event -> activeMeshManager.sendCoTOverMesh(event) },
             meshConnected = { activeMeshManager.activeConnectionState.value is ConnectionState.Connected },
@@ -533,6 +539,12 @@ class OmniTAKApp : Application() {
         broadcasterPrefsJob = null
     }
     val locationProvider: LocationProvider by lazy { LocationProvider(this) }
+    // #83 — device compass heading for the Cesium triangle self-marker, so it
+    // rotates with the operator's facing just like the 2D RenderMode.COMPASS
+    // puck. Started/stopped by MapScreen only while the globe is on screen.
+    val headingProvider: soy.engindearing.omnitak.mobile.data.DeviceHeadingProvider by lazy {
+        soy.engindearing.omnitak.mobile.data.DeviceHeadingProvider(this)
+    }
     val serverManager: ServerManager by lazy {
         ServerManager(
             store = TAKServerStore(this),

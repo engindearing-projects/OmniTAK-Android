@@ -44,6 +44,16 @@ fun CesiumMapView(
     selfCallsign: String,
     onLongPress: (LatLng, Offset) -> Unit,
     onContactTap: (CoTEvent) -> Unit,
+    // #82 — tap on the self entity opens the reposition sheet, parity with the
+    // 2D engine's onSelfMarkerTap. The scene already tags the self billboard
+    // `__self__` and posts that uid on tap; this routes it back to native.
+    onSelfMarkerTap: (() -> Unit)? = null,
+    // #83 — render the self entity as a heading-rotated triangle (vs the
+    // friendly circle) when the operator's triangle self-marker pref is on.
+    selfMarkerTriangle: Boolean = false,
+    // #83 — device compass heading (deg CW from north) driving the triangle's
+    // rotation; null leaves it pointing north.
+    selfHeadingDeg: Float? = null,
     // Issue #79 — operator drawings (line / polygon / circle) rendered on the
     // globe via the cesium_scene.html setDrawings bridge, so a shape made on
     // the 2D engine doesn't vanish when the operator switches to 3D.
@@ -93,6 +103,9 @@ fun CesiumMapView(
     val selfCallsignState = rememberUpdatedState(selfCallsign)
     val onLongPressState = rememberUpdatedState(onLongPress)
     val onContactTapState = rememberUpdatedState(onContactTap)
+    val onSelfMarkerTapState = rememberUpdatedState(onSelfMarkerTap)
+    val selfTriangleState = rememberUpdatedState(selfMarkerTriangle)
+    val selfHeadingState = rememberUpdatedState(selfHeadingDeg)
     val onCameraState = rememberUpdatedState(onCameraChanged)
     // #95 — read the latest lock state inside the JS bridge callbacks so a
     // globe that opens while north-up is already on gets the lock applied on
@@ -106,6 +119,8 @@ fun CesiumMapView(
         val json = buildCesiumEntitiesJson(
             contactsState.value, selfLatState.value, selfLonState.value, selfCallsignState.value,
             context = appContext,
+            selfTriangle = selfTriangleState.value,
+            selfHeadingDeg = selfHeadingState.value,
         )
         wv.evaluateJavascript("window.OmniBridge.setEntities($json);", null)
     }
@@ -186,9 +201,14 @@ fun CesiumMapView(
                                 when (event) {
                                     "tap" -> {
                                         val uid = if (o.isNull("uid")) null else o.optString("uid")
-                                        if (!uid.isNullOrEmpty() && uid != "__self__") {
-                                            contactsState.value.firstOrNull { it.uid == uid }
-                                                ?.let { onContactTapState.value(it) }
+                                        when {
+                                            // #82 — tapping the self entity opens the
+                                            // reposition sheet (parity with TacticalMap's
+                                            // onSelfMarkerTap on the 2D engine).
+                                            uid == "__self__" -> onSelfMarkerTapState.value?.invoke()
+                                            !uid.isNullOrEmpty() ->
+                                                contactsState.value.firstOrNull { it.uid == uid }
+                                                    ?.let { onContactTapState.value(it) }
                                         }
                                     }
                                     "longpress" -> {
