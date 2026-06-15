@@ -152,12 +152,16 @@ fun TacticalMap(
     // off it; the effects below read/write it imperatively.
     val puckAppearance = remember { PuckAppearance() }
 
-    // ContactSymbolLayer uses Style.addImage (bitmap) + SymbolLayer — the path
-    // LocationComponent uses and that renders on Adreno 610 / SwiftShader when
-    // CircleLayer circle-color expressions silently fail (GL fragment pipeline bug).
-    // Keyed on styleJson so a basemap swap (style reload) gets a fresh instance
-    // with a clean installed=false state.
-    val contactSymbolLayer = remember(styleJson) { ContactSymbolLayer() }
+    // Issue #77 — contacts render via the SymbolManager annotation plugin (the
+    // same render-path family as LocationComponent, which paints reliably on
+    // Adreno/Mali/Immortalis), NOT a GeoJSON CircleLayer/SymbolLayer (those are
+    // "queryable but never draw pixels" on those drivers — a full style reload
+    // does not fix it). Keyed on styleJson so a basemap swap (style reload) gets
+    // a fresh instance with a clean installed=false state; a reload wipes
+    // annotation layers, same as the old GeoJSON path.
+    val contactSymbolManager = remember(styleJson, onContactTap) {
+        ContactSymbolManager(onContactTap)
+    }
 
     val mapView = remember {
         MapLibre.getInstance(context)
@@ -174,13 +178,12 @@ fun TacticalMap(
                     .bearing(initialBearing)
                     .build()
                 map.setStyle(Style.Builder().fromJson(styleJson)) { style ->
-                    ContactLayer.update(map, context, currentContacts)
-                    // Install bitmap-icon symbol layer alongside the inline circle layer.
-                    // The CircleLayer circle-color expression silently fails on Adreno 610
-                    // and SwiftShader — ContactSymbolLayer uses Style.addImage (the same
-                    // path LocationComponent uses) which renders correctly on both drivers.
-                    contactSymbolLayer.installInto(style, context)
-                    contactSymbolLayer.update(map, context, currentContacts)
+                    // Issue #77 — contacts go through the SymbolManager annotation
+                    // pipeline (LocationComponent's render-path family), which paints
+                    // on Adreno/Mali/Immortalis where the GeoJSON circle/symbol layer
+                    // is queryable-but-never-drawn even after a full style reload.
+                    contactSymbolManager.installInto(this@apply, map, style)
+                    contactSymbolManager.update(context, style, currentContacts)
                     MeasurementLayer.update(map, currentMeasurementPoints)
                     DrawingLayer.update(map, currentDrawings)
                     currentGridCenter?.let { GridLayer.update(map, it) }
@@ -249,9 +252,12 @@ fun TacticalMap(
                     currentMapSingleTap?.let { handler ->
                         if (handler(latLng)) return@addOnMapClickListener true
                     }
-                    val cb = currentContactTap ?: return@addOnMapClickListener false
                     val tapPx = map.projection.toScreenLocation(latLng)
-                    // #82 — tap on self-marker opens reposition sheet
+                    // #82 — tap on self-marker opens reposition sheet. The self
+                    // marker is a LocationComponent (not a contact Symbol), so it
+                    // is hit-tested here; contact taps are owned by the
+                    // SymbolManager click listener (issue #77) and never reach
+                    // this loop.
                     val selfTapCb = currentOnSelfMarkerTap
                     if (selfTapCb != null) {
                         val fix = currentSelfFix
@@ -267,25 +273,10 @@ fun TacticalMap(
                             }
                         }
                     }
-                    var best: CoTEvent? = null
-                    var bestDist = Float.MAX_VALUE
-                    currentContacts.forEach { c ->
-                        val px = map.projection.toScreenLocation(LatLng(c.lat, c.lon))
-                        val d = kotlin.math.hypot(
-                            (px.x - tapPx.x).toDouble(),
-                            (px.y - tapPx.y).toDouble(),
-                        ).toFloat()
-                        if (d < bestDist) {
-                            bestDist = d
-                            best = c
-                        }
-                    }
-                    if (best != null && bestDist < TAP_HIT_RADIUS_PX) {
-                        cb(best!!)
-                        true
-                    } else {
-                        false
-                    }
+                    // Contact taps are handled by ContactSymbolManager's click
+                    // listener (registered in installInto). A non-symbol tap that
+                    // misses the self-marker is not ours to consume.
+                    false
                 }
             }
             // Issue #80 — re-anchor drawing (and all other overlay) layers on
@@ -314,9 +305,13 @@ fun TacticalMap(
             addOnDidFinishLoadingStyleListener {
                 getMapAsync { map ->
                     map.getStyle { style ->
-                        ContactLayer.update(map, context, currentContacts)
-                        contactSymbolLayer.installInto(style, context)
-                        contactSymbolLayer.update(map, context, currentContacts)
+                        // Issue #77 — re-install the contact SymbolManager on the
+                        // (re)loaded style and re-push, same as the explicit
+                        // callbacks. installInto is idempotent; if this is a NEW
+                        // style the styleJson-keyed remember already handed us a
+                        // fresh manager with installed=false.
+                        contactSymbolManager.installInto(this@apply, map, style)
+                        contactSymbolManager.update(context, style, currentContacts)
                         MeasurementLayer.update(map, currentMeasurementPoints)
                         DrawingLayer.update(map, currentDrawings)
                         currentGridCenter?.let { GridLayer.update(map, it) }
@@ -483,9 +478,11 @@ fun TacticalMap(
             // getMapAsync block during MapView construction (line ~88).
             if (map.style != null && map.style?.json != styleJson) {
                 map.setStyle(Style.Builder().fromJson(styleJson)) { style ->
-                    ContactLayer.update(map, context, currentContacts)
-                    contactSymbolLayer.installInto(style, context)
-                    contactSymbolLayer.update(map, context, currentContacts)
+                    // Issue #77 — basemap swap reloads the style (wiping annotation
+                    // layers). The styleJson-keyed remember gave us a fresh
+                    // ContactSymbolManager; install it on the new style + re-push.
+                    contactSymbolManager.installInto(mapView, map, style)
+                    contactSymbolManager.update(context, style, currentContacts)
                     MeasurementLayer.update(map, currentMeasurementPoints)
                     DrawingLayer.update(map, currentDrawings)
                     currentGridCenter?.let { GridLayer.update(map, it) }
@@ -671,9 +668,13 @@ fun TacticalMap(
         factory = { mapView },
         update = {
             mapView.getMapAsync { map ->
-                map.getStyle { _ ->
-                    ContactLayer.update(map, context, currentContacts)
-                    contactSymbolLayer.update(map, context, currentContacts)
+                map.getStyle { style ->
+                    // Issue #77 — push the current contacts through the SymbolManager
+                    // on every recomposition (same cadence the Cesium engine uses).
+                    // installInto is a no-op once installed; the initial install
+                    // happens in the setStyle callback during MapView construction.
+                    contactSymbolManager.installInto(mapView, map, style)
+                    contactSymbolManager.update(context, style, currentContacts)
                 }
             }
         },

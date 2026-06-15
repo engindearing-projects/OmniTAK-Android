@@ -164,6 +164,12 @@ dependencies {
 
     // MapLibre Android (open-source fork of Mapbox) — parallel to iOS
     implementation("org.maplibre.gl:android-sdk:11.8.0")
+    // Annotation plugin (SymbolManager) — issue #77. Contacts render through
+    // this annotation/bitmap pipeline, the same render-path family as
+    // LocationComponent (which paints reliably on Adreno/Mali/Immortalis),
+    // instead of the GeoJSON CircleLayer/SymbolLayer that is "queryable but
+    // never draws pixels" on those drivers. v3.x line targets MapLibre 11.x.
+    implementation("org.maplibre.gl:android-plugin-annotation-v9:3.0.2")
 
     // NGA's tested MGRS / UTM converter. Operators rely on grid coords
     // for navigation; rolling our own would risk silent miscalculation.
