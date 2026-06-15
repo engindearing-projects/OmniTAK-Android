@@ -91,10 +91,36 @@ class ContactSymbolLayer {
         // Image name prefix in [Style.addImage]. Keyed by SIDC so
         // each distinct symbol is uploaded exactly once per style.
         const val ICON_IMAGE_PREFIX = "milstd-"
+
+        /**
+         * The MapLibre image id a MIL-STD-2525 contact registers + references.
+         * Pure: no Android deps. Pinned by tests so the id written into a
+         * feature's [PROP_IMAGE] (what the SymbolLayer's icon-image expression
+         * resolves) can never drift from the id passed to [Style.addImage].
+         * A mismatch here is exactly the "symbol resolves to nothing → blank"
+         * failure mode #77 is about.
+         */
+        fun milStdImageId(sidc: String): String = ICON_IMAGE_PREFIX + sidc
+
+        /**
+         * Resolve the final icon-image id for a contact: a bundled / imported
+         * TAK-suite id when one was registered ([takImageId] non-null, #98),
+         * otherwise the MIL-STD-2525 id. This is the single source of truth the
+         * feature's [PROP_IMAGE] is built from; keeping it pure lets a JVM test
+         * assert the SymbolLayer always references a real, registered image.
+         */
+        fun resolveImageName(sidc: String, takImageId: String?): String =
+            takImageId ?: milStdImageId(sidc)
     }
 
     private var installed: Boolean = false
     private val registeredSidcs: MutableSet<String> = mutableSetOf()
+
+    // Issue #77 — set true by [registerTakIconImage] whenever it performs a
+    // fresh [Style.addImage] on this call, so [update] knows a new icon
+    // entered the atlas via the TAK/imported path (not just the MIL-STD
+    // path) and must re-assert + repaint. Reset at the top of each [update].
+    private var takImageAddedThisCall: Boolean = false
 
     /**
      * Wire the source + layer into [style] and pre-warm the cache
@@ -155,7 +181,36 @@ class ContactSymbolLayer {
      * not yet registered in [Style] is rasterised + added before the
      * source is updated. Contacts with NaN lat/lon are skipped.
      *
-     * @return number of distinct SIDCs newly registered on this call
+     * Issue #77 — the candidate render fix lives here. Two ordering
+     * problems caused dropped markers to stay blank on Mali/Adreno
+     * (Pixel 9 Pro) until a full style reload (3D-terrain toggle):
+     *
+     *   1. ATLAS-RESOLVE RACE. Each first-sighting [Style.addImage] posts
+     *      a sprite-atlas mutation to the native render thread, but the
+     *      `setGeoJson` push that follows in the SAME synchronous block
+     *      makes the SymbolLayer resolve `icon-image` against the atlas
+     *      on the very next frame — potentially before the new image has
+     *      committed. The symbol resolves to a missing id and draws blank.
+     *      A style reload rebuilds the atlas with every image present,
+     *      which is exactly why toggling terrain "fixes" it. SwiftShader /
+     *      the CI emulator have different upload timing, so it never repros
+     *      there — this is a device-only GPU/driver-timing bug.
+     *
+     *   2. NO LAYER RE-RESOLVE + NO REPAINT. Neither [Style.addImage] nor
+     *      `setGeoJson` re-evaluates an already-added layer's `icon-image`
+     *      property or forces a redraw. PR #107's `triggerRepaint` on the
+     *      source push didn't help because it invalidated source tiles,
+     *      not the icon-image → atlas resolution.
+     *
+     * Fix: register all referenced images FIRST (separate phase), push the
+     * source data, and only when at least one NEW image was added this call,
+     * re-assert the SymbolLayer's `iconImage` (so the layer re-resolves
+     * against the now-current atlas) and [MapLibreMap.triggerRepaint] (so
+     * the render thread actually redraws the frame). On steady-state updates
+     * (no new icons) we skip the re-assert — it's only needed the first time
+     * a given symbol id appears.
+     *
+     * @return number of distinct images newly registered on this call
      *   (useful for tests + diagnostics).
      */
     fun update(map: MapLibreMap, context: Context, contacts: Collection<CoTEvent>): Int {
@@ -165,11 +220,14 @@ class ContactSymbolLayer {
             return 0
         }
 
-        // First pass: make sure every image referenced by the
-        // FeatureCollection has been registered. Skip rows with bad
-        // coordinates. Issue #98 — a contact carrying a TAK-suite iconset
-        // (Spot Map today; Markers/Google when a clean pack lands) resolves to
-        // a bundled icon FIRST; everything else falls back to MIL-STD-2525.
+        // Phase 1 — register every image the FeatureCollection will
+        // reference, BEFORE the source push, so the icon-image expression
+        // never resolves against an atlas that's missing an entry. Skip
+        // rows with bad coordinates. Issue #98 — a contact carrying a
+        // TAK-suite iconset (Spot Map today; Markers/Google when a clean
+        // pack lands) resolves to a bundled icon FIRST; everything else
+        // falls back to MIL-STD-2525.
+        takImageAddedThisCall = false
         var newlyRegistered = 0
         val features = JSONArray()
         for (c in contacts) {
@@ -179,12 +237,50 @@ class ContactSymbolLayer {
             if (takImageId == null && registerSidcImage(style, context, sidc)) {
                 newlyRegistered++
             }
-            val imageName = takImageId ?: (ICON_IMAGE_PREFIX + sidc)
+            val imageName = resolveImageName(sidc, takImageId)
             features.put(featureJson(c, sidc, imageName))
         }
+        // Fold in fresh TAK/imported-icon registrations (#98 path) so the
+        // re-resolve below fires for them too — they hit a different addImage
+        // call than the MIL-STD branch counted above.
+        if (takImageAddedThisCall) newlyRegistered++
 
+        // Phase 2 — push the source data.
         GeoJsonLayerFeeder.push(style, SOURCE_ID, features)
+
+        // Phase 3 — Issue #77. If any image was added on THIS call, the
+        // symbol layer was built/last-resolved against an atlas that didn't
+        // contain it. Re-assert icon-image to force a fresh resolve and
+        // trigger one repaint so the new sprite actually paints without a
+        // style reload. No-op for steady-state updates (newlyRegistered==0).
+        if (newlyRegistered > 0) {
+            reassertIconResolution(map, style)
+        }
         return newlyRegistered
+    }
+
+    /**
+     * Issue #77 — force the symbol layer to re-resolve its `icon-image`
+     * against the current sprite atlas and request a redraw. Called after a
+     * runtime [Style.addImage] so a just-registered marker icon paints on
+     * Mali/Adreno without waiting for a full style reload.
+     *
+     * Re-applying the same [iconImage] expression via [setProperties] makes
+     * MapLibre re-evaluate the layer's icon resolution on the next render
+     * pass (now that the atlas entry exists); [MapLibreMap.triggerRepaint]
+     * guarantees that pass happens immediately rather than on the next
+     * incidental invalidation (camera move, etc.). Defensive: if the layer
+     * is somehow absent (e.g. a partial style swap) we log and no-op rather
+     * than crash — the next [installInto] re-creates it.
+     */
+    private fun reassertIconResolution(map: MapLibreMap, style: Style) {
+        val symbolLayer = style.getLayerAs<SymbolLayer>(SYMBOL_LAYER_ID)
+        if (symbolLayer == null) {
+            Log.w(TAG, "reassertIconResolution: $SYMBOL_LAYER_ID missing — skipping re-resolve")
+            return
+        }
+        symbolLayer.setProperties(iconImage(Expression.get(PROP_IMAGE)))
+        map.triggerRepaint()
     }
 
     /**
@@ -208,6 +304,7 @@ class ContactSymbolLayer {
                 if (bitmap != null) {
                     style.addImage(imageId, bitmap)
                     registeredSidcs.add(imageId)
+                    takImageAddedThisCall = true
                 }
             }
             // Return the id even if the bitmap was missing — avoids repeated
@@ -229,6 +326,7 @@ class ContactSymbolLayer {
         ) ?: return null
         style.addImage(imageId, bitmap)
         registeredSidcs.add(imageId)
+        takImageAddedThisCall = true
         return imageId
     }
 
@@ -246,7 +344,7 @@ class ContactSymbolLayer {
                 Log.w(TAG, "no bitmap available for sidc=$sidc; skipping addImage")
                 return false
             }
-        style.addImage(ICON_IMAGE_PREFIX + sidc, bitmap)
+        style.addImage(milStdImageId(sidc), bitmap)
         registeredSidcs.add(sidc)
         return true
     }
