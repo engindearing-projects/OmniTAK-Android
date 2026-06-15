@@ -38,7 +38,10 @@ object Loc {
         // displayName is the endonym — the language's own name, which is
         // what users scanning a language list expect to see.
         ENGLISH("en", "English", "🇬🇧"),
-        TRADITIONAL_CHINESE("zh-Hant", "繁體中文", "🇹🇼");
+        TRADITIONAL_CHINESE("zh-Hant", "繁體中文", "🇹🇼"),
+        POLISH("pl", "Polski", "🇵🇱"),
+        GERMAN("de", "Deutsch", "🇩🇪"),
+        FRENCH("fr", "Français", "🇫🇷");
 
         companion object {
             fun fromCode(code: String?): Language? =
@@ -97,7 +100,8 @@ object Loc {
     /** Best-effort match of the device's preferred locales to a language we
      *  ship. A `zh-Hant` / `zh-TW` / `zh-HK` / `zh-MO` device resolves to
      *  Traditional Chinese; a Simplified (`zh-Hans` / `zh-CN`) device falls
-     *  through to English since we don't ship Simplified. */
+     *  through to English since we don't ship Simplified. `pl`, `de`, and
+     *  `fr` device locales map to their respective shipped catalogues. */
     private fun systemDefault(): Language {
         val locales = Resources.getSystem().configuration.locales
         for (i in 0 until locales.size()) {
@@ -108,6 +112,11 @@ object Loc {
                     locale.country.uppercase() in TRADITIONAL_REGIONS
                 if (isTraditional) return Language.TRADITIONAL_CHINESE
                 continue // Simplified Chinese — we don't ship it; keep scanning.
+            }
+            when (lang) {
+                "pl" -> return Language.POLISH
+                "de" -> return Language.GERMAN
+                "fr" -> return Language.FRENCH
             }
             Language.fromCode(lang)?.let { return it }
         }

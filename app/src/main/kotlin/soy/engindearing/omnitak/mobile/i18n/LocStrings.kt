@@ -21,6 +21,9 @@ internal object LocStrings {
     fun catalogue(language: Language): Map<String, String> = when (language) {
         Language.ENGLISH -> EN
         Language.TRADITIONAL_CHINESE -> ZH_HANT
+        Language.POLISH -> PL
+        Language.GERMAN -> DE
+        Language.FRENCH -> FR
     }
 
     private val EN: Map<String, String> = mapOf(
@@ -149,6 +152,51 @@ internal object LocStrings {
         "mission.attach.none" to "No missions on %s to attach to — create one first",
         "mission.attach.ok" to "Attached to “%s”",
         "mission.attach.failed" to "Attach failed: %s",
+        // --- Onboarding navigation ---
+        "onboarding.skip" to "Skip",
+        "onboarding.continue" to "Continue",
+        "onboarding.getStarted" to "Get Started",
+        "onboarding.back" to "Back",
+
+        // --- Onboarding page 1: Welcome ---
+        "onboarding.page1.title" to "Welcome to OmniTAK",
+        "onboarding.page1.desc" to "Your powerful Android client for Team Awareness Kit (TAK) servers. Connect, share, and collaborate in real-time.",
+        "onboarding.page1.feature1" to "Real-time position sharing",
+        "onboarding.page1.feature2" to "Secure communications",
+        "onboarding.page1.feature3" to "Map-based awareness",
+        "onboarding.page1.feature4" to "Multi-platform support",
+
+        // --- Onboarding page 2: Secure & Certified ---
+        "onboarding.page2.title" to "Secure & Certified",
+        "onboarding.page2.desc" to "OmniTAK supports certificate-based authentication for secure connections to TAK servers.",
+        "onboarding.page2.feature1" to "Client certificate support",
+        "onboarding.page2.feature2" to "TLS/SSL encryption",
+        "onboarding.page2.feature3" to "Keystore integration",
+        "onboarding.page2.feature4" to "Automatic enrollment",
+
+        // --- Onboarding page 3: Quick & Easy Setup ---
+        "onboarding.page3.title" to "Quick & Easy Setup",
+        "onboarding.page3.desc" to "Get connected in seconds with smart setup options. Multiple connection methods for every scenario.",
+        "onboarding.page3.feature1" to "QR code scanning",
+        "onboarding.page3.feature2" to "Auto-discovery",
+        "onboarding.page3.feature3" to "Common presets",
+        "onboarding.page3.feature4" to "Manual configuration",
+
+        // --- Onboarding page 4: Ready to Connect ---
+        "onboarding.page4.title" to "Ready to Connect?",
+        "onboarding.page4.desc" to "Let\'s get you connected to a TAK server. Choose the method that works best for you.",
+        "onboarding.page4.feature1" to "Connect in < 30 seconds",
+        "onboarding.page4.feature2" to "No technical knowledge needed",
+        "onboarding.page4.feature3" to "Full ATAK compatibility",
+        "onboarding.page4.feature4" to "Works with any TAK server",
+
+        // --- Onboarding page 5: Make It Yours ---
+        "onboarding.page5.title" to "Make It Yours",
+        "onboarding.page5.desc" to "The bottom toolbar is fully customizable — put the tools you actually use up front.",
+        "onboarding.page5.feature1" to "Press & hold the bar to start editing",
+        "onboarding.page5.feature2" to "Drag icons to reorder, tap − to remove",
+        "onboarding.page5.feature3" to "Tap + to add Drop Pin, Measure, Routes & more",
+        "onboarding.page5.feature4" to "Reopen any time via Settings ▸ Customize Toolbar",
     )
 
     private val ZH_HANT: Map<String, String> = mapOf(
@@ -268,5 +316,198 @@ internal object LocStrings {
         "mission.attach.none" to "%s 上沒有可附加的任務 — 請先建立一個",
         "mission.attach.ok" to "已附加至「%s」",
         "mission.attach.failed" to "附加失敗：%s",
+        // --- Onboarding navigation ---
+        "onboarding.skip" to "略過",
+        "onboarding.continue" to "繼續",
+        "onboarding.getStarted" to "開始使用",
+        "onboarding.back" to "返回",
+
+        // --- Onboarding page 1: Welcome ---
+        "onboarding.page1.title" to "歡迎使用 OmniTAK",
+        "onboarding.page1.desc" to "您強大的 Android 客戶端，用於 Team Awareness Kit (TAK) 伺服器。即時連線、分享與協作。",
+        "onboarding.page1.feature1" to "即時位置共享",
+        "onboarding.page1.feature2" to "安全通訊",
+        "onboarding.page1.feature3" to "地圖態勢感知",
+        "onboarding.page1.feature4" to "多平台支援",
+
+        // --- Onboarding page 2: Secure & Certified ---
+        "onboarding.page2.title" to "安全且經認證",
+        "onboarding.page2.desc" to "OmniTAK 支援憑證式驗證，以安全連線至 TAK 伺服器。",
+        "onboarding.page2.feature1" to "支援用戶端憑證",
+        "onboarding.page2.feature2" to "TLS/SSL 加密",
+        "onboarding.page2.feature3" to "金鑰庫整合",
+        "onboarding.page2.feature4" to "自動註冊",
+
+        // --- Onboarding page 3: Quick & Easy Setup ---
+        "onboarding.page3.title" to "快速輕鬆設定",
+        "onboarding.page3.desc" to "透過智慧設定選項，幾秒鐘內即可連線。多種連線方式適用於各種情境。",
+        "onboarding.page3.feature1" to "QR 碼揃描",
+        "onboarding.page3.feature2" to "自動探索",
+        "onboarding.page3.feature3" to "常用預設",
+        "onboarding.page3.feature4" to "手動設定",
+
+        // --- Onboarding page 4: Ready to Connect ---
+        "onboarding.page4.title" to "準備好連線了嗎？",
+        "onboarding.page4.desc" to "讓我們為您連線至 TAK 伺服器。選擇最適合您的方式。",
+        "onboarding.page4.feature1" to "30 秒內完成連線",
+        "onboarding.page4.feature2" to "無需技術知識",
+        "onboarding.page4.feature3" to "完全相容 ATAK",
+        "onboarding.page4.feature4" to "適用任何 TAK 伺服器",
+
+        // --- Onboarding page 5: Make It Yours ---
+        "onboarding.page5.title" to "打造專屬工具列",
+        "onboarding.page5.desc" to "底部工具列可完全自訂 — 將您常用的工具放在最前面。",
+        "onboarding.page5.feature1" to "長按工具列開始編輯",
+        "onboarding.page5.feature2" to "拖曳圖示排序，點 − 移除",
+        "onboarding.page5.feature3" to "點 + 新增投針、測量、路線等",
+        "onboarding.page5.feature4" to "隨時從設定 ▸ 自訂工具列重新開啟",
+    )
+
+
+    // LLM-translated 2026-06-15. Needs native speaker review before public release.
+    private val PL: Map<String, String> = mapOf(
+        // --- Onboarding navigation ---
+        "onboarding.skip" to "Pominą",
+        "onboarding.continue" to "Dalej",
+        "onboarding.getStarted" to "Rozpocznij",
+        "onboarding.back" to "Wstecz",
+
+        // --- Onboarding page 1: Welcome ---
+        "onboarding.page1.title" to "Witamy w OmniTAK",
+        "onboarding.page1.desc" to "Zaawansowany klient Android dla serwerów Team Awareness Kit (TAK). Łącz się, udostępniaj i współpracuj w czasie rzeczywistym.",
+        "onboarding.page1.feature1" to "Udostępnianie pozycji w czasie rzeczywistym",
+        "onboarding.page1.feature2" to "Bezpieczna łączność",
+        "onboarding.page1.feature3" to "Świadomość sytuacyjna na mapie",
+        "onboarding.page1.feature4" to "Obsługa wielu platform",
+
+        // --- Onboarding page 2: Secure & Certified ---
+        "onboarding.page2.title" to "Bezpieczny i certyfikowany",
+        "onboarding.page2.desc" to "OmniTAK obsługuje uwierzytelnianie oparte na certyfikatach dla bezpiecznych połączeń z serwerami TAK.",
+        "onboarding.page2.feature1" to "Obsługa certyfikatów klienta",
+        "onboarding.page2.feature2" to "Szyfrowanie TLS/SSL",
+        "onboarding.page2.feature3" to "Integracja z magazynem kluczy",
+        "onboarding.page2.feature4" to "Automatyczna rejestracja",
+
+        // --- Onboarding page 3: Quick & Easy Setup ---
+        "onboarding.page3.title" to "Szybka i łatwa konfiguracja",
+        "onboarding.page3.desc" to "Połącz się w kilka sekund dzięki inteligentnym opcjom konfiguracji. Wiele metod połączenia dla każdego scenariusza.",
+        "onboarding.page3.feature1" to "Skanowanie kodu QR",
+        "onboarding.page3.feature2" to "Automatyczne wykrywanie",
+        "onboarding.page3.feature3" to "Popularne ustawienia",
+        "onboarding.page3.feature4" to "Konfiguracja ręczna",
+
+        // --- Onboarding page 4: Ready to Connect ---
+        "onboarding.page4.title" to "Gotów do połączenia?",
+        "onboarding.page4.desc" to "Połączmy Cię z serwerem TAK. Wybierz metodę, która sprawdzi się najlepiej.",
+        "onboarding.page4.feature1" to "Połączenie w mniej niż 30 sekund",
+        "onboarding.page4.feature2" to "Bez wiedzy technicznej",
+        "onboarding.page4.feature3" to "Pełna zgodność z ATAK",
+        "onboarding.page4.feature4" to "Działa z dowolnym serwerem TAK",
+
+        // --- Onboarding page 5: Make It Yours ---
+        "onboarding.page5.title" to "Dostosuj do siebie",
+        "onboarding.page5.desc" to "Pasek narzędzi na dole można w pełni dostosować — wysuń narzędzia, których naprawdę używasz.",
+        "onboarding.page5.feature1" to "Przytrzymaj pasek, aby rozpocząć edycję",
+        "onboarding.page5.feature2" to "Przeciągnij ikony, aby zmienić kolejność, dotknąj −, aby usunąć",
+        "onboarding.page5.feature3" to "Dotknąj +, aby dodać Upuść pinezkę, Pomiar, Trasy i więcej",
+        "onboarding.page5.feature4" to "Otwórz ponownie w dowolnym momencie przez Ustawienia ▸ Dostosuj pasek",
+    )
+
+    // LLM-translated 2026-06-15. Needs native speaker review before public release.
+    private val DE: Map<String, String> = mapOf(
+        // --- Onboarding navigation ---
+        "onboarding.skip" to "Überspringen",
+        "onboarding.continue" to "Weiter",
+        "onboarding.getStarted" to "Loslegen",
+        "onboarding.back" to "Zurück",
+
+        // --- Onboarding page 1: Welcome ---
+        "onboarding.page1.title" to "Willkommen bei OmniTAK",
+        "onboarding.page1.desc" to "Dein leistungsstarker Android-Client für Team-Awareness-Kit-(TAK)-Server. Verbinden, teilen und in Echtzeit zusammenarbeiten.",
+        "onboarding.page1.feature1" to "Positionsfreigabe in Echtzeit",
+        "onboarding.page1.feature2" to "Sichere Kommunikation",
+        "onboarding.page1.feature3" to "Kartenbasierte Lageübersicht",
+        "onboarding.page1.feature4" to "Plattformübergreifende Unterstützung",
+
+        // --- Onboarding page 2: Secure & Certified ---
+        "onboarding.page2.title" to "Sicher & zertifiziert",
+        "onboarding.page2.desc" to "OmniTAK unterstützt zertifikatsbasierte Authentifizierung für sichere Verbindungen zu TAK-Servern.",
+        "onboarding.page2.feature1" to "Unterstützung für Client-Zertifikate",
+        "onboarding.page2.feature2" to "TLS/SSL-Verschlüsselung",
+        "onboarding.page2.feature3" to "Schlüsselspeicher-Integration",
+        "onboarding.page2.feature4" to "Automatische Registrierung",
+
+        // --- Onboarding page 3: Quick & Easy Setup ---
+        "onboarding.page3.title" to "Schnelle & einfache Einrichtung",
+        "onboarding.page3.desc" to "In Sekunden verbunden dank smarter Einrichtungsoptionen. Mehrere Verbindungsmethoden für jedes Szenario.",
+        "onboarding.page3.feature1" to "QR-Code-Scan",
+        "onboarding.page3.feature2" to "Automatische Erkennung",
+        "onboarding.page3.feature3" to "Gängige Voreinstellungen",
+        "onboarding.page3.feature4" to "Manuelle Konfiguration",
+
+        // --- Onboarding page 4: Ready to Connect ---
+        "onboarding.page4.title" to "Bereit zum Verbinden?",
+        "onboarding.page4.desc" to "Verbinden wir dich mit einem TAK-Server. Wähle die Methode, die für dich am besten funktioniert.",
+        "onboarding.page4.feature1" to "Verbindung in unter 30 Sekunden",
+        "onboarding.page4.feature2" to "Keine technischen Kenntnisse nötig",
+        "onboarding.page4.feature3" to "Volle ATAK-Kompatibilität",
+        "onboarding.page4.feature4" to "Funktioniert mit jedem TAK-Server",
+
+        // --- Onboarding page 5: Make It Yours ---
+        "onboarding.page5.title" to "Mach es zu deinem",
+        "onboarding.page5.desc" to "Die untere Werkzeugleiste ist vollständig anpassbar — stelle die Werkzeuge, die du wirklich nutzt, nach vorne.",
+        "onboarding.page5.feature1" to "Leiste gedrückt halten, um Bearbeitung zu starten",
+        "onboarding.page5.feature2" to "Symbole ziehen zum Umordnen, − tippen zum Entfernen",
+        "onboarding.page5.feature3" to "Tippe +, um Pin setzen, Messen, Routen & mehr hinzuzufügen",
+        "onboarding.page5.feature4" to "Jederzeit über Einstellungen ▸ Werkzeugleiste anpassen öffnen",
+    )
+
+    // LLM-translated 2026-06-15. Needs native speaker review before public release.
+    private val FR: Map<String, String> = mapOf(
+        // --- Onboarding navigation ---
+        "onboarding.skip" to "Passer",
+        "onboarding.continue" to "Continuer",
+        "onboarding.getStarted" to "Commencer",
+        "onboarding.back" to "Retour",
+
+        // --- Onboarding page 1: Welcome ---
+        "onboarding.page1.title" to "Bienvenue sur OmniTAK",
+        "onboarding.page1.desc" to "Votre client Android performant pour les serveurs Team Awareness Kit (TAK). Connectez-vous, partagez et collaborez en temps réel.",
+        "onboarding.page1.feature1" to "Partage de position en temps réel",
+        "onboarding.page1.feature2" to "Communications sécurisées",
+        "onboarding.page1.feature3" to "Connaissance de la situation sur carte",
+        "onboarding.page1.feature4" to "Prise en charge multiplateforme",
+
+        // --- Onboarding page 2: Secure & Certified ---
+        "onboarding.page2.title" to "Sécurisé et certifié",
+        "onboarding.page2.desc" to "OmniTAK prend en charge l\'authentification par certificat pour des connexions sécurisées aux serveurs TAK.",
+        "onboarding.page2.feature1" to "Prise en charge des certificats client",
+        "onboarding.page2.feature2" to "Chiffrement TLS/SSL",
+        "onboarding.page2.feature3" to "Intégration au trousseau de clés",
+        "onboarding.page2.feature4" to "Enrôlement automatique",
+
+        // --- Onboarding page 3: Quick & Easy Setup ---
+        "onboarding.page3.title" to "Configuration rapide et simple",
+        "onboarding.page3.desc" to "Connectez-vous en quelques secondes grâce à des options de configuration intelligentes. Plusieurs méthodes de connexion pour chaque scénario.",
+        "onboarding.page3.feature1" to "Lecture de code QR",
+        "onboarding.page3.feature2" to "Découverte automatique",
+        "onboarding.page3.feature3" to "Préréglages courants",
+        "onboarding.page3.feature4" to "Configuration manuelle",
+
+        // --- Onboarding page 4: Ready to Connect ---
+        "onboarding.page4.title" to "Prêt à vous connecter ?",
+        "onboarding.page4.desc" to "Connectons-vous à un serveur TAK. Choisissez la méthode qui vous convient le mieux.",
+        "onboarding.page4.feature1" to "Connexion en moins de 30 secondes",
+        "onboarding.page4.feature2" to "Aucune connaissance technique requise",
+        "onboarding.page4.feature3" to "Compatibilité ATAK complète",
+        "onboarding.page4.feature4" to "Fonctionne avec tout serveur TAK",
+
+        // --- Onboarding page 5: Make It Yours ---
+        "onboarding.page5.title" to "Personnalisez-le",
+        "onboarding.page5.desc" to "La barre d\'outils en bas est entièrement personnalisable — mettez en avant les outils que vous utilisez vraiment.",
+        "onboarding.page5.feature1" to "Appuyez longuement sur la barre pour commencer à modifier",
+        "onboarding.page5.feature2" to "Faites glisser les icônes pour réorganiser, appuyez sur − pour supprimer",
+        "onboarding.page5.feature3" to "Appuyez sur + pour ajouter Épingler, Mesure, Itinéraires et plus",
+        "onboarding.page5.feature4" to "Rouvrir à tout moment via Paramètres ▸ Personnaliser la barre",
     )
 }

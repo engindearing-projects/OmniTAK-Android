@@ -14,8 +14,13 @@ import androidx.lifecycle.lifecycleScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -25,6 +30,8 @@ import soy.engindearing.omnitak.mobile.data.DeepLinkImport
 import soy.engindearing.omnitak.mobile.data.ImportedServerConfig
 import soy.engindearing.omnitak.mobile.data.TAKServer
 import soy.engindearing.omnitak.mobile.ui.navigation.AppNav
+import soy.engindearing.omnitak.mobile.ui.onboarding.OnboardingFlow
+import soy.engindearing.omnitak.mobile.ui.onboarding.OnboardingManager
 import soy.engindearing.omnitak.mobile.ui.theme.OmniTAKTheme
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalBackground
 
@@ -41,7 +48,18 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
                 ) {
-                    AppNav()
+                    val context = LocalContext.current
+                    var onboardingDone by remember {
+                        mutableStateOf(OnboardingManager.isComplete(context))
+                    }
+                    if (!onboardingDone) {
+                        OnboardingFlow(onComplete = {
+                            OnboardingManager.markComplete(context)
+                            onboardingDone = true
+                        })
+                    } else {
+                        AppNav()
+                    }
                 }
             }
         }
