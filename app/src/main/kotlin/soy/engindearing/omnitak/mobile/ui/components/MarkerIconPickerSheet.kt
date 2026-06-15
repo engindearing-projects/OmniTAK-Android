@@ -49,6 +49,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import soy.engindearing.omnitak.mobile.data.symbology.Affiliation
 import soy.engindearing.omnitak.mobile.data.symbology.CoTTypeDefinition
+import soy.engindearing.omnitak.mobile.data.symbology.IconPackRegistry
 import soy.engindearing.omnitak.mobile.data.symbology.MilStdIconCache
 import soy.engindearing.omnitak.mobile.data.symbology.MilStdIconService
 import soy.engindearing.omnitak.mobile.data.symbology.TakIconRegistry
@@ -207,6 +208,21 @@ fun MarkerIconPickerSheet(
                 selectedIconsetPath = selectedIconsetPath,
                 onPick = onPick,
             )
+
+            // ── Imported custom packs (Phase 2) ───────────────────────────
+            // Each pack imported via file-picker / data package shows its own
+            // horizontally-scrolling row. Empty when no packs have been imported.
+            val context = LocalContext.current
+            val importedPacks = remember {
+                IconPackRegistry.get(context).allPacks()
+            }
+            for (pack in importedPacks) {
+                ImportedPackRow(
+                    pack = pack,
+                    selectedIconsetPath = selectedIconsetPath,
+                    onPick = onPick,
+                )
+            }
 
             Text(
                 "MIL-STD-2525 · ${all.size} SYMBOLS",
@@ -477,6 +493,99 @@ private fun IconTile(
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
+    }
+}
+
+/**
+ * Issue #98 Phase 2 — horizontally-scrolling row for one imported iconset pack.
+ * Each tile shows the icon's image (loaded off the main thread from app-private
+ * storage) and its name. Tapping emits the ATAK canonical iconsetpath so the
+ * placed marker round-trips to ATAK / iTAK peers.
+ */
+@Composable
+private fun ImportedPackRow(
+    pack: IconPackRegistry.ImportedPack,
+    selectedIconsetPath: String?,
+    onPick: (MarkerIconChoice) -> Unit,
+) {
+    if (pack.icons.isEmpty()) return
+    val context = LocalContext.current
+    val registry = remember { IconPackRegistry.get(context) }
+
+    Text(
+        pack.name.uppercase(),
+        color = TacticalAccent,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Bold,
+    )
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = androidx.compose.ui.Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(top = 6.dp, bottom = 10.dp),
+    ) {
+        for (icon in pack.icons) {
+            val iconsetPath = "${pack.uid}/${icon.pathToken()}"
+            val bitmap by produceState<ImageBitmap?>(initialValue = null, icon.filename) {
+                value = withContext(Dispatchers.IO) {
+                    registry.loadBitmap(pack, icon)?.asImageBitmap()
+                }
+            }
+            val isSelected = selectedIconsetPath.equals(iconsetPath, ignoreCase = true)
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = androidx.compose.ui.Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(if (isSelected) TacticalAccent.copy(alpha = 0.18f) else TacticalSurface)
+                    .border(
+                        width = if (isSelected) 2.dp else 1.dp,
+                        color = if (isSelected) TacticalAccent else TacticalAccent.copy(alpha = 0.3f),
+                        shape = RoundedCornerShape(10.dp),
+                    )
+                    .clickable {
+                        onPick(
+                            MarkerIconChoice(
+                                cotType = BADGE_MARKER_COT_TYPE,
+                                iconsetPath = iconsetPath,
+                                argbHex = null,
+                                label = "${pack.name} ${icon.name}",
+                            ),
+                        )
+                    }
+                    .padding(vertical = 8.dp, horizontal = 8.dp),
+            ) {
+                Box(
+                    modifier = androidx.compose.ui.Modifier.size(36.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    val bmp = bitmap
+                    if (bmp != null) {
+                        androidx.compose.foundation.Image(
+                            bitmap = bmp,
+                            contentDescription = icon.name,
+                            modifier = androidx.compose.ui.Modifier.size(32.dp),
+                        )
+                    } else {
+                        Box(
+                            androidx.compose.ui.Modifier
+                                .size(20.dp)
+                                .clip(RoundedCornerShape(5.dp))
+                                .background(TacticalAccent.copy(alpha = 0.4f)),
+                        )
+                    }
+                }
+                Spacer(androidx.compose.ui.Modifier.height(4.dp))
+                Text(
+                    icon.name,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
+                    fontSize = 9.sp,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
     }
 }
 

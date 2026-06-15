@@ -23,6 +23,7 @@ import org.maplibre.android.style.layers.PropertyFactory.textSize
 import org.maplibre.android.style.layers.SymbolLayer
 import org.maplibre.android.style.sources.GeoJsonSource
 import soy.engindearing.omnitak.mobile.data.CoTEvent
+import soy.engindearing.omnitak.mobile.data.symbology.IconPackRegistry
 import soy.engindearing.omnitak.mobile.data.symbology.MilStdIconCache
 import soy.engindearing.omnitak.mobile.data.symbology.MilStdIconService
 import soy.engindearing.omnitak.mobile.data.symbology.TakIconRegistry
@@ -187,14 +188,34 @@ class ContactSymbolLayer {
     }
 
     /**
-     * Issue #98 — if [c] resolves to a bundled TAK icon-suite glyph (Spot Map
-     * via `<usericon iconsetpath>` or the `b-m-p-s-m` CoT type), rasterise +
-     * register it and return its style image id. Returns null when no TAK-suite
-     * icon applies, so the caller falls back to the MIL-STD path. The
-     * `iconsetPath` is consulted FIRST, before any SIDC lookup — exactly the
-     * resolution order ATAK / iTAK use, and the gap kymyura reported.
+     * Issue #98 — resolve and register an icon for [c], trying in resolution order:
+     * 1. Imported custom iconset pack ([IconPackRegistry]) — Phase 2.
+     * 2. Bundled TAK icon-suite (Spot Map / Markers / Google) — Phase 1.
+     * 3. Returns null → caller falls through to the MIL-STD-2525 path.
+     *
+     * The `iconsetPath` is consulted FIRST, before any SIDC lookup — exactly the
+     * resolution order ATAK / iTAK use.
      */
     private fun registerTakIconImage(style: Style, context: Context, c: CoTEvent): String? {
+        // 1. Imported custom iconset pack (Phase 2).
+        val registry = IconPackRegistry.get(context)
+        val imported = registry.resolve(c.iconsetPath)
+        if (imported != null) {
+            val (pack, icon) = imported
+            val imageId = registry.styleImageId(c.iconsetPath!!)
+            if (imageId !in registeredSidcs) {
+                val bitmap = registry.loadBitmap(pack, icon)
+                if (bitmap != null) {
+                    style.addImage(imageId, bitmap)
+                    registeredSidcs.add(imageId)
+                }
+            }
+            // Return the id even if the bitmap was missing — avoids repeated
+            // load attempts; the symbol will silently hide (no crash).
+            if (imageId in registeredSidcs) return imageId
+        }
+
+        // 2. Bundled TAK icon-suite (Phase 1 — Spot Map / Markers / Google / FEMA).
         if (!TakIconRegistry.handles(c.type, c.iconsetPath)) return null
         val argb = c.colorArgb?.let { TakIconRegistry.normalizeArgb(it) }
         val imageId = TakIconRegistry.styleImageId(c.type, c.iconsetPath, argb) ?: return null
