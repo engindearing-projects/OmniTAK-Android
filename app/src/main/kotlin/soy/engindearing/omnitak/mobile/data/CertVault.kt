@@ -28,12 +28,16 @@ import java.io.File
  * plaintext JSON, so a leaked vault file alone is not enough to unlock the
  * client key. Next hardening step if ever needed: EncryptedFile, or import
  * the keys into AndroidKeyStore as non-exportable entries.
+ *
+ * [read] is `open` so pure-JVM unit tests can subclass with an in-memory
+ * map without requiring Robolectric or a real Android Context.
  */
-class CertVault(context: Context) {
+open class CertVault protected constructor(private val dir: File) {
 
-    private val dir: File = File(context.filesDir, DIRNAME).apply {
-        if (!exists()) mkdirs()
-    }
+    /** Primary production constructor — resolves [dir] from [context]. */
+    constructor(context: Context) : this(
+        File(context.filesDir, DIRNAME).also { it.mkdirs() },
+    )
 
     /**
      * Copy [uri] into the vault using [displayName] as the on-disk filename.
@@ -77,7 +81,7 @@ class CertVault(context: Context) {
     }
 
     /** Read the raw bytes for [name], or null if missing/unreadable. */
-    fun read(name: String): ByteArray? {
+    open fun read(name: String): ByteArray? {
         val f = File(dir, sanitize(name))
         if (!f.exists()) return null
         return runCatching { f.readBytes() }.getOrNull()
