@@ -21,6 +21,7 @@ import org.json.JSONObject
 import org.maplibre.android.geometry.LatLng
 import soy.engindearing.omnitak.mobile.BuildConfig
 import soy.engindearing.omnitak.mobile.data.CoTEvent
+import soy.engindearing.omnitak.mobile.data.Drawing
 
 /**
  * Photoreal Cesium 3D globe map engine, hosted in a WebView. Mirrors the
@@ -43,6 +44,10 @@ fun CesiumMapView(
     selfCallsign: String,
     onLongPress: (LatLng, Offset) -> Unit,
     onContactTap: (CoTEvent) -> Unit,
+    // Issue #79 — operator drawings (line / polygon / circle) rendered on the
+    // globe via the cesium_scene.html setDrawings bridge, so a shape made on
+    // the 2D engine doesn't vanish when the operator switches to 3D.
+    drawings: List<Drawing> = emptyList(),
     // Camera events from the scene: target, web-mercator zoom, heading
     // (degrees clockwise from north — MapLibre's bearing convention).
     // Heading rides along so the 3D→2D switch keeps the rotation (#78).
@@ -82,6 +87,7 @@ fun CesiumMapView(
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
 
     val contactsState = rememberUpdatedState(contacts)
+    val drawingsState = rememberUpdatedState(drawings)
     val selfLatState = rememberUpdatedState(selfLat)
     val selfLonState = rememberUpdatedState(selfLon)
     val selfCallsignState = rememberUpdatedState(selfCallsign)
@@ -102,6 +108,16 @@ fun CesiumMapView(
             context = appContext,
         )
         wv.evaluateJavascript("window.OmniBridge.setEntities($json);", null)
+    }
+
+    // Issue #79 — push the current drawing roster to the globe. The JS bridge
+    // diffs against its own `_state.drawings` map, so this is idempotent and
+    // also removes drawings the operator deleted (#76 parity on the globe).
+    fun pushDrawings() {
+        val wv = webViewRef.value ?: return
+        if (!ready.value) return
+        val json = buildCesiumDrawingsJson(drawingsState.value)
+        wv.evaluateJavascript("window.OmniBridge.setDrawings($json);", null)
     }
 
     // #78 — seed the globe camera from the 2D engine's viewport on
@@ -142,6 +158,10 @@ fun CesiumMapView(
                                 // operator was looking (#78).
                                 seedInheritedCamera()
                                 pushEntities()
+                                // #79 — paint operator drawings on first ready
+                                // so a shape made on the 2D engine is already
+                                // on the globe when it opens.
+                                pushDrawings()
                                 // #95 — apply the persisted north-up lock on
                                 // first ready so the globe respects it without
                                 // waiting for a toggle.
@@ -200,7 +220,12 @@ fun CesiumMapView(
                 loadDataWithBaseURL("https://cesium.com/", html, "text/html", "UTF-8", null)
             }
         },
-        update = { pushEntities() },
+        update = {
+            pushEntities()
+            // #79 — recomposition delivers a fresh drawings list (add / edit /
+            // move / delete); mirror the entity push so the globe stays in sync.
+            pushDrawings()
+        },
     )
 
     // Map-control buttons → globe camera. The JS guards no-op until the
