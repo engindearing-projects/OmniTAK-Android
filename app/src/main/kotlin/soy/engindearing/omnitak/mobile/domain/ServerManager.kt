@@ -6,6 +6,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -97,6 +98,15 @@ class ServerManager(
     private val connectionsLock = Any()
     private val stateJobs = ConcurrentHashMap<String, kotlinx.coroutines.Job>()
     private val receivedJobs = ConcurrentHashMap<String, kotlinx.coroutines.Job>()
+    // Issue #102 — per-server auto-reconnect supervisor. Watches each live
+    // connection's state and, when a previously-up socket dies in the
+    // background (Doze / app-standby / a Wi-Fi↔LTE swap kills the TLS read
+    // loop), re-dials with exponential backoff instead of waiting for the
+    // operator to foreground the app (ON_RESUME). One job + one policy per
+    // server; both are torn down by disconnect() so a deliberate
+    // disconnect / toggle-off doesn't fight an instant auto-reconnect.
+    private val reconnectJobs = ConcurrentHashMap<String, kotlinx.coroutines.Job>()
+    private val reconnectPolicies = ConcurrentHashMap<String, ReconnectPolicy>()
     // Single PLI broadcaster — self-position fans out to every connected
     // server via the broadcast path of sendCoT, so one broadcaster covers all.
     private var pliBroadcaster: SelfPositionBroadcaster? = null
@@ -125,6 +135,52 @@ class ServerManager(
                 // PLI broadcaster lives as long as ≥1 server is connected.
                 if (_connectedServerIds.value.isNotEmpty()) startPliBroadcast()
                 else stopPliBroadcast()
+            }
+        }
+        // Issue #102 — application-level keepalive: re-dial this server with
+        // exponential backoff whenever its socket drops while it's still a
+        // wanted (enabled, in-map) connection. This is what makes a
+        // backgrounded, screen-off device recover on its own instead of
+        // only on the next ON_RESUME. conn.connect() is idempotent
+        // (no-op while a connect is in flight), so re-dialing the same
+        // TAKConnection instance is safe.
+        val policy = ReconnectPolicy()
+        reconnectPolicies[server.id] = policy
+        reconnectJobs[server.id] = scope.launch {
+            // drop(1): skip the StateFlow's initial Disconnected replay — the
+            // explicit conn.connect() below performs the first dial, and
+            // consuming a nextDelayMs() here would push the first *real* drop
+            // off its intended immediate retry.
+            conn.state.drop(1).collect { state ->
+                when (state) {
+                    is ConnectionState.Connected -> policy.reset()
+                    is ConnectionState.Connecting -> { /* attempt in flight */ }
+                    is ConnectionState.Disconnected, is ConnectionState.Failed -> {
+                        // Only re-dial connections we still want: a deliberate
+                        // disconnect()/toggle-off removes the server from the
+                        // map (and cancels this job), and a disabled server
+                        // must stay down.
+                        val stillWanted = connections[server.id] === conn &&
+                            (_servers.value.firstOrNull { it.id == server.id }?.enabled ?: false)
+                        if (ReconnectPolicy.shouldReconnect(state, stillWanted)) {
+                            val wait = policy.nextDelayMs()
+                            if (wait > 0) kotlinx.coroutines.delay(wait)
+                            // Re-check after the backoff sleep: the operator
+                            // may have disconnected/disabled the server, or a
+                            // foreground ON_RESUME reconnect may already have
+                            // it Connecting/Connected, during the wait.
+                            val target = connections[server.id]
+                            val enabledNow = _servers.value
+                                .firstOrNull { it.id == server.id }?.enabled ?: false
+                            val downNow = target?.state?.value.let {
+                                it is ConnectionState.Disconnected || it is ConnectionState.Failed
+                            }
+                            if (target === conn && enabledNow && downNow) {
+                                conn.connect()
+                            }
+                        }
+                    }
+                }
             }
         }
         receivedJobs[server.id] = scope.launch {
@@ -173,8 +229,26 @@ class ServerManager(
      * Called from MainActivity's ON_RESUME hook so that coming back from
      * the background (where Android may have killed read loops after Doze /
      * app-standby) recovers without the operator tapping play. Issue #6.
+     *
+     * Issue #102 — the background auto-reconnect supervisor now also keeps
+     * sockets alive without a foreground resume, but a server can still be
+     * mid-backoff when the operator opens the app. Reset every policy so
+     * the resume forces an immediate re-dial instead of waiting out the
+     * remaining backoff, then reconcile to cover any connection that was
+     * fully removed (e.g. a never-connected enabled server).
      */
     fun reconnectIfNeeded() {
+        reconnectPolicies.values.forEach { it.reset() }
+        // Immediately re-dial any enabled server whose existing connection is
+        // sitting Disconnected/Failed (the supervisor may be mid-backoff
+        // sleep). connect() is idempotent, so this is a no-op for live ones.
+        _servers.value.filter { it.enabled }.forEach { s ->
+            val conn = connections[s.id]
+            val down = conn?.state?.value.let {
+                it is ConnectionState.Disconnected || it is ConnectionState.Failed
+            }
+            if (conn != null && down) conn.connect()
+        }
         reconcileConnections(_servers.value)
     }
 
@@ -201,6 +275,11 @@ class ServerManager(
 
     /** Disconnect a single server by id, leaving the others connected. */
     fun disconnect(serverId: String): Unit = synchronized(connectionsLock) {
+        // Cancel the reconnect supervisor BEFORE tearing the socket down so
+        // the resulting Disconnected transition can't trigger an auto-redial
+        // of a server the operator just turned off (issue #102).
+        reconnectJobs.remove(serverId)?.cancel()
+        reconnectPolicies.remove(serverId)
         connections.remove(serverId)?.disconnect()
         stateJobs.remove(serverId)?.cancel()
         receivedJobs.remove(serverId)?.cancel()
