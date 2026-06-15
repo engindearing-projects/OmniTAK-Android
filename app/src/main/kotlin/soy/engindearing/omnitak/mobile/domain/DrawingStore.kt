@@ -18,6 +18,15 @@ class DrawingStore {
         _drawings.value = _drawings.value + drawing
     }
 
+    /**
+     * Issue #76 — replace a drawing in place (rename / recolor / move).
+     * Matched by [Drawing.id]; a no-op if the id isn't present so a stale
+     * edit (drawing deleted underneath the open sheet) can't resurrect it.
+     */
+    fun update(drawing: Drawing) {
+        _drawings.value = _drawings.value.map { if (it.id == drawing.id) drawing else it }
+    }
+
     fun remove(id: String) {
         _drawings.value = _drawings.value.filterNot { it.id == id }
     }
