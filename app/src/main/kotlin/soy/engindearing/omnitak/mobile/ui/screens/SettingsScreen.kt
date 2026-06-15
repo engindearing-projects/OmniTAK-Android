@@ -8,6 +8,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -302,6 +303,24 @@ fun SettingsScreen(
                     enabled = !prefs.useMilStdSelfSymbol,
                 )
             }
+            Spacer(Modifier.height(8.dp))
+            // Issue #51 — team color swatch picker. Taps write UserPrefs.team
+            // which flows into TacticalMap.selfTeamColor on next recompose.
+            Text(
+                "Team color",
+                color = MaterialTheme.colorScheme.onBackground,
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Text(
+                "Tints your self-marker to your TAK team",
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(Modifier.height(6.dp))
+            TeamColorSwatchPicker(
+                selected = prefs.team,
+                onSelect = { v -> mutate { it.copy(team = v) } },
+            )
 
             SectionHeader(Loc.t("settings.section.droneDetection"))
             Row(
@@ -763,3 +782,46 @@ private fun TeamColorDropdown(value: String, onSelect: (String) -> Unit) {
     }
 }
 
+/**
+ * Palette grid of the 14 canonical TAK team-color swatches (issue #51).
+ *
+ * Renders two rows of 7 swatches. Tapping a swatch calls [onSelect] with
+ * the Title-Case team name ("Cyan", "Dark Blue", etc.) which the caller
+ * writes to [UserPrefs.team]. The currently-selected swatch gets a 2 dp
+ * white border so the operator can see their active pick at a glance —
+ * matching the CivTAK team-color palette affordance.
+ *
+ * Embedded inside a `verticalScroll` Column so we use plain Rows rather
+ * than LazyVerticalGrid (no scroll nesting).
+ */
+@Composable
+private fun TeamColorSwatchPicker(selected: String, onSelect: (String) -> Unit) {
+    val rows = ATAK_TEAM_COLORS.chunked(7)
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        rows.forEach { rowColors ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                rowColors.forEach { (name, color) ->
+                    val isSelected = name.equals(selected, ignoreCase = true)
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(36.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(color)
+                            .then(
+                                if (isSelected) Modifier.border(
+                                    width = 2.dp,
+                                    color = Color.White,
+                                    shape = RoundedCornerShape(6.dp),
+                                ) else Modifier
+                            )
+                            .clickable { onSelect(name) },
+                    )
+                }
+            }
+        }
+    }
+}
