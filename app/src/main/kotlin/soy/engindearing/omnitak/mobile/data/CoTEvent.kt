@@ -1,5 +1,7 @@
 package soy.engindearing.omnitak.mobile.data
 
+import kotlinx.serialization.Serializable
+
 /**
  * MIL-STD-2525 affiliation parsed from a CoT event `type` attribute
  * (the second token after "a-", e.g. `a-f-…` → Friend). Colors roughly
@@ -57,6 +59,7 @@ object TakTeamColor {
  * renders on the map — uid, geographic position, affiliation, callsign,
  * timestamps. Unknown fields stay raw on [rawXml] for debug inspection.
  */
+@Serializable
 data class CoTEvent(
     val uid: String,
     val type: String,

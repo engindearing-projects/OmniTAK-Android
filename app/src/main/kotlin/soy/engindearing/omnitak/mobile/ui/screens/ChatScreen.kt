@@ -125,7 +125,11 @@ fun ChatScreen(initialConversationId: String? = null) {
             .toSet()
 
         val contactStubs = contacts.values
-            .filter { contact -> contact.uid != selfUid && contact.uid !in coveredUids }
+            .filter { contact ->
+                contact.uid != selfUid &&
+                    contact.uid !in coveredUids &&
+                    soy.engindearing.omnitak.mobile.domain.ContactStore.isEndpoint(contact)
+            }
             .map { contact ->
                 // Use the same deterministic conversation-id formula as
                 // ChatRoom.directConversationId so that when a real GeoChat

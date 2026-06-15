@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import soy.engindearing.omnitak.mobile.domain.LocalMarkerStore
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.data.AdminResponse
 import soy.engindearing.omnitak.mobile.data.CertVault
@@ -72,6 +73,18 @@ class OmniTAKApp : Application() {
         // mesh broadcast toggles) can read prefs.value immediately.
         appScope.launch {
             userPrefsStore.prefs.collect { cachedPrefs.value = it }
+        }
+
+        // #119 — Restore locally-dropped markers from the previous session,
+        // then keep the persisted blob in sync with any future changes.
+        // The collect loop re-persists only the "local-*" subset so that
+        // server/mesh contacts never bleed into the on-disk store.
+        appScope.launch {
+            localMarkerStore.load().forEach { contactStore.ingest(it) }
+            contactStore.contacts.collect { contacts ->
+                val localMarkers = contacts.values.filter { it.uid.startsWith("local-") }
+                localMarkerStore.persist(localMarkers)
+            }
         }
 
         // Issue #5 — start a foreground service while we're holding a
@@ -255,6 +268,9 @@ class OmniTAKApp : Application() {
     }
 
     val contactStore: ContactStore by lazy { ContactStore() }
+
+    /** #119 — Persists locally-dropped point markers across process death. */
+    val localMarkerStore: LocalMarkerStore by lazy { LocalMarkerStore(this) }
     /** External gyb_detect sensor over BLE GATT (Phase 3 of the gy6 plan).
      *  Parsed drones merge into ContactStore via the shared RID- UID;
      *  driven by `gybDetectorEnabled` in [onCreate]. */
