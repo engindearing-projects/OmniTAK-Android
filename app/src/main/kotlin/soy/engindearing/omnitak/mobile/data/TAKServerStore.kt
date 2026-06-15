@@ -14,6 +14,18 @@ import java.util.concurrent.atomic.AtomicBoolean
 private val Context.serverDataStore by preferencesDataStore(name = "tak_servers")
 
 /**
+ * Persistence contract used by [soy.engindearing.omnitak.mobile.domain.ServerManager].
+ * Extracted so tests can supply an in-memory fake without needing an Android
+ * [Context] or Preferences DataStore.
+ */
+interface ServerStoreApi {
+    val servers: Flow<List<TAKServer>>
+    val activeServerId: Flow<String?>
+    suspend fun saveServers(list: List<TAKServer>)
+    suspend fun saveActiveServerId(id: String?)
+}
+
+/**
  * Persists the TAK server list as a single JSON blob in a Preferences
  * DataStore. Mirrors the iOS UserDefaults+JSONEncoder scheme so both apps
  * stay read-compatible if we later share the format.
@@ -30,7 +42,7 @@ private val Context.serverDataStore by preferencesDataStore(name = "tak_servers"
 class TAKServerStore(
     private val context: Context,
     private val credentials: CredentialStore = SecureCredentialStore(context),
-) {
+) : ServerStoreApi {
     private val serversKey = stringPreferencesKey("servers_json")
     private val activeKey = stringPreferencesKey("active_server_id")
 
@@ -40,7 +52,7 @@ class TAKServerStore(
     // saveServers the persisted JSON carries no secrets to migrate.
     private val migrationAttempted = AtomicBoolean(false)
 
-    val servers: Flow<List<TAKServer>> = context.serverDataStore.data.map { prefs ->
+    override val servers: Flow<List<TAKServer>> = context.serverDataStore.data.map { prefs ->
         val raw = prefs[serversKey] ?: return@map emptyList()
         val decoded =
             runCatching { json.decodeFromString<List<TAKServer>>(raw) }.getOrElse { emptyList() }
@@ -48,14 +60,14 @@ class TAKServerStore(
         rehydrateSecrets(decoded, credentials)
     }
 
-    val activeServerId: Flow<String?> = context.serverDataStore.data.map { it[activeKey] }
+    override val activeServerId: Flow<String?> = context.serverDataStore.data.map { it[activeKey] }
 
-    suspend fun saveServers(list: List<TAKServer>) {
+    override suspend fun saveServers(list: List<TAKServer>) {
         val raw = json.encodeToString(stripSecrets(list, credentials))
         context.serverDataStore.edit { it[serversKey] = raw }
     }
 
-    suspend fun saveActiveServerId(id: String?) {
+    override suspend fun saveActiveServerId(id: String?) {
         context.serverDataStore.edit { prefs ->
             if (id == null) prefs.remove(activeKey) else prefs[activeKey] = id
         }

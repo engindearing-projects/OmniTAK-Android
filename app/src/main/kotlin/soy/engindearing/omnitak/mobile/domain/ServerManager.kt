@@ -14,9 +14,9 @@ import soy.engindearing.omnitak.mobile.data.ChatXml
 import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.CoTParser
 import soy.engindearing.omnitak.mobile.data.LocationProvider
+import soy.engindearing.omnitak.mobile.data.ServerStoreApi
 import soy.engindearing.omnitak.mobile.data.TAKConnection
 import soy.engindearing.omnitak.mobile.data.TAKServer
-import soy.engindearing.omnitak.mobile.data.TAKServerStore
 import soy.engindearing.omnitak.mobile.data.UserPrefsStore
 import java.util.concurrent.ConcurrentHashMap
 
@@ -31,7 +31,7 @@ import java.util.concurrent.ConcurrentHashMap
  *  - newly added enabled server becomes active when no enabled active exists
  */
 class ServerManager(
-    private val store: TAKServerStore,
+    private val store: ServerStoreApi,
     private val contactStore: ContactStore? = null,
     private val chatStore: ChatStore? = null,
     private val certVault: CertVault? = null,
@@ -45,9 +45,13 @@ class ServerManager(
     // AppPluginHost.dispatchCoT. Nullable + a plain lambda keeps this class
     // headless for unit tests and inert when no plugin registers a CoT handler.
     private val pluginCoTDispatch: ((CoTEvent) -> Boolean)? = null,
+    // Injected scope lets unit tests substitute a TestScope/StandardTestDispatcher
+    // so coroutines run under test-scheduler control (advanceUntilIdle / runCurrent).
+    // Production callers omit this and get the default app-wide scope.
+    externalScope: CoroutineScope? = null,
 ) {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope = externalScope ?: CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _servers = MutableStateFlow<List<TAKServer>>(emptyList())
     val servers: StateFlow<List<TAKServer>> = _servers.asStateFlow()
@@ -256,23 +260,45 @@ class ServerManager(
     private suspend fun hydrate() {
         var initialized = false
         store.servers.collect { loaded ->
-            _servers.value = loaded
-            if (!initialized && loaded.isNotEmpty()) {
-                initialized = true
-                // Pick a sensible default-target ("active") server once. The
-                // active server is just which one new DMs route to by default;
-                // every enabled server is connected regardless.
-                val activeId = peekActiveId()
-                val active = loaded.firstOrNull { it.id == activeId }
-                    ?: loaded.firstOrNull { it.enabled }
-                    ?: loaded.firstOrNull()
-                _activeServer.value = active
+            if (!initialized) {
+                // Cold-start: DataStore is the only source of truth.
+                _servers.value = loaded
+                if (loaded.isNotEmpty()) {
+                    initialized = true
+                    // Pick a sensible default-target ("active") server once. The
+                    // active server is just which one new DMs route to by default;
+                    // every enabled server is connected regardless.
+                    val activeId = peekActiveId()
+                    val active = loaded.firstOrNull { it.id == activeId }
+                        ?: loaded.firstOrNull { it.enabled }
+                        ?: loaded.firstOrNull()
+                    _activeServer.value = active
+                }
+                reconcileConnections(loaded)
+            } else {
+                // Post-init: in-memory _servers.value is authoritative for all
+                // server state (especially `enabled`). The async persist coroutines
+                // launched by toggleEnabled/addServer/deleteServer may fire in any
+                // order, so a DataStore emission received here can be stale relative
+                // to the in-memory state that was already set synchronously and
+                // reconciled.  Overwriting with `loaded` and re-reconciling would
+                // undo a more-recent in-memory toggle, breaking the connection.
+                //
+                // Only action here: pick up server IDs that an external writer
+                // (e.g. ConfigProfileStore QR/profile import) added to the DataStore
+                // without going through ServerManager's public API.
+                val knownIds = _servers.value.map { it.id }.toSet()
+                val incoming = loaded.filter { it.id !in knownIds }
+                if (incoming.isNotEmpty()) {
+                    val merged = _servers.value + incoming
+                    _servers.value = merged
+                    reconcileConnections(merged)
+                }
+                // Enabled-flag changes were applied synchronously in-memory by
+                // toggleEnabled / addServer / deleteServer before their async persist
+                // fired, and reconcileConnections was already called there too —
+                // no further action needed.
             }
-            // Keep the live socket set equal to the enabled set — connect
-            // every enabled server at once on cold launch, and react to
-            // adds/removes/toggles persisted from anywhere. Idempotent, so a
-            // racing DataPackageBootstrap import won't double-connect.
-            reconcileConnections(loaded)
         }
     }
 
