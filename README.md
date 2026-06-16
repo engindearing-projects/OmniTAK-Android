@@ -18,9 +18,9 @@ OmniTAK for Android is in **Google Play closed testing**, and every tester helps
 
 [![Latest release](https://img.shields.io/github/v/release/engindearing-projects/OmniTAK-Android?label=latest&sort=semver)](https://github.com/engindearing-projects/OmniTAK-Android/releases/latest)
 
-**Current release: [v0.2.2 (versionCode 18)](https://github.com/engindearing-projects/OmniTAK-Android/releases/tag/v0.2.2)** — foreground service holds the TLS socket warm during backgrounding so Doze / app-standby can no longer kill the read loop within ~10s. Carries forward v0.2.1's coordinate / units pickers, map camera preservation, and resume-reconnect; v0.2.0's auto-PPLI, live counters, and zip sideload.
+**Current release: [v0.37.0 (versionCode 96)](https://github.com/engindearing-projects/OmniTAK-Android/releases/tag/v0.37.0)** — KML placemarks as labeled yellow pins + a red-framed coordinate readout, offline map regions, custom icon-pack import + full FEMA/ICS-237 symbols, TAK/ATAK QR enrollment, keepalive + auto-reconnect, self-marker upgrades (reposition / triangle / heading / team color), and EN/PL/DE/FR localization.
 
-- **Signed APK (sideload):** [OmniTAK-0.2.2-vc18.apk](https://github.com/engindearing-projects/OmniTAK-Android/releases/download/v0.2.1/OmniTAK-0.2.2-vc18.apk)
+- **Signed APK (sideload):** [OmniTAK-0.37.0-vc96.apk](https://github.com/engindearing-projects/OmniTAK-Android/releases/download/v0.37.0/OmniTAK-0.37.0-vc96.apk)
 - **Always-latest APK:** [releases/latest](https://github.com/engindearing-projects/OmniTAK-Android/releases/latest)
 - **Google Play (closed testing):** [sign up at omnitak.engindearing.soy](https://omnitak.engindearing.soy) with your Google-account email
 
@@ -29,7 +29,7 @@ OmniTAK for Android is in **Google Play closed testing**, and every tester helps
 Verify the APK before installing — signing cert SHA-256 should be `9f3b1fd54ad4eb1dc5b45d91deac4699869617d3d2ac425a1b70337aa0eb13af`:
 
 ```bash
-apksigner verify --print-certs OmniTAK-0.2.2-vc18.apk
+apksigner verify --print-certs OmniTAK-0.37.0-vc96.apk
 ```
 
 ## Features
