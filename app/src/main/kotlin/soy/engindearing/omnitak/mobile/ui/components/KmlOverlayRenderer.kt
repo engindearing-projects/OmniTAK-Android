@@ -5,6 +5,14 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.Typeface
+import android.util.Log
+import android.content.Context
+import org.maplibre.android.annotations.Icon
+import org.maplibre.android.annotations.IconFactory
+import org.maplibre.android.annotations.Marker
+import org.maplibre.android.annotations.MarkerOptions
+import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.expressions.Expression
 import org.maplibre.android.style.layers.FillLayer
@@ -109,6 +117,37 @@ private fun buildPushpinBitmap(): Bitmap {
 }
 
 /**
+ * Composes the yellow pushpin with the placemark name baked in below it so the
+ * label is always-on (marker titles are otherwise tap-only). One bitmap per
+ * unique name, cached by KmlMarkerRenderer. Typeface.DEFAULT_BOLD renders CJK
+ * (Gavin's names) from the system font.
+ */
+private fun buildLabeledPin(name: String): Bitmap {
+    val pin = buildPushpinBitmap()
+    if (name.isBlank()) return pin
+    val text = if (name.length > 28) name.take(27) + "…" else name
+    val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE; textSize = 30f; textAlign = Paint.Align.CENTER
+        typeface = Typeface.DEFAULT_BOLD
+    }
+    val halo = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#CC000000"); textSize = 30f; textAlign = Paint.Align.CENTER
+        typeface = Typeface.DEFAULT_BOLD; style = Paint.Style.STROKE; strokeWidth = 6f
+    }
+    val pad = 12f
+    val textW = fill.measureText(text)
+    val w = maxOf(pin.width.toFloat(), textW + pad * 2).toInt()
+    val labelH = 46
+    val bmp = Bitmap.createBitmap(w, pin.height + labelH, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bmp)
+    canvas.drawBitmap(pin, (w - pin.width) / 2f, 0f, null)
+    val ty = pin.height + 34f
+    canvas.drawText(text, w / 2f, ty, halo)
+    canvas.drawText(text, w / 2f, ty, fill)
+    return bmp
+}
+
+/**
  * Renders imported KML overlays onto the MapLibre style as one GeoJsonSource
  * per overlay (loaded natively from the on-disk .geojson) plus line / fill /
  * symbol (pushpin) layers. This is the GPU-vector approach that scales to 50k+
@@ -132,43 +171,28 @@ object KmlOverlayRenderer {
         installed.clear()
         installed.addAll(wanted)
 
-        // Register the pushpin bitmap once per style load. getImage returns
-        // null if the style was wiped (setStyle) so we re-add it every apply.
-        if (style.getImage(KML_PUSHPIN_IMAGE_ID) == null) {
-            style.addImage(KML_PUSHPIN_IMAGE_ID, buildPushpinBitmap())
-        }
-
+        // NOTE: Point placemarks are NOT rendered here. MapLibre-Android's
+        // GeoJSON SymbolLayer/CircleLayer pipeline silently fails to paint on a
+        // subset of GL drivers (Adreno/Mali/Immortalis + emulator) — confirmed
+        // on-device. Points are drawn by KmlMarkerRenderer via the native
+        // Annotation API (addMarker), the same path LocationComponent uses. The
+        // GeoJSON source + fill/line layers below still drive line/polygon
+        // geometry (and render fine on unaffected GPUs).
         for (overlay in overlays) {
             val sourceId = "kmlsrc-${overlay.id}"
 
             if (style.getSource(sourceId) == null) {
-                val uri = URI("file://" + store.fileFor(overlay).absolutePath)
-                style.addSource(GeoJsonSource(sourceId, uri, GeoJsonOptions().withTolerance(1.0f)))
+                // String overload (setGeoJson(String) → nativeSetGeoJsonString);
+                // the FeatureCollection overload can silently yield a zero-feature
+                // native source.
+                val geoJson = runCatching { store.fileFor(overlay).readText() }.getOrDefault("")
+                style.addSource(GeoJsonSource(sourceId))
+                style.getSourceAs<GeoJsonSource>(sourceId)?.setGeoJson(geoJson)
                 style.addLayer(FillLayer("kmlfill-${overlay.id}", sourceId))
                 style.addLayer(
                     LineLayer("kmlline-${overlay.id}", sourceId).withProperties(
                         PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
                         PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
-                    ),
-                )
-                // SymbolLayer for Point placemarks — yellow pushpin + name label.
-                // Filtered to Point geometry so lines/polygons are unaffected.
-                style.addLayer(
-                    SymbolLayer("kmlsym-${overlay.id}", sourceId).withProperties(
-                        PropertyFactory.iconImage(KML_PUSHPIN_IMAGE_ID),
-                        PropertyFactory.iconAnchor(Property.ICON_ANCHOR_BOTTOM),
-                        PropertyFactory.iconAllowOverlap(true),
-                        PropertyFactory.textField(Expression.get("name")),
-                        PropertyFactory.textColor(Color.WHITE),
-                        PropertyFactory.textHaloColor(Color.BLACK),
-                        PropertyFactory.textHaloWidth(1.2f),
-                        PropertyFactory.textSize(12f),
-                        PropertyFactory.textAnchor(Property.TEXT_ANCHOR_TOP),
-                        PropertyFactory.textOffset(arrayOf(0f, 0.8f)),
-                        PropertyFactory.textOptional(true),
-                        PropertyFactory.textAllowOverlap(false),
-                    ).withFilter(
-                        Expression.eq(Expression.geometryType(), Expression.literal("Point")),
                     ),
                 )
             }
@@ -197,14 +221,10 @@ object KmlOverlayRenderer {
                     ),
                 ),
             )
-            // Pushpin + label visibility follows the overlay toggle.
-            style.getLayerAs<SymbolLayer>("kmlsym-${overlay.id}")?.setProperties(
-                PropertyFactory.visibility(vis),
-            )
         }
     }
 
-    private fun layerIds(id: String) = listOf("kmlfill-$id", "kmlline-$id", "kmlsym-$id")
+    private fun layerIds(id: String) = listOf("kmlfill-$id", "kmlline-$id")
 
     // Single-image raster overlays (KMZ GroundOverlay etc.) via ImageSource.
     private val installedRaster = mutableSetOf<String>()
@@ -313,5 +333,70 @@ object KmlOverlayRenderer {
                 PropertyFactory.rasterOpacity(1.0f),
             )
         }
+    }
+}
+
+/**
+ * Renders KML point placemarks as native MapLibre annotations (addMarker).
+ * MapLibre-Android's GeoJSON SymbolLayer/CircleLayer pipeline silently fails to
+ * rasterize on a subset of GL drivers (Adreno/Mali/Immortalis + emulator) —
+ * confirmed on-device. The Annotation API uses the same native renderer as
+ * LocationComponent, which paints across those drivers. See
+ * project_omnitak_android_marker_gpu_bug. Yellow pushpin icon; the placemark
+ * name is the marker title (tap to reveal) until an always-on label lands.
+ */
+object KmlMarkerRenderer {
+    private val markers = mutableMapOf<String, List<Marker>>()
+    // Cache labeled-pin icons by name so a large KML with repeated names (e.g.
+    // hundreds of "CCTV" cameras) reuses one bitmap instead of thousands.
+    private val iconCache = mutableMapOf<String, Icon>()
+
+    fun apply(map: MapLibreMap, context: Context, overlays: List<KmlVectorOverlay>, store: KmlVectorOverlayStore) {
+        val visibleIds = overlays.filter { it.visible }.map { it.id }.toSet()
+        // Remove markers for overlays that were removed or hidden.
+        for (id in markers.keys.toList()) {
+            if (id !in visibleIds) {
+                markers[id]?.forEach { runCatching { map.removeMarker(it) } }
+                markers.remove(id)
+            }
+        }
+        val factory = IconFactory.getInstance(context)
+        for (overlay in overlays) {
+            if (!overlay.visible || markers.containsKey(overlay.id)) continue
+            val geoJson = runCatching { store.fileFor(overlay).readText() }.getOrNull() ?: continue
+            val added = parsePoints(geoJson).mapNotNull { (lat, lon, name) ->
+                val icon = iconCache.getOrPut(name) { factory.fromBitmap(buildLabeledPin(name)) }
+                runCatching {
+                    map.addMarker(MarkerOptions().position(LatLng(lat, lon)).title(name).icon(icon))
+                }.getOrNull()
+            }
+            markers[overlay.id] = added
+        }
+    }
+
+    /** Drop all tracked markers (call before a full re-add after a style reload). */
+    fun clear(map: MapLibreMap) {
+        markers.values.flatten().forEach { runCatching { map.removeMarker(it) } }
+        markers.clear()
+    }
+
+    private fun parsePoints(geoJson: String): List<Triple<Double, Double, String>> {
+        val out = ArrayList<Triple<Double, Double, String>>()
+        runCatching {
+            val feats = org.json.JSONObject(geoJson).optJSONArray("features") ?: return emptyList()
+            for (i in 0 until feats.length()) {
+                val f = feats.optJSONObject(i) ?: continue
+                val geom = f.optJSONObject("geometry") ?: continue
+                if (geom.optString("type") != "Point") continue
+                val c = geom.optJSONArray("coordinates") ?: continue
+                if (c.length() < 2) continue
+                val lon = c.optDouble(0, Double.NaN)
+                val lat = c.optDouble(1, Double.NaN)
+                if (lat.isNaN() || lon.isNaN()) continue
+                val name = f.optJSONObject("properties")?.optString("name").orEmpty()
+                out.add(Triple(lat, lon, name))
+            }
+        }
+        return out
     }
 }

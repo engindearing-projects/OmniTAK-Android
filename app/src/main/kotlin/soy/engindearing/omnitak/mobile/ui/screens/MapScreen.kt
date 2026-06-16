@@ -328,6 +328,16 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 .apply(style, kmlOverlays, app.kmlOverlayStore)
         }
     }
+    // KML POINT placemarks render as native markers (addMarker) — the GeoJSON
+    // SymbolLayer/CircleLayer path silently fails to paint on a subset of GL
+    // drivers (see project_omnitak_android_marker_gpu_bug). Keyed on mapboxMap
+    // too, so markers add as soon as the map is ready (not just on overlay change).
+    LaunchedEffect(kmlOverlays, mapboxMap) {
+        mapboxMap?.let { m ->
+            soy.engindearing.omnitak.mobile.ui.components.KmlMarkerRenderer
+                .apply(m, appContext, kmlOverlays, app.kmlOverlayStore)
+        }
+    }
     // Re-apply MBTiles raster overlays when the set changes.
     LaunchedEffect(mbtilesOverlays) {
         mapboxMap?.getStyle { style ->
