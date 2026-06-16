@@ -11,6 +11,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.xmlpull.v1.XmlPullParser
+import org.xmlpull.v1.XmlPullParserFactory
 import java.io.BufferedWriter
 import java.io.File
 import java.io.InputStream
@@ -57,10 +58,17 @@ object KmlGeoJsonConverter {
 
     class EmptyKmlException : Exception("No map features found in that file.")
 
-    fun convert(input: InputStream, out: File): Result {
+    fun convert(input: InputStream, out: File): Result =
+        convert(input, out, Xml.newPullParser())
+
+    /**
+     * Overload that accepts a pre-built [XmlPullParser] — used by JVM unit
+     * tests to inject a [XmlPullParserFactory]-backed parser instead of the
+     * Android-only [android.util.Xml.newPullParser].
+     */
+    internal fun convert(input: InputStream, out: File, parser: XmlPullParser): Result {
         val writer = out.bufferedWriter()
         writer.use { w ->
-            val parser = Xml.newPullParser()
             parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
             parser.setInput(input, null)
 

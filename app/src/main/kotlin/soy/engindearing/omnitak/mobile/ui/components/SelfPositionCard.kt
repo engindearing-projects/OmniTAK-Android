@@ -38,7 +38,7 @@ fun SelfPositionCard(
         modifier = modifier
             .clip(RoundedCornerShape(6.dp))
             .background(Color(0xCC000000))
-            .border(1.dp, TacticalAccent.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
+            .border(2.dp, Color.Red, RoundedCornerShape(6.dp))
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
