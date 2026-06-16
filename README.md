@@ -32,6 +32,12 @@ Verify the APK before installing — signing cert SHA-256 should be `9f3b1fd54ad
 apksigner verify --print-certs OmniTAK-0.37.0-vc96.apk
 ```
 
+## Screenshots
+
+| KML pins + labels | Red-framed coordinates | Large KML (1,286 placemarks) |
+|---|---|---|
+| ![KML placemarks as yellow pins with labels](docs/screenshots/kml-pins-labels.jpg) | ![Red-framed coordinate readout](docs/screenshots/red-coord-frame.jpg) | ![1,286-placemark KML imported](docs/screenshots/large-kml.jpg) |
+
 ## Features
 
 - **TAK Server connectivity** — TCP / TLS / mTLS with client-certificate enrollment
