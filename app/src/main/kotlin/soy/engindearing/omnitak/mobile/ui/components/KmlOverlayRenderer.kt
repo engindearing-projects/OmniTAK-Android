@@ -346,38 +346,149 @@ object KmlOverlayRenderer {
  * name is the marker title (tap to reveal) until an always-on label lands.
  */
 object KmlMarkerRenderer {
+    // overlayId -> markers currently on the map (mix of cluster badges + pins).
     private val markers = mutableMapOf<String, List<Marker>>()
-    // Cache labeled-pin icons by name so a large KML with repeated names (e.g.
-    // hundreds of "CCTV" cameras) reuses one bitmap instead of thousands.
-    private val iconCache = mutableMapOf<String, Icon>()
+    // overlayId -> points parsed ONCE from the geojson, reused on every recluster.
+    private val pointsCache = mutableMapOf<String, List<Triple<Double, Double, String>>>()
+    // Labeled-pin icons by name (repeated names reuse one bitmap); a single bare
+    // pin for the no-label (zoomed-out) case; cluster badges keyed by count-bucket.
+    private val labelIconCache = mutableMapOf<String, Icon>()
+    private var pinIcon: Icon? = null
+    private val clusterIconCache = mutableMapOf<Int, Icon>()
+
+    private var boundMap: MapLibreMap? = null
+    private var ctx: Context? = null
+    private var overlays: List<KmlVectorOverlay> = emptyList()
+    private var idleListener: MapLibreMap.OnCameraIdleListener? = null
+
+    // #128: native addMarker doesn't collide-hide like a SymbolLayer, and adding
+    // thousands at once janks the main thread. So we viewport-cull + screen-grid
+    // cluster on every camera-idle: nearby points within one CELL_PX cell collapse
+    // to a count badge that breaks apart as you zoom in; name labels only show once
+    // zoomed past LABEL_MIN_ZOOM; MAX_MARKERS caps how many annotations exist at once.
+    private const val CELL_PX = 120
+    private const val LABEL_MIN_ZOOM = 12.0
+    private const val MAX_MARKERS = 600
 
     fun apply(map: MapLibreMap, context: Context, overlays: List<KmlVectorOverlay>, store: KmlVectorOverlayStore) {
+        this.ctx = context
+        this.overlays = overlays
+        // Cache points for visible overlays; drop caches for hidden/removed ones.
         val visibleIds = overlays.filter { it.visible }.map { it.id }.toSet()
-        // Remove markers for overlays that were removed or hidden.
-        for (id in markers.keys.toList()) {
-            if (id !in visibleIds) {
-                markers[id]?.forEach { runCatching { map.removeMarker(it) } }
-                markers.remove(id)
+        pointsCache.keys.retainAll(visibleIds)
+        for (overlay in overlays) {
+            if (!overlay.visible) continue
+            pointsCache.getOrPut(overlay.id) {
+                parsePoints(runCatching { store.fileFor(overlay).readText() }.getOrDefault(""))
             }
         }
+        // Recluster on pan/zoom. Re-register if the map instance changed.
+        if (boundMap !== map) {
+            idleListener?.let { l -> runCatching { boundMap?.removeOnCameraIdleListener(l) } }
+            boundMap = map
+            val l = MapLibreMap.OnCameraIdleListener { render() }
+            map.addOnCameraIdleListener(l)
+            idleListener = l
+        }
+        render()
+    }
+
+    /** Viewport-cull + screen-grid cluster the current overlays for this camera. */
+    private fun render() {
+        val map = boundMap ?: return
+        val context = ctx ?: return
+        markers.values.flatten().forEach { runCatching { map.removeMarker(it) } }
+        markers.clear()
+
+        val proj = map.projection
+        val bounds = runCatching { proj.visibleRegion.latLngBounds }.getOrNull() ?: return
+        val showLabels = map.cameraPosition.zoom >= LABEL_MIN_ZOOM
         val factory = IconFactory.getInstance(context)
+        var budget = MAX_MARKERS
+
         for (overlay in overlays) {
-            if (!overlay.visible || markers.containsKey(overlay.id)) continue
-            val geoJson = runCatching { store.fileFor(overlay).readText() }.getOrNull() ?: continue
-            val added = parsePoints(geoJson).mapNotNull { (lat, lon, name) ->
-                val icon = iconCache.getOrPut(name) { factory.fromBitmap(buildLabeledPin(name)) }
-                runCatching {
-                    map.addMarker(MarkerOptions().position(LatLng(lat, lon)).title(name).icon(icon))
-                }.getOrNull()
+            if (!overlay.visible || budget <= 0) continue
+            val pts = pointsCache[overlay.id] ?: continue
+            // Bin in-viewport points into a screen-pixel grid.
+            val cells = HashMap<Long, MutableList<Triple<Double, Double, String>>>()
+            for (p in pts) {
+                val ll = LatLng(p.first, p.second)
+                if (!bounds.contains(ll)) continue
+                val sp = proj.toScreenLocation(ll)
+                val key = cellKey(sp.x, sp.y, CELL_PX)
+                cells.getOrPut(key) { ArrayList(4) }.add(p)
+            }
+            val added = ArrayList<Marker>(cells.size)
+            for ((_, cell) in cells) {
+                if (budget <= 0) break
+                val marker = if (cell.size == 1) {
+                    val (lat, lon, name) = cell[0]
+                    val icon = if (showLabels && name.isNotBlank())
+                        labelIconCache.getOrPut(name) { factory.fromBitmap(buildLabeledPin(name)) }
+                    else (pinIcon ?: factory.fromBitmap(buildPushpinBitmap()).also { pinIcon = it })
+                    runCatching {
+                        map.addMarker(MarkerOptions().position(LatLng(lat, lon)).title(name).icon(icon))
+                    }.getOrNull()
+                } else {
+                    var slat = 0.0; var slon = 0.0
+                    for (c in cell) { slat += c.first; slon += c.second }
+                    val n = cell.size
+                    val icon = clusterIconCache.getOrPut(bucket(n)) { factory.fromBitmap(buildClusterBadge(n)) }
+                    runCatching {
+                        map.addMarker(MarkerOptions().position(LatLng(slat / n, slon / n)).title("$n placemarks").icon(icon))
+                    }.getOrNull()
+                }
+                if (marker != null) { added.add(marker); budget-- }
             }
             markers[overlay.id] = added
         }
     }
 
-    /** Drop all tracked markers (call before a full re-add after a style reload). */
+    /**
+     * Screen-pixel grid key for a point. Two points land in the same cell — and
+     * so collapse into one cluster — iff they share a [cellPx]-sized bin in both
+     * axes. Pure (no MapLibre types) so it's unit-testable; [floor] keeps cells
+     * stable across the origin (negative off-screen coords don't alias to 0).
+     */
+    internal fun cellKey(x: Float, y: Float, cellPx: Int): Long {
+        val cx = kotlin.math.floor(x / cellPx).toInt()
+        val cy = kotlin.math.floor(y / cellPx).toInt()
+        return (cx.toLong() shl 32) or (cy.toLong() and 0xffffffffL)
+    }
+
+    /** Bucket counts so a handful of badge bitmaps cover any cluster size. */
+    internal fun bucket(n: Int): Int = when {
+        n < 10 -> n
+        n < 100 -> n / 10 * 10
+        n < 1000 -> n / 100 * 100
+        else -> 1000
+    }
+
+    /** Yellow count badge: circle sized by magnitude with the count centered. */
+    private fun buildClusterBadge(count: Int): Bitmap {
+        val label = if (count >= 1000) "999+" else count.toString()
+        val r = when { count < 10 -> 30f; count < 100 -> 38f; else -> 46f }
+        val size = (r * 2f + 8f).toInt()
+        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bmp)
+        val c = size / 2f
+        canvas.drawCircle(c, c, r, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#FFD400"); style = Paint.Style.FILL })
+        canvas.drawCircle(c, c, r, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#333333"); style = Paint.Style.STROKE; strokeWidth = 4f })
+        val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#1A1A1A"); textAlign = Paint.Align.CENTER
+            typeface = Typeface.DEFAULT_BOLD; textSize = if (label.length >= 4) r * 0.7f else r * 0.9f
+        }
+        canvas.drawText(label, c, c - (text.ascent() + text.descent()) / 2f, text)
+        return bmp
+    }
+
+    /** Drop all markers + the idle listener (call before a full re-add / teardown). */
     fun clear(map: MapLibreMap) {
         markers.values.flatten().forEach { runCatching { map.removeMarker(it) } }
         markers.clear()
+        idleListener?.let { runCatching { map.removeOnCameraIdleListener(it) } }
+        idleListener = null
+        boundMap = null
     }
 
     private fun parsePoints(geoJson: String): List<Triple<Double, Double, String>> {
