@@ -418,6 +418,23 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         } else {
             emptyList()
         }
+    // Native contacts (#77) + drawings (#80) render through the Annotation API,
+    // which only re-renders on camera-idle or a style reload — so a marker
+    // created/edited/deleted (or a drawing changed) wouldn't show until you
+    // panned or toggled 2D/3D. Drive a data-keyed refresh (mirrors the KML
+    // renderers) so create/update/delete reflects immediately.
+    LaunchedEffect(visibleContacts, mapboxMap) {
+        mapboxMap?.let { m ->
+            soy.engindearing.omnitak.mobile.ui.components.ContactMarkerRenderer
+                .update(m, appContext, visibleContacts)
+        }
+    }
+    LaunchedEffect(drawings, drawingsVisible, mapboxMap) {
+        mapboxMap?.let { m ->
+            soy.engindearing.omnitak.mobile.ui.components.DrawingShapeRenderer
+                .apply(m, if (drawingsVisible) drawings else emptyList())
+        }
+    }
     val handleMapLongPress: (LatLng, Offset) -> Unit = { latLng, offset ->
         if (!measurementActive) {
             radialLatLng = latLng
