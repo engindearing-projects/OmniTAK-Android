@@ -182,7 +182,7 @@ fun TacticalMap(
                     contactSymbolLayer.installInto(style, context)
                     contactSymbolLayer.update(map, context, currentContacts)
                     MeasurementLayer.update(map, currentMeasurementPoints)
-                    DrawingLayer.update(map, currentDrawings)
+                    DrawingShapeRenderer.apply(map, currentDrawings)
                     currentGridCenter?.let { GridLayer.update(map, it) }
                     // ADS-B aircraft are fed by the ADS-B plugin's overlay via
                     // the live map handle — not from here. The `aircraft-src`
@@ -318,7 +318,7 @@ fun TacticalMap(
                         contactSymbolLayer.installInto(style, context)
                         contactSymbolLayer.update(map, context, currentContacts)
                         MeasurementLayer.update(map, currentMeasurementPoints)
-                        DrawingLayer.update(map, currentDrawings)
+                        DrawingShapeRenderer.apply(map, currentDrawings)
                         currentGridCenter?.let { GridLayer.update(map, it) }
                     }
                 }
@@ -487,7 +487,7 @@ fun TacticalMap(
                     contactSymbolLayer.installInto(style, context)
                     contactSymbolLayer.update(map, context, currentContacts)
                     MeasurementLayer.update(map, currentMeasurementPoints)
-                    DrawingLayer.update(map, currentDrawings)
+                    DrawingShapeRenderer.apply(map, currentDrawings)
                     currentGridCenter?.let { GridLayer.update(map, it) }
                     // ADS-B re-push after a style reload is handled by the
                     // plugin overlay's LaunchedEffect(map, …), which re-runs
@@ -531,7 +531,7 @@ fun TacticalMap(
 
     DisposableEffect(mapView, drawings) {
         mapView.getMapAsync { map ->
-            if (map.style != null) DrawingLayer.update(map, drawings)
+            if (map.style != null) DrawingShapeRenderer.apply(map, drawings)
         }
         onDispose { }
     }
