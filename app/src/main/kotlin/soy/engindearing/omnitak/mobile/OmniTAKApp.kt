@@ -46,6 +46,12 @@ class OmniTAKApp : Application() {
     override fun onCreate() {
         super.onCreate()
 
+        // #139 — give MapLibre an HTTP client that sends an app-identifying
+        // User-Agent. OSM/OpenTopoMap serve a "403 Access blocked" tile to
+        // clients with a generic UA. Must run before any MapView is created so
+        // the first tile fetch already carries it.
+        soy.engindearing.omnitak.mobile.data.MapTileHttp.install(this)
+
         // Restore the operator's UI language (or match the device locale)
         // before any Activity composes, so the first frame renders in the
         // right language. Mirrors iOS's LocalizationManager init.

@@ -165,6 +165,15 @@ dependencies {
     // MapLibre Android (open-source fork of Mapbox) — parallel to iOS
     implementation("org.maplibre.gl:android-sdk:11.8.0")
 
+    // OkHttp — used ONLY to install a custom HTTP client into MapLibre via
+    // HttpRequestUtil.setOkHttpClient(), so we can send an identifying
+    // User-Agent on tile requests. OpenStreetMap (and OpenTopoMap) serve a
+    // "403 Access blocked" placeholder tile to clients with a generic UA;
+    // an app-identifying UA is required by their tile usage policy (#139).
+    // MapLibre 11.x already bundles OkHttp 4.x; we pin the same major so the
+    // resolved version stays compatible.
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
     // NGA's tested MGRS / UTM converter. Operators rely on grid coords
     // for navigation; rolling our own would risk silent miscalculation.
     // Pure-Java, ~250 KB, no Android resources.
