@@ -152,13 +152,6 @@ fun TacticalMap(
     // off it; the effects below read/write it imperatively.
     val puckAppearance = remember { PuckAppearance() }
 
-    // ContactSymbolLayer uses Style.addImage (bitmap) + SymbolLayer — the path
-    // LocationComponent uses and that renders on Adreno 610 / SwiftShader when
-    // CircleLayer circle-color expressions silently fail (GL fragment pipeline bug).
-    // Keyed on styleJson so a basemap swap (style reload) gets a fresh instance
-    // with a clean installed=false state.
-    val contactSymbolLayer = remember(styleJson) { ContactSymbolLayer() }
-
     val mapView = remember {
         MapLibre.getInstance(context)
         MapView(context).apply {
@@ -174,13 +167,11 @@ fun TacticalMap(
                     .bearing(initialBearing)
                     .build()
                 map.setStyle(Style.Builder().fromJson(styleJson)) { style ->
-                    ContactLayer.update(map, context, currentContacts)
-                    // Install bitmap-icon symbol layer alongside the inline circle layer.
-                    // The CircleLayer circle-color expression silently fails on Adreno 610
-                    // and SwiftShader — ContactSymbolLayer uses Style.addImage (the same
-                    // path LocationComponent uses) which renders correctly on both drivers.
-                    contactSymbolLayer.installInto(style, context)
-                    contactSymbolLayer.update(map, context, currentContacts)
+                    // #77: contacts render via native annotations (ContactMarkerRenderer),
+                    // not the contacts-src GeoJsonSource circle/symbol layers, which the
+                    // GL driver silently fails to paint on Adreno/Mali/emulator (they show
+                    // on Cesium but never on 2D). The Annotation path paints everywhere.
+                    ContactMarkerRenderer.update(map, context, currentContacts)
                     MeasurementLayer.update(map, currentMeasurementPoints)
                     DrawingLayer.update(map, currentDrawings)
                     currentGridCenter?.let { GridLayer.update(map, it) }
@@ -314,9 +305,7 @@ fun TacticalMap(
             addOnDidFinishLoadingStyleListener {
                 getMapAsync { map ->
                     map.getStyle { style ->
-                        ContactLayer.update(map, context, currentContacts)
-                        contactSymbolLayer.installInto(style, context)
-                        contactSymbolLayer.update(map, context, currentContacts)
+                        ContactMarkerRenderer.update(map, context, currentContacts)
                         MeasurementLayer.update(map, currentMeasurementPoints)
                         DrawingLayer.update(map, currentDrawings)
                         currentGridCenter?.let { GridLayer.update(map, it) }
@@ -483,9 +472,7 @@ fun TacticalMap(
             // getMapAsync block during MapView construction (line ~88).
             if (map.style != null && map.style?.json != styleJson) {
                 map.setStyle(Style.Builder().fromJson(styleJson)) { style ->
-                    ContactLayer.update(map, context, currentContacts)
-                    contactSymbolLayer.installInto(style, context)
-                    contactSymbolLayer.update(map, context, currentContacts)
+                    ContactMarkerRenderer.update(map, context, currentContacts)
                     MeasurementLayer.update(map, currentMeasurementPoints)
                     DrawingLayer.update(map, currentDrawings)
                     currentGridCenter?.let { GridLayer.update(map, it) }
@@ -672,8 +659,7 @@ fun TacticalMap(
         update = {
             mapView.getMapAsync { map ->
                 map.getStyle { _ ->
-                    ContactLayer.update(map, context, currentContacts)
-                    contactSymbolLayer.update(map, context, currentContacts)
+                    ContactMarkerRenderer.update(map, context, currentContacts)
                 }
             }
         },
