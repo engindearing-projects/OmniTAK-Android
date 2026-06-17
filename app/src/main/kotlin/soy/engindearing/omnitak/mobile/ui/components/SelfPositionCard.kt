@@ -38,7 +38,10 @@ fun SelfPositionCard(
         modifier = modifier
             .clip(RoundedCornerShape(6.dp))
             .background(Color(0xCC000000))
-            .border(2.dp, Color.Red, RoundedCornerShape(6.dp))
+            // The operator's own PPLI readout is friendly — frame it in the
+            // brand accent (matching the callsign text), not hostile red
+            // (red = hostile in TAK affiliation semantics).
+            .border(2.dp, TacticalAccent, RoundedCornerShape(6.dp))
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
