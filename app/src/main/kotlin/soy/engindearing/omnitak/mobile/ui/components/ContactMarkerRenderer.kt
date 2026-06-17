@@ -5,7 +5,6 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.Path
 import android.graphics.Typeface
 import org.maplibre.android.annotations.Icon
 import org.maplibre.android.annotations.IconFactory
@@ -116,13 +115,22 @@ object ContactMarkerRenderer {
     ): Boolean = lat in minLat..maxLat && lon in minLon..maxLon
 
     /**
-     * Teardrop pin tinted [colorArgb] with the callsign baked in above the head.
-     * The pin tip is at the bitmap's bottom-center (the annotation anchor), so
-     * the tip lands on the exact coordinate and the label floats above.
+     * Compact affiliation dot tinted [colorArgb] (team color), with the callsign
+     * baked in above it. The symbol sits at the bitmap's bottom-center — the
+     * annotation anchor — so its center is one radius above the exact coordinate
+     * and the visible dot straddles the point.
+     *
+     * Why a centered dot, not a tall pin: a 140px tip-anchored pin put the
+     * visible head ~60px ABOVE the coordinate, but tap hit-testing (72px radius)
+     * and lasso both test the coordinate — so tapping/lassoing the visible pin
+     * missed (couldn't edit or lasso-delete a dropped marker, #135 regression).
+     * Centering the symbol on the point restores the old ContactLayer behavior
+     * where the visual and the hit/lasso target coincide.
      */
     private fun buildContactPin(colorArgb: Int, callsign: String): Bitmap {
-        val pinW = 64; val pinH = 96
         val text = if (callsign.length > 24) callsign.take(23) + "…" else callsign
+        val r = 16f          // symbol radius — small, so center↔coordinate offset is minimal
+        val ring = 3f
         val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE; textSize = 30f; textAlign = Paint.Align.CENTER
             typeface = Typeface.DEFAULT_BOLD
@@ -131,42 +139,30 @@ object ContactMarkerRenderer {
             color = Color.parseColor("#CC000000"); textSize = 30f; textAlign = Paint.Align.CENTER
             typeface = Typeface.DEFAULT_BOLD; style = Paint.Style.STROKE; strokeWidth = 6f
         }
-        val labelH = if (text.isBlank()) 0 else 44
+        val labelH = if (text.isBlank()) 0f else 40f
         val pad = 12f
+        val diameter = (r + ring) * 2f
         val textW = if (text.isBlank()) 0f else fill.measureText(text)
-        val w = maxOf(pinW.toFloat(), textW + pad * 2).toInt()
-        val h = labelH + pinH
+        val w = maxOf(diameter, textW + pad * 2).toInt()
+        val h = (labelH + diameter).toInt()
         val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bmp)
-
-        // Label above (so the pin tip stays the anchor).
-        if (text.isNotBlank()) {
-            val ty = 32f
-            canvas.drawText(text, w / 2f, ty, halo)
-            canvas.drawText(text, w / 2f, ty, fill)
-        }
-
-        // Teardrop pin, tip at the very bottom of the bitmap.
         val cx = w / 2f
-        val circleR = pinW / 2f - 4f
-        val circleTop = labelH + 4f
-        val circleCy = circleTop + circleR
-        val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = colorArgb; style = Paint.Style.FILL }
-        val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#1A1A1A"); style = Paint.Style.STROKE; strokeWidth = 3f
-        }
-        val path = Path()
-        val tipY = (h - 4).toFloat()
-        val oval = android.graphics.RectF(cx - circleR, circleTop, cx + circleR, circleTop + 2 * circleR)
-        path.arcTo(oval, 120f, 300f, true)
-        path.lineTo(cx, tipY)
-        path.close()
-        canvas.drawPath(path, fillPaint)
-        canvas.drawPath(path, strokePaint)
+        // Symbol center sits one radius above the bottom-center anchor, so the
+        // dot's lower edge touches the coordinate — keeps the visual on the point.
+        val cy = h - r - ring
+        canvas.drawCircle(cx, cy, r, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = colorArgb; style = Paint.Style.FILL })
+        canvas.drawCircle(cx, cy, r, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#1A1A1A"); style = Paint.Style.STROKE; strokeWidth = ring
+        })
+        canvas.drawCircle(cx, cy, r * 0.34f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; style = Paint.Style.FILL })
 
-        // White center dot for contrast against the team color.
-        val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; style = Paint.Style.FILL }
-        canvas.drawCircle(cx, circleCy, circleR * 0.35f, dot)
+        // Callsign label above the dot (not a hit target; the dot is).
+        if (text.isNotBlank()) {
+            val ty = 30f
+            canvas.drawText(text, cx, ty, halo)
+            canvas.drawText(text, cx, ty, fill)
+        }
         return bmp
     }
 }
