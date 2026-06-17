@@ -81,7 +81,7 @@ internal object LocStrings {
         "settings.map.satellite" to "Satellite",
         "settings.map.topo" to "Topo",
         "settings.map.custom" to "Custom",
-        "settings.mapTiles.desc" to "OSM (street), Topo (OpenTopoMap), Satellite (Esri imagery), or a custom WMTS / XYZ tile URL. Picks apply immediately. Offline tile cache lands in a later release.",
+        "settings.mapTiles.desc" to "OSM (street), Topo (OpenTopoMap), Satellite (Esri imagery), or a custom WMTS / XYZ tile URL. Picks apply immediately. Download regions for offline use from the map's layers menu.",
         "settings.tileUrl" to "Tile URL",
         "settings.customTile.help" to "Must be an XYZ-style URL with {z}, {x}, {y} placeholders (ATAK-style {\$z}/{\$x}/{\$y} also works). WMTS endpoints from agency / private servers usually expose this. Falls back to OSM if invalid.",
 
@@ -248,7 +248,7 @@ internal object LocStrings {
         "settings.map.satellite" to "衛星",
         "settings.map.topo" to "地形",
         "settings.map.custom" to "自訂",
-        "settings.mapTiles.desc" to "OSM（街道）、地形（OpenTopoMap）、衛星（Esri 影像），或自訂 WMTS / XYZ 圖磚網址。選擇即時套用。離線圖磚快取將於後續版本推出。",
+        "settings.mapTiles.desc" to "OSM（街道）、地形（OpenTopoMap）、衛星（Esri 影像），或自訂 WMTS / XYZ 圖磚網址。選擇即時套用。可從地圖圖層選單下載區域以供離線使用。",
         "settings.tileUrl" to "圖磚網址",
         "settings.customTile.help" to "必須是包含 {z}、{x}、{y} 預留位置的 XYZ 樣式網址（ATAK 樣式的 {\$z}/{\$x}/{\$y} 亦可）。機關／私人伺服器的 WMTS 端點通常會提供此格式。若無效則回退至 OSM。",
 

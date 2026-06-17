@@ -122,7 +122,7 @@ object MeshtasticCoTConverter {
             append("<battery>$battery</battery>")
             append("<last_heard>$lastHeardIso</last_heard>")
             append("</__meshtastic__>")
-            append("<takv device=\"Meshtastic\" platform=\"OmniTAK\" os=\"Android\" version=\"0.1.0\"/>")
+            append("<takv device=\"Meshtastic\" platform=\"OmniTAK\" os=\"Android\" version=\"${soy.engindearing.omnitak.mobile.BuildConfig.VERSION_NAME}\"/>")
             append("</detail>")
         }
         return CotXml.buildEvent(
