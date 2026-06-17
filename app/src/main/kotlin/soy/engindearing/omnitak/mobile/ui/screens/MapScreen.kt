@@ -140,7 +140,15 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         is ConnectionState.Connected -> s.serverName
         is ConnectionState.Connecting -> "Connecting…"
         is ConnectionState.Failed -> "Failed"
-        ConnectionState.Disconnected -> active?.name ?: "Offline"
+        // #145 — never read "Offline" while a server is actually connected.
+        // The dot/badge come from connectedIds and the text used to come only
+        // from the active server's connState, so the two could disagree
+        // (green badge + "Offline" text). Fall back to a connected server's
+        // name before "Offline" so all three signals stay consistent.
+        ConnectionState.Disconnected ->
+            allServers.firstOrNull { connectedIds.contains(it.id) }?.name
+                ?: active?.name
+                ?: "Offline"
     }
 
     var nowLabel by remember { mutableStateOf(timeLabel()) }
@@ -1353,10 +1361,14 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         ) {
             ATAKStatusBar(
                 serverName = headerLabel,
-                isConnected = connState is ConnectionState.Connected,
+                // #145 — green when ANY server is connected, matching the
+                // header text + multi-server badge (all keyed off connectedIds).
+                isConnected = connState is ConnectionState.Connected || connectedIds.isNotEmpty(),
                 messagesReceived = msgReceived,
                 messagesSent = msgSent,
-                gpsAccuracyMeters = selfFix?.accuracyM?.toInt() ?: 0,
+                // Pass null (not 0) with no fix so the status bar hides the
+                // GPS readout instead of showing a false "±0m" lock.
+                gpsAccuracyMeters = effectiveSelfFix?.accuracyM?.toInt(),
                 timeLabel = nowLabel,
                 // GAP-102 — wire the previously dead status-bar taps to
                 // their natural destinations. Server icon goes to the
@@ -1386,15 +1398,18 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 } else {
                     "Acquiring fix…"
                 },
-                altitudeLabel = soy.engindearing.omnitak.mobile.data.CoordFormatter.altitude(
-                    fix?.altitudeM ?: 0.0, userPrefs.distanceUnit,
-                ),
-                speedLabel = soy.engindearing.omnitak.mobile.data.CoordFormatter.speed(
-                    fix?.speedKmh ?: 0.0, userPrefs.distanceUnit,
-                ),
-                accuracyLabel = soy.engindearing.omnitak.mobile.data.CoordFormatter.accuracy(
-                    fix?.accuracyM?.toInt() ?: 0, userPrefs.distanceUnit,
-                ),
+                // Show "—" (not formatted zeros) until a real fix lands, so the
+                // card can't read "Acquiring fix…" next to a perfect 0 m / 0
+                // km/h / ±0 m telemetry block.
+                altitudeLabel = fix?.altitudeM?.let {
+                    soy.engindearing.omnitak.mobile.data.CoordFormatter.altitude(it, userPrefs.distanceUnit)
+                } ?: "—",
+                speedLabel = fix?.speedKmh?.let {
+                    soy.engindearing.omnitak.mobile.data.CoordFormatter.speed(it, userPrefs.distanceUnit)
+                } ?: "—",
+                accuracyLabel = fix?.accuracyM?.let {
+                    soy.engindearing.omnitak.mobile.data.CoordFormatter.accuracy(it.toInt(), userPrefs.distanceUnit)
+                } ?: "—",
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(end = 12.dp, bottom = 96.dp),
