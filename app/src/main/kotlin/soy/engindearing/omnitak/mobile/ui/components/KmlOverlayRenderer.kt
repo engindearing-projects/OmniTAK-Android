@@ -171,57 +171,14 @@ object KmlOverlayRenderer {
         installed.clear()
         installed.addAll(wanted)
 
-        // NOTE: Point placemarks are NOT rendered here. MapLibre-Android's
-        // GeoJSON SymbolLayer/CircleLayer pipeline silently fails to paint on a
-        // subset of GL drivers (Adreno/Mali/Immortalis + emulator) — confirmed
-        // on-device. Points are drawn by KmlMarkerRenderer via the native
-        // Annotation API (addMarker), the same path LocationComponent uses. The
-        // GeoJSON source + fill/line layers below still drive line/polygon
-        // geometry (and render fine on unaffected GPUs).
-        for (overlay in overlays) {
-            val sourceId = "kmlsrc-${overlay.id}"
-
-            if (style.getSource(sourceId) == null) {
-                // String overload (setGeoJson(String) → nativeSetGeoJsonString);
-                // the FeatureCollection overload can silently yield a zero-feature
-                // native source.
-                val geoJson = runCatching { store.fileFor(overlay).readText() }.getOrDefault("")
-                style.addSource(GeoJsonSource(sourceId))
-                style.getSourceAs<GeoJsonSource>(sourceId)?.setGeoJson(geoJson)
-                style.addLayer(FillLayer("kmlfill-${overlay.id}", sourceId))
-                style.addLayer(
-                    LineLayer("kmlline-${overlay.id}", sourceId).withProperties(
-                        PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
-                        PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
-                    ),
-                )
-            }
-
-            // Re-apply styling every pass so edits (color / opacity / line
-            // width / visibility) take effect live without a reload.
-            val vis = if (overlay.visible) Property.VISIBLE else Property.NONE
-            val color = runCatching { Color.parseColor(overlay.colorHex) }.getOrDefault(Color.MAGENTA)
-            val m = overlay.lineWidth
-            style.getLayerAs<FillLayer>("kmlfill-${overlay.id}")?.setProperties(
-                PropertyFactory.visibility(vis),
-                PropertyFactory.fillColor(color),
-                PropertyFactory.fillOutlineColor(color),
-                PropertyFactory.fillOpacity(overlay.opacity * 0.25f),
-            )
-            style.getLayerAs<LineLayer>("kmlline-${overlay.id}")?.setProperties(
-                PropertyFactory.visibility(vis),
-                PropertyFactory.lineColor(color),
-                PropertyFactory.lineOpacity(overlay.opacity),
-                PropertyFactory.lineWidth(
-                    Expression.interpolate(
-                        Expression.linear(), Expression.zoom(),
-                        Expression.stop(6, 0.6f * m),
-                        Expression.stop(12, 1.6f * m),
-                        Expression.stop(16, 3.0f * m),
-                    ),
-                ),
-            )
-        }
+        // NOTE: vector KML geometry is NOT rendered through a GeoJsonSource here.
+        // MapLibre-Android's GeoJSON Fill/Line/Symbol/Circle pipeline silently
+        // fails to paint on a subset of GL drivers (Adreno/Mali/Immortalis +
+        // emulator) — confirmed on-device. Points are drawn by KmlMarkerRenderer
+        // and lines/polygons by KmlShapeRenderer, both via the native Annotation
+        // API (the same path LocationComponent uses), which paints on every GPU.
+        // This function now only tears down any GeoJSON source/layers left by an
+        // older build (handled by the stale-removal loop above).
     }
 
     private fun layerIds(id: String) = listOf("kmlfill-$id", "kmlline-$id")

@@ -338,6 +338,15 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 .apply(m, appContext, kmlOverlays, app.kmlOverlayStore)
         }
     }
+    // KML lines/polygons render as native annotations (addPolyline/addPolygon),
+    // same GL-paint workaround as points — the GeoJSON Line/Fill path is invisible
+    // on Adreno/Mali/emulator (see KmlShapeRenderer, project_omnitak_android_marker_gpu_bug).
+    LaunchedEffect(kmlOverlays, mapboxMap) {
+        mapboxMap?.let { m ->
+            soy.engindearing.omnitak.mobile.ui.components.KmlShapeRenderer
+                .apply(m, kmlOverlays, app.kmlOverlayStore)
+        }
+    }
     // Re-apply MBTiles raster overlays when the set changes.
     LaunchedEffect(mbtilesOverlays) {
         mapboxMap?.getStyle { style ->
