@@ -16,6 +16,16 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Fail fast on a full disk. R8 (minifyReleaseWithR8) + bundling need several GB
+# of scratch; otherwise the build dies ~4 min in with
+# "R8: java.io.IOException: No space left on device".
+avail_kb=$(df -k . | awk 'NR==2{print $4}')
+if [[ "${avail_kb:-0}" -lt 5242880 ]]; then
+  echo "ERROR: only $(( ${avail_kb:-0} / 1024 / 1024 ))GB free here; the release build needs ~5GB+." >&2
+  echo "  Free space first, e.g.:  for d in /tmp/wt-*/app/build; do rm -rf \"\$d\"; done && ./gradlew --stop" >&2
+  exit 1
+fi
+
 GRADLE_FILE="app/build.gradle.kts"
 
 current_vc=$(awk '/versionCode = /{print $3; exit}' "$GRADLE_FILE")
@@ -27,11 +37,18 @@ if [[ -z "$current_vc" || -z "$current_vn" ]]; then
 fi
 
 # Highest vc ever staged in playstore-assets/ — that's our floor.
-# Filenames follow OmniTAK-<versionName>-vc<N>.aab.
-max_staged_vc=$(ls playstore-assets/*.aab 2>/dev/null \
-  | sed -E 's/.*-vc([0-9]+)\.aab$/\1/' \
-  | sort -n | tail -1)
-max_staged_vc=${max_staged_vc:-0}
+# Filenames follow OmniTAK-<versionName>-vc<N>.aab. Guard the glob: under
+# `set -euo pipefail`, a no-match `ls` aborts the whole script (so a clean
+# worktree with no staged .aab would exit before bumping anything). Capture
+# the listing first with `|| true`, then parse only when non-empty.
+staged_aabs=$(ls playstore-assets/*.aab 2>/dev/null || true)
+if [[ -n "$staged_aabs" ]]; then
+  max_staged_vc=$(printf '%s\n' "$staged_aabs" \
+    | sed -E 's/.*-vc([0-9]+)\.aab$/\1/' \
+    | sort -n | tail -1)
+else
+  max_staged_vc=0
+fi
 
 new_vc=$(( max_staged_vc > current_vc ? max_staged_vc + 1 : current_vc + 1 ))
 
