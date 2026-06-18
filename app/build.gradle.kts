@@ -21,8 +21,8 @@ android {
         applicationId = "soy.engindearing.omnitak.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 97
-        versionName = "0.38.0"
+        versionCode = 98
+        versionName = "0.39.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
