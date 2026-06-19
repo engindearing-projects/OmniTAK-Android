@@ -183,6 +183,30 @@ object KmlOverlayRenderer {
 
     private fun layerIds(id: String) = listOf("kmlfill-$id", "kmlline-$id")
 
+    /** Live basemap raster layer id from buildTacticalStyle — the anchor every
+     *  cached/imported raster overlay sits directly ABOVE (and thus below every
+     *  operational overlay + the self-marker). */
+    private const val BASEMAP_LAYER_ID = "basemap-tiles"
+
+    /**
+     * Add a raster overlay ([layerId] backed by [sourceId]) directly ABOVE the
+     * live basemap but BELOW the operational overlay layers (grid, drawings,
+     * measurements, contacts, aircraft) and the self-marker. A plain
+     * [Style.addLayer] appends to the TOP of the stack, so the opaque raster
+     * would paint over every marker on a downloaded/imported map — exactly the
+     * "self-marker + contacts vanish on offline maps" failure (#139 follow-up;
+     * the on-map render of downloaded regions was previously device-pending).
+     * Falls back to a top add if the basemap anchor is absent (custom style).
+     */
+    private fun addRasterAboveBasemap(style: Style, layerId: String, sourceId: String) {
+        val layer = RasterLayer(layerId, sourceId)
+        if (style.getLayer(BASEMAP_LAYER_ID) != null) {
+            style.addLayerAbove(layer, BASEMAP_LAYER_ID)
+        } else {
+            style.addLayer(layer)
+        }
+    }
+
     // Single-image raster overlays (KMZ GroundOverlay etc.) via ImageSource.
     private val installedRaster = mutableSetOf<String>()
 
@@ -207,7 +231,7 @@ object KmlOverlayRenderer {
                     LatLng(overlay.south, overlay.west), // bottom-left
                 )
                 style.addSource(ImageSource(sourceId, quad, bmp))
-                style.addLayer(RasterLayer(layerId, sourceId))
+                addRasterAboveBasemap(style, layerId, sourceId)
             }
             val vis = if (overlay.visible) Property.VISIBLE else Property.NONE
             style.getLayerAs<RasterLayer>(layerId)?.setProperties(
@@ -239,7 +263,7 @@ object KmlOverlayRenderer {
                     maxZoom = overlay.maxZoom.toFloat()
                 }
                 style.addSource(RasterSource(sourceId, tileSet, 256))
-                style.addLayer(RasterLayer(layerId, sourceId))
+                addRasterAboveBasemap(style, layerId, sourceId)
             }
             val vis = if (overlay.visible) Property.VISIBLE else Property.NONE
             style.getLayerAs<RasterLayer>(layerId)?.setProperties(
@@ -281,9 +305,10 @@ object KmlOverlayRenderer {
                     maxZoom = region.maxZoom.toFloat()
                 }
                 style.addSource(RasterSource(sourceId, tileSet, 256))
-                // When offline, draw cached tiles on top so they win over the
-                // (unreachable) live basemap; online, let it layer normally.
-                style.addLayer(RasterLayer(layerId, sourceId))
+                // Draw cached tiles just ABOVE the (possibly unreachable) live
+                // basemap so they win the basemap slot — but BELOW every marker
+                // overlay, so the self-marker + contacts still render offline.
+                addRasterAboveBasemap(style, layerId, sourceId)
             }
             style.getLayerAs<RasterLayer>(layerId)?.setProperties(
                 PropertyFactory.visibility(Property.VISIBLE),
