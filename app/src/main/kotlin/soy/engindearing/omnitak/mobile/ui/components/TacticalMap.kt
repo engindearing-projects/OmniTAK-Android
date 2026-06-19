@@ -278,6 +278,32 @@ fun TacticalMap(
                         false
                     }
                 }
+                // #150 — contacts render as native annotation Markers
+                // (ContactMarkerRenderer). A Marker's built-in tap handler selects
+                // it, shows `.title()` as an InfoWindow, and CONSUMES the touch —
+                // so the map-click hit-test above never ran on a DIRECT pin tap:
+                // only the label popped up and the edit sheet never opened (a
+                // near-miss within TAP_HIT_RADIUS still edited, which is why this
+                // read as "editing only works on the 3D globe"). Resolve the tapped
+                // pin back to its contact and route it through the SAME onContactTap
+                // the globe uses, returning true to suppress the InfoWindow. KML
+                // placemarks (also addMarker) resolve to null → return false so
+                // MapLibre's default InfoWindow label still works for them.
+                map.setOnMarkerClickListener { marker ->
+                    val contact = ContactMarkerRenderer.contactForMarker(marker)
+                    // Mirror the map-click precedence: an active mode handler
+                    // (measurement/drawing/mission) eats the tap before editing.
+                    val modeHandled = contact != null &&
+                        (currentMapSingleTap?.invoke(marker.position) ?: false)
+                    when (decideMarkerTap(contact, modeHandled)) {
+                        MarkerTapAction.OPEN_CONTACT_EDIT -> {
+                            currentContactTap?.invoke(contact!!)
+                            true
+                        }
+                        MarkerTapAction.CONSUMED_BY_MODE -> true
+                        MarkerTapAction.PASS_THROUGH -> false
+                    }
+                }
             }
             // Issue #80 — re-anchor drawing (and all other overlay) layers on
             // EVERY style reload, regardless of the trigger.

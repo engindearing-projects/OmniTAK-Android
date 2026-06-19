@@ -44,6 +44,16 @@ object ContactMarkerRenderer {
     // Pin+label bitmaps are expensive to draw; reuse by (color, callsign).
     private val iconCache = HashMap<String, Icon>()
 
+    // #150 — id→contact registry for the tapped-pin → edit-sheet route. A native
+    // annotation Marker's default tap handler selects the marker, shows `.title()`
+    // as an InfoWindow, and swallows the touch the map-click hit-test relies on —
+    // so editing never opened on a direct pin tap (only the label popped up).
+    // TacticalMap's OnMarkerClickListener resolves the tapped Marker through this
+    // map instead. Rebuilt in lockstep with [markers] on every [render]; KML
+    // placemarks (also addMarker) are absent here, so they pass through to the
+    // default InfoWindow untouched.
+    internal val markerContacts = HashMap<Long, CoTEvent>()
+
     private var boundMap: MapLibreMap? = null
     private var ctx: Context? = null
     private var contacts: List<CoTEvent> = emptyList()
@@ -71,6 +81,8 @@ object ContactMarkerRenderer {
         val map = boundMap ?: return
         val context = ctx ?: return
         markers.forEach { runCatching { map.removeMarker(it) } }
+        // Rebuilt below in lockstep with the markers we re-add (#150).
+        markerContacts.clear()
         val proj = map.projection
         val bounds = runCatching { proj.visibleRegion.latLngBounds }.getOrNull()
         val factory = IconFactory.getInstance(context)
@@ -87,7 +99,7 @@ object ContactMarkerRenderer {
             }
             runCatching {
                 map.addMarker(MarkerOptions().position(ll).title(label).icon(icon))
-            }.getOrNull()?.let { added.add(it); budget-- }
+            }.getOrNull()?.let { added.add(it); markerContacts[it.id] = c; budget-- }
         }
         markers = added
     }
@@ -96,10 +108,19 @@ object ContactMarkerRenderer {
     fun clear(map: MapLibreMap) {
         markers.forEach { runCatching { map.removeMarker(it) } }
         markers = emptyList()
+        markerContacts.clear()
         idleListener?.let { runCatching { map.removeOnCameraIdleListener(it) } }
         idleListener = null
         boundMap = null
     }
+
+    /** #150 — resolve a tapped annotation [Marker] back to the contact it
+     *  renders, or null when it isn't a contact pin (e.g. a KML placemark). */
+    fun contactForMarker(marker: Marker): CoTEvent? = markerContacts[marker.id]
+
+    /** Pure id-keyed resolution, exposed for unit tests — MapLibre's [Marker]
+     *  isn't constructible on the JVM. */
+    internal fun contactForMarkerId(id: Long): CoTEvent? = markerContacts[id]
 
     /** Stable cache key: one bitmap per (color, callsign) pair. */
     internal fun cacheKey(colorArgb: Int, label: String): String =
@@ -166,3 +187,23 @@ object ContactMarkerRenderer {
         return bmp
     }
 }
+
+/** #150 — what a tap on an annotation [Marker] should do, decided without any
+ *  MapLibre types so it stays unit-testable. */
+internal enum class MarkerTapAction { OPEN_CONTACT_EDIT, CONSUMED_BY_MODE, PASS_THROUGH }
+
+/**
+ * Decide the outcome of a marker tap:
+ *  - non-contact marker ([contact] is null) → [PASS_THROUGH]: leave MapLibre's
+ *    default behaviour (a KML placemark keeps its InfoWindow label).
+ *  - an active mode handler already consumed the tap ([modeHandled] is true) →
+ *    [CONSUMED_BY_MODE]: measurement/drawing/mission ate it — don't also edit.
+ *  - otherwise → [OPEN_CONTACT_EDIT]: route to the contact's edit sheet, the
+ *    same outcome a tap gets on the 3D globe.
+ */
+internal fun decideMarkerTap(contact: CoTEvent?, modeHandled: Boolean): MarkerTapAction =
+    when {
+        contact == null -> MarkerTapAction.PASS_THROUGH
+        modeHandled -> MarkerTapAction.CONSUMED_BY_MODE
+        else -> MarkerTapAction.OPEN_CONTACT_EDIT
+    }
