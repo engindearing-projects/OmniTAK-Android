@@ -7,6 +7,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import soy.engindearing.omnitak.mobile.data.MapTileHttp
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -135,12 +136,20 @@ class RegionDownloader(
  * tile bytes on 200, null on any non-200 / IO error (the downloader counts
  * those as failures without aborting the whole region).
  *
+ * User-Agent (#139): OSM/OpenTopoMap's tile usage policy *requires* a UA that
+ * identifies the app; a generic one gets a 403 "Access blocked" response. The
+ * interactive map fixed this by installing an OkHttp client into MapLibre
+ * ([soy.engindearing.omnitak.mobile.data.MapTileHttp]), but the offline region
+ * download runs through this fetcher, not MapLibre — so it must send the same
+ * identifying UA, otherwise "Download this region" 403s on OSM while satellite
+ * (Esri, no UA policy) works. Reuse the one builder so both paths stay in sync.
+ *
  * Device-pending: exercised against a real tile server on device, not in JVM
  * unit tests (which inject a fake fetch into [RegionDownloader]).
  */
 object HttpTileFetcher {
     private const val TIMEOUT_MS = 8_000
-    private const val USER_AGENT = "OmniTAK-Android offline-tile-cache"
+    private val USER_AGENT = MapTileHttp.buildUserAgent()
 
     suspend fun fetch(url: String): ByteArray? = withContext(Dispatchers.IO) {
         val conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
