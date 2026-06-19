@@ -133,23 +133,43 @@ class RegionDownloader(
  * Production tile fetch over HTTP — a thin HttpURLConnection GET, mirroring
  * the proven pattern in
  * [soy.engindearing.omnitak.mobile.data.uas.TerrainSampler]. Returns the raw
- * tile bytes on 200, null on any non-200 / IO error (the downloader counts
- * those as failures without aborting the whole region).
+ * tile bytes on a real 200, null on any non-200 / IO error / policy block (the
+ * downloader counts those as failures without aborting the whole region).
  *
  * User-Agent (#139): OSM/OpenTopoMap's tile usage policy *requires* a UA that
- * identifies the app; a generic one gets a 403 "Access blocked" response. The
+ * identifies the app; a generic one gets the "Access blocked" placeholder. The
  * interactive map fixed this by installing an OkHttp client into MapLibre
  * ([soy.engindearing.omnitak.mobile.data.MapTileHttp]), but the offline region
  * download runs through this fetcher, not MapLibre — so it must send the same
- * identifying UA, otherwise "Download this region" 403s on OSM while satellite
- * (Esri, no UA policy) works. Reuse the one builder so both paths stay in sync.
+ * identifying UA, otherwise "Download this region" is blocked on OSM while
+ * satellite (Esri, no UA policy) works. Reuse the one builder so both paths
+ * stay in sync.
  *
- * Device-pending: exercised against a real tile server on device, not in JVM
- * unit tests (which inject a fake fetch into [RegionDownloader]).
+ * Blocked-tile guard (#139): OSM serves its "Access blocked" placeholder as
+ * HTTP **200** with an `X-Blocked` header — verified against
+ * tile.openstreetmap.org, the body is a 6987-byte text PNG, *not* a 4xx — so a
+ * status-code check alone caches the placeholder as if it were a real tile. A
+ * *bulk* region pull trips this even with a valid UA, because OSM rate-limits
+ * bulk downloads with the same blocked response. Drop any block-marked response
+ * so the offline cache is never poisoned with "Access blocked" placeholders.
+ *
+ * Device-pending: the live HTTP round-trip is exercised against a real tile
+ * server on device; the pure [isBlocked] decision and [RegionDownloader] (which
+ * injects a fake fetch) are covered by JVM unit tests.
  */
 object HttpTileFetcher {
     private const val TIMEOUT_MS = 8_000
     private val USER_AGENT = MapTileHttp.buildUserAgent()
+
+    /**
+     * True when a 200 response is actually OSM/OpenTopoMap's "Access blocked"
+     * placeholder rather than a real tile. OSM marks it with an `X-Blocked`
+     * header (its value points at the tile-usage policy). Pure over a header
+     * lookup so it unit-tests without a network round-trip; [header] mirrors
+     * [java.net.HttpURLConnection.getHeaderField] (case-insensitive name).
+     */
+    internal fun isBlocked(header: (name: String) -> String?): Boolean =
+        header("X-Blocked") != null
 
     suspend fun fetch(url: String): ByteArray? = withContext(Dispatchers.IO) {
         val conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
@@ -160,6 +180,7 @@ object HttpTileFetcher {
         }
         try {
             if (conn.responseCode != 200) return@withContext null
+            if (isBlocked { conn.getHeaderField(it) }) return@withContext null
             conn.inputStream.use { it.readBytes() }
         } catch (e: java.io.IOException) {
             null
