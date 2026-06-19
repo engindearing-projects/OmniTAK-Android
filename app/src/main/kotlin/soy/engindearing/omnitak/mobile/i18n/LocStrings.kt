@@ -57,6 +57,7 @@ internal object LocStrings {
         "settings.coord.mgrs" to "MGRS",
         "settings.coord.utm" to "UTM",
         "settings.coord.twd97" to "TWD97",
+        "settings.coord.bng" to "BNG",
         // Go to Coordinate
         "coordentry.title" to "Go to Coordinate",
         "coordentry.format" to "Format",

@@ -42,6 +42,12 @@ object CoordFormatter {
             if (Twd97Converter.isWithinBounds(lat, lon))
                 "TWD97 ${Twd97Converter.formatTwd97(lat, lon, Twd97Converter.DigitMode.FULL7)}"
             else latLonDecimal(lat, lon)
+
+        // British National Grid (OSGB36). Returns null outside Great Britain,
+        // so fall back to plain decimal lat/lon there (mirrors TWD97).
+        CoordFormat.BNG ->
+            Bng.wgs84ToGridRef(lat, lon, digits = 5)?.let { "BNG $it" }
+                ?: latLonDecimal(lat, lon)
     }
 
     fun altitude(meters: Double, unit: DistanceUnit): String = when (unit) {
