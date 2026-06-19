@@ -24,6 +24,8 @@ internal object LocStrings {
         Language.POLISH -> PL
         Language.GERMAN -> DE
         Language.FRENCH -> FR
+        Language.SPANISH -> ES
+        Language.UKRAINIAN -> UK
     }
 
     private val EN: Map<String, String> = mapOf(
@@ -509,5 +511,81 @@ internal object LocStrings {
         "onboarding.page5.feature2" to "Faites glisser les icônes pour réorganiser, appuyez sur − pour supprimer",
         "onboarding.page5.feature3" to "Appuyez sur + pour ajouter Épingler, Mesure, Itinéraires et plus",
         "onboarding.page5.feature4" to "Rouvrir à tout moment via Paramètres ▸ Personnaliser la barre",
+    )
+
+    // Spanish — onboarding parity with the other European catalogues (#156).
+    private val ES: Map<String, String> = mapOf(
+        "onboarding.skip" to "Saltar",
+        "onboarding.continue" to "Continuar",
+        "onboarding.getStarted" to "Comenzar",
+        "onboarding.back" to "Atrás",
+        "onboarding.page1.title" to "Te damos la bienvenida a OmniTAK",
+        "onboarding.page1.desc" to "Tu potente cliente Android para servidores Team Awareness Kit (TAK). Conecta, comparte y colabora en tiempo real.",
+        "onboarding.page1.feature1" to "Posición compartida en tiempo real",
+        "onboarding.page1.feature2" to "Comunicaciones seguras",
+        "onboarding.page1.feature3" to "Conciencia basada en el mapa",
+        "onboarding.page1.feature4" to "Compatibilidad multiplataforma",
+        "onboarding.page2.title" to "Seguro y certificado",
+        "onboarding.page2.desc" to "OmniTAK admite autenticación basada en certificados para conexiones seguras a servidores TAK.",
+        "onboarding.page2.feature1" to "Compatibilidad con certificados de cliente",
+        "onboarding.page2.feature2" to "Cifrado TLS/SSL",
+        "onboarding.page2.feature3" to "Integración con el almacén de claves",
+        "onboarding.page2.feature4" to "Inscripción automática",
+        "onboarding.page3.title" to "Configuración rápida y fácil",
+        "onboarding.page3.desc" to "Conéctate en segundos con opciones de configuración inteligentes. Múltiples métodos de conexión para cada situación.",
+        "onboarding.page3.feature1" to "Escaneo de código QR",
+        "onboarding.page3.feature2" to "Detección automática",
+        "onboarding.page3.feature3" to "Ajustes preestablecidos comunes",
+        "onboarding.page3.feature4" to "Configuración manual",
+        "onboarding.page4.title" to "¿Listo para conectar?",
+        "onboarding.page4.desc" to "Vamos a conectarte a un servidor TAK. Elige el método que mejor te funcione.",
+        "onboarding.page4.feature1" to "Conéctate en < 30 segundos",
+        "onboarding.page4.feature2" to "Sin conocimientos técnicos",
+        "onboarding.page4.feature3" to "Compatibilidad total con ATAK",
+        "onboarding.page4.feature4" to "Funciona con cualquier servidor TAK",
+        "onboarding.page5.title" to "Hazlo tuyo",
+        "onboarding.page5.desc" to "La barra de herramientas inferior es totalmente personalizable: pon al frente las herramientas que realmente usas.",
+        "onboarding.page5.feature1" to "Mantén pulsada la barra para empezar a editar",
+        "onboarding.page5.feature2" to "Arrastra los iconos para reordenar, toca − para quitar",
+        "onboarding.page5.feature3" to "Toca + para añadir Soltar pin, Medir, Rutas y más",
+        "onboarding.page5.feature4" to "Vuelve a abrirla cuando quieras en Ajustes ▸ Personalizar barra",
+    )
+
+    // Ukrainian — onboarding parity with the other European catalogues (#156).
+    private val UK: Map<String, String> = mapOf(
+        "onboarding.skip" to "Пропустити",
+        "onboarding.continue" to "Далі",
+        "onboarding.getStarted" to "Почати",
+        "onboarding.back" to "Назад",
+        "onboarding.page1.title" to "Ласкаво просимо до OmniTAK",
+        "onboarding.page1.desc" to "Ваш потужний клієнт Android для серверів Team Awareness Kit (TAK). Підключайтеся, діліться та співпрацюйте в реальному часі.",
+        "onboarding.page1.feature1" to "Обмін позицією в реальному часі",
+        "onboarding.page1.feature2" to "Захищений зв'язок",
+        "onboarding.page1.feature3" to "Ситуаційна обізнаність на карті",
+        "onboarding.page1.feature4" to "Підтримка багатьох платформ",
+        "onboarding.page2.title" to "Безпечно та сертифіковано",
+        "onboarding.page2.desc" to "OmniTAK підтримує автентифікацію на основі сертифікатів для безпечних підключень до серверів TAK.",
+        "onboarding.page2.feature1" to "Підтримка клієнтських сертифікатів",
+        "onboarding.page2.feature2" to "Шифрування TLS/SSL",
+        "onboarding.page2.feature3" to "Інтеграція зі сховищем ключів",
+        "onboarding.page2.feature4" to "Автоматична реєстрація",
+        "onboarding.page3.title" to "Швидке та просте налаштування",
+        "onboarding.page3.desc" to "Підключайтеся за лічені секунди завдяки розумним параметрам налаштування. Багато способів підключення для будь-якого сценарію.",
+        "onboarding.page3.feature1" to "Сканування QR-коду",
+        "onboarding.page3.feature2" to "Автоматичне виявлення",
+        "onboarding.page3.feature3" to "Поширені шаблони",
+        "onboarding.page3.feature4" to "Ручне налаштування",
+        "onboarding.page4.title" to "Готові підключитися?",
+        "onboarding.page4.desc" to "Підключимо вас до сервера TAK. Виберіть спосіб, який вам найкраще підходить.",
+        "onboarding.page4.feature1" to "Підключення менш ніж за 30 секунд",
+        "onboarding.page4.feature2" to "Не потрібні технічні знання",
+        "onboarding.page4.feature3" to "Повна сумісність з ATAK",
+        "onboarding.page4.feature4" to "Працює з будь-яким сервером TAK",
+        "onboarding.page5.title" to "Зробіть на свій смак",
+        "onboarding.page5.desc" to "Нижню панель інструментів можна повністю налаштувати — винесіть наперед інструменти, якими ви справді користуєтеся.",
+        "onboarding.page5.feature1" to "Утримуйте панель, щоб почати редагування",
+        "onboarding.page5.feature2" to "Перетягуйте значки для зміни порядку, торкніться −, щоб видалити",
+        "onboarding.page5.feature3" to "Торкніться +, щоб додати Скинути пін, Вимірювання, Маршрути тощо",
+        "onboarding.page5.feature4" to "Відкривайте будь-коли через Налаштування ▸ Налаштувати панель",
     )
 }

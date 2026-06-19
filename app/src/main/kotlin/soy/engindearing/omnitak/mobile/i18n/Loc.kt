@@ -41,7 +41,9 @@ object Loc {
         TRADITIONAL_CHINESE("zh-Hant", "繁體中文", "🇹🇼"),
         POLISH("pl", "Polski", "🇵🇱"),
         GERMAN("de", "Deutsch", "🇩🇪"),
-        FRENCH("fr", "Français", "🇫🇷");
+        FRENCH("fr", "Français", "🇫🇷"),
+        SPANISH("es", "Español", "🇪🇸"),
+        UKRAINIAN("uk", "Українська", "🇺🇦");
 
         companion object {
             fun fromCode(code: String?): Language? =
