@@ -91,6 +91,10 @@ fun TacticalMap(
      *  fall back to cyan (0xFF00FFFF) to match CivTAK's default for
      *  unaffiliated friendlies. Sourced from [soy.engindearing.omnitak.mobile.data.UserPrefs.team]. */
     selfTeamColor: String = "Cyan",
+    /** #159 — operator echelon code ([soy.engindearing.omnitak.mobile.data.Echelon.code],
+     *  or "" = none). Its APP-6 amplifier (•, ••, I, II, XX, …) draws above the
+     *  self symbol. Sourced from [soy.engindearing.omnitak.mobile.data.UserPrefs.echelon]. */
+    selfEchelon: String = "",
     /** Issue #75 — the operator's current/last-known fix from
      *  [soy.engindearing.omnitak.mobile.data.LocationProvider]. Forwarded
      *  into the LocationComponent so the self-marker renders immediately
@@ -146,6 +150,8 @@ fun TacticalMap(
     val currentFollowMe by rememberUpdatedState(followMeActive)
     val currentUseMilStd by rememberUpdatedState(useMilStdSelfSymbol)
     val currentTeamColor by rememberUpdatedState(selfTeamColor)
+    val currentSelfEchelon by rememberUpdatedState(selfEchelon)
+    val currentOnSelfMarkerTap by rememberUpdatedState(onSelfMarkerTap)
     val currentSelfMarkerTriangle by rememberUpdatedState(selfMarkerTriangle)
     // Issue #75 — whether the puck is currently rendered dimmed (stale
     // restored fix). Plain holder, not MutableState: nothing recomposes
@@ -209,6 +215,7 @@ fun TacticalMap(
                             map, style, context, currentUseMilStd, currentTeamColor,
                             seedFix = bindings.selfFix, puck = puckAppearance,
                             selfMarkerTriangle = currentSelfMarkerTriangle,
+                            echelonAmplifier = echelonAmplifierFor(currentSelfEchelon),
                         )
                     }
                     // Cold-start 3D: if the persisted pref has terrain on,
@@ -379,6 +386,7 @@ fun TacticalMap(
                         map, style, context, currentUseMilStd, currentTeamColor,
                         seedFix = currentSelfFix, puck = puckAppearance,
                         selfMarkerTriangle = currentSelfMarkerTriangle,
+                        echelonAmplifier = echelonAmplifierFor(currentSelfEchelon),
                     )
                 }
                 if (map.locationComponent.isLocationComponentActivated) {
@@ -411,10 +419,33 @@ fun TacticalMap(
                                 context, style, currentUseMilStd, currentTeamColor,
                                 dimmed = staleNow,
                                 selfMarkerTriangle = currentSelfMarkerTriangle,
+                                echelonAmplifier = echelonAmplifierFor(currentSelfEchelon),
                             ),
                         )
                         puckAppearance.dimmed = staleNow
                     }
+                }
+            }
+        }
+        onDispose { }
+    }
+
+    // #159 — re-apply the puck when the operator changes their echelon so the
+    // amplifier appears/updates live (Settings → Map), without waiting on a
+    // style reload or re-activation.
+    DisposableEffect(mapView, selfEchelon) {
+        if (locationEnabled) {
+            mapView.getMapAsync { map ->
+                val style = map.style
+                if (style != null && map.locationComponent.isLocationComponentActivated) {
+                    map.locationComponent.applyStyle(
+                        buildPuckOptions(
+                            context, style, currentUseMilStd, currentTeamColor,
+                            dimmed = puckAppearance.dimmed,
+                            selfMarkerTriangle = currentSelfMarkerTriangle,
+                            echelonAmplifier = echelonAmplifierFor(currentSelfEchelon),
+                        ),
+                    )
                 }
             }
         }
@@ -542,6 +573,7 @@ fun TacticalMap(
                                 context, style, currentUseMilStd, currentTeamColor,
                                 dimmed = puckAppearance.dimmed,
                                 selfMarkerTriangle = currentSelfMarkerTriangle,
+                                echelonAmplifier = echelonAmplifierFor(currentSelfEchelon),
                             ),
                         )
                     }
@@ -763,6 +795,7 @@ private fun activateLocation(
     seedFix: SelfFix? = null,
     puck: PuckAppearance = PuckAppearance(),
     selfMarkerTriangle: Boolean = false,
+    echelonAmplifier: String = "",
 ) {
     // Issue #75 — when the best position available at activation is a
     // restored (persisted) fix that is already old, start the puck dimmed
@@ -774,7 +807,7 @@ private fun activateLocation(
     val options = LocationComponentActivationOptions.builder(context, style)
         .useDefaultLocationEngine(true)
         .locationComponentOptions(
-            buildPuckOptions(context, style, useMilStdSelfSymbol, selfTeamColor, dimmed, selfMarkerTriangle),
+            buildPuckOptions(context, style, useMilStdSelfSymbol, selfTeamColor, dimmed, selfMarkerTriangle, echelonAmplifier),
         )
         .build()
     map.locationComponent.activateLocationComponent(options)
@@ -805,6 +838,7 @@ private fun buildPuckOptions(
     selfTeamColor: String,
     dimmed: Boolean,
     selfMarkerTriangle: Boolean = false,
+    echelonAmplifier: String = "",
 ): LocationComponentOptions {
     // Resolve the ARGB tint from the operator's configured TAK team name
     // ("Cyan", "Red", "Orange", …). Falls back to cyan — CivTAK default
@@ -843,6 +877,9 @@ private fun buildPuckOptions(
         soy.engindearing.omnitak.mobile.data.symbology.MilStdIconCache
             .bitmapFor(context, cotType = "a-f-G-U-C", sizePx = 96)
             ?.let { raw -> tintBitmap(raw, teamArgb) }
+            // #159 — draw the echelon amplifier above the symbol (symbol stays
+            // centered on the GPS fix; LocationComponent anchors the bitmap center).
+            ?.let { sym -> withEchelonAmplifier(sym, echelonAmplifier) }
     } else {
         null
     }
@@ -908,6 +945,46 @@ private fun tintBitmap(raw: android.graphics.Bitmap, argb: Int): android.graphic
     }
     canvas.drawBitmap(raw, 0f, 0f, paint)
     return tinted
+}
+
+/** #159 — resolve an echelon code to its APP-6 amplifier glyph; "" when unset
+ *  or unknown (no amplifier drawn). */
+private fun echelonAmplifierFor(code: String): String =
+    soy.engindearing.omnitak.mobile.data.Echelon.fromCode(code)?.amplifier ?: ""
+
+/**
+ * #159 — composite the echelon [amplifier] glyph above [symbol], returning a
+ * taller bitmap with the SYMBOL still vertically centered (so it stays on the
+ * GPS fix — LocationComponent anchors the foreground bitmap at its center).
+ * Returns [symbol] unchanged when there is no amplifier.
+ */
+private fun withEchelonAmplifier(symbol: android.graphics.Bitmap, amplifier: String): android.graphics.Bitmap {
+    if (amplifier.isBlank()) return symbol
+    val band = symbol.height * 0.42f          // top space for the glyph + matching bottom pad
+    val out = android.graphics.Bitmap.createBitmap(
+        symbol.width, (symbol.height + band * 2f).toInt(), android.graphics.Bitmap.Config.ARGB_8888,
+    )
+    val canvas = android.graphics.Canvas(out)
+    canvas.drawBitmap(symbol, 0f, band, null)  // symbol centered: band above, band below
+    val fill = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        textSize = band * 0.82f
+        textAlign = android.graphics.Paint.Align.CENTER
+        typeface = android.graphics.Typeface.DEFAULT_BOLD
+    }
+    val halo = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.parseColor("#CC000000")
+        textSize = band * 0.82f
+        textAlign = android.graphics.Paint.Align.CENTER
+        typeface = android.graphics.Typeface.DEFAULT_BOLD
+        style = android.graphics.Paint.Style.STROKE
+        strokeWidth = band * 0.12f
+    }
+    val cx = symbol.width / 2f
+    val baseline = band * 0.86f
+    canvas.drawText(amplifier, cx, baseline, halo)
+    canvas.drawText(amplifier, cx, baseline, fill)
+    return out
 }
 
 /** Issue #75 — a translucent copy of [src] for the stale self-marker. */

@@ -39,6 +39,9 @@ enum class MeshFramework { MESHTASTIC, MESHCORE }
 data class UserPrefs(
     val callsign: String = "OMNI-1",
     val team: String = "Cyan",
+    // #159 — operator's echelon / org size (Echelon.code, or "" = none). The
+    // APP-6 amplifier draws above the self symbol on the map.
+    val echelon: String = "",
     // Persistent EUD identifier broadcast in every PPLI CoT event. Empty
     // until the first connection generates one (`ANDROID-<uuid>`); after
     // that it never changes so TAK servers see a stable contact across
@@ -156,6 +159,7 @@ data class UserPrefs(
 class UserPrefsStore(private val context: Context) {
     private val KEY_CALLSIGN = stringPreferencesKey("callsign")
     private val KEY_TEAM = stringPreferencesKey("team")
+    private val KEY_ECHELON = stringPreferencesKey("echelon")
     private val KEY_SELF_UID = stringPreferencesKey("self_uid")
     private val KEY_SELF_LAT = stringPreferencesKey("self_lat")
     private val KEY_SELF_LON = stringPreferencesKey("self_lon")
@@ -204,6 +208,7 @@ class UserPrefsStore(private val context: Context) {
             val next = block(readFrom(p))
             p[KEY_CALLSIGN] = next.callsign
             p[KEY_TEAM] = next.team
+            p[KEY_ECHELON] = next.echelon
             p[KEY_SELF_UID] = next.selfUid
             p[KEY_SELF_LAT] = next.selfLat.toString()
             p[KEY_SELF_LON] = next.selfLon.toString()
@@ -327,6 +332,7 @@ class UserPrefsStore(private val context: Context) {
 
     private fun readFrom(p: androidx.datastore.preferences.core.Preferences): UserPrefs = UserPrefs(
         callsign = p[KEY_CALLSIGN] ?: "OMNI-1",
+        echelon = p[KEY_ECHELON] ?: "",
         team = normalizeTeam(p[KEY_TEAM]),
         selfUid = p[KEY_SELF_UID] ?: "",
         selfLat = p[KEY_SELF_LAT]?.toDoubleOrNull() ?: Double.NaN,

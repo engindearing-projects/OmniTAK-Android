@@ -773,6 +773,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             followMeActive = followMeActive,
             useMilStdSelfSymbol = userPrefs.useMilStdSelfSymbol,
             selfTeamColor = userPrefs.team,
+            selfEchelon = userPrefs.echelon,
             selfMarkerTriangle = userPrefs.selfMarkerTriangle,
             // Issue #75 — feeds the puck so a restored fix renders
             // immediately on cold start (dimmed when stale) and the
