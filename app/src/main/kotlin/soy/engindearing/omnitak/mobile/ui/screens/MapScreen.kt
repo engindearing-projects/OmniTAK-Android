@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Brush
+import androidx.compose.material.icons.filled.TrackChanges
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.AddLocation
@@ -215,6 +216,10 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     }
     var rehearsalRunning by remember { mutableStateOf(false) }
     var measurementPoints by remember { mutableStateOf<List<LatLng>>(emptyList()) }
+    // #152 — range-rings tool: tap sets the center, concentric rings draw
+    // around it via the native drawing renderer (RangeBearing.ringPoints).
+    var rangeRingsActive by remember { mutableStateOf(false) }
+    var rangeRingCenter by remember { mutableStateOf<LatLng?>(null) }
     var drawingKind by remember { mutableStateOf<DrawingKind?>(null) }
     var drawingPoints by remember { mutableStateOf<List<LatLng>>(emptyList()) }
     var drawingPickerOpen by remember { mutableStateOf(false) }
@@ -312,9 +317,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     // MapLibre (the handle is null on the globe → it no-ops), exactly as the
     // pre-plugin code never painted aircraft on the globe. So enabling ADS-B
     // does not force a drop to 2D — identical to today's behavior.
-    LaunchedEffect(measurementActive, drawingKind, lassoMode) {
+    LaunchedEffect(measurementActive, drawingKind, lassoMode, rangeRingsActive) {
         if (!userPrefs.cesiumGlobeEnabled) return@LaunchedEffect
-        if (measurementActive || drawingKind != null || lassoMode) {
+        if (measurementActive || drawingKind != null || lassoMode || rangeRingsActive) {
             app.userPrefsStore.update { it.copy(cesiumGlobeEnabled = false) }
             toast(Loc.t("map.toast.globeTo2d"))
         }
@@ -437,20 +442,24 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 .update(m, appContext, visibleContacts)
         }
     }
-    LaunchedEffect(drawings, drawingsVisible, mapboxMap) {
+    // #152 — render user drawings AND the transient range rings through the
+    // single native renderer. apply() clears and redraws the whole set, so the
+    // rings must ride in the SAME list; a separate call would wipe the drawings.
+    LaunchedEffect(drawings, drawingsVisible, mapboxMap, rangeRingCenter) {
         mapboxMap?.let { m ->
+            val base = if (drawingsVisible) drawings else emptyList()
             soy.engindearing.omnitak.mobile.ui.components.DrawingShapeRenderer
-                .apply(m, if (drawingsVisible) drawings else emptyList())
+                .apply(m, base + buildRangeRingDrawings(rangeRingCenter))
         }
     }
     val handleMapLongPress: (LatLng, Offset) -> Unit = { latLng, offset ->
-        if (!measurementActive) {
+        if (!measurementActive && !rangeRingsActive) {
             radialLatLng = latLng
             radialAnchor = offset
         }
     }
     val handleContactTap: (soy.engindearing.omnitak.mobile.data.CoTEvent) -> Unit = { event ->
-        if (!measurementActive) {
+        if (!measurementActive && !rangeRingsActive) {
             editingMarker = event
             markerSheetLatLng = LatLng(event.lat, event.lon)
         }
@@ -623,6 +632,12 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             onMapLongPress = handleMapLongPress,
             onContactTap = handleContactTap,
             onMapSingleTap = onMapSingleTap@ { latLng ->
+                // #152 — range-rings mode owns the tap: it just (re)sets the
+                // center, so it wins before any waypoint/placement hit-test.
+                if (rangeRingsActive) {
+                    rangeRingCenter = latLng
+                    return@onMapSingleTap true
+                }
                 // Hit-test existing mission waypoints first so a tap on
                 // a pin opens its edit sheet instead of adding a new
                 // waypoint on top of it. ~80 m radius covers both
@@ -711,11 +726,13 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             zoomOutTrigger = zoomOutTick,
             contacts = visibleContacts,
             measurementPoints = measurementPoints,
-            drawings = if (drawingsVisible) {
+            // #152 — range rings ride the drawing list so they survive style
+            // reloads (TacticalMap re-applies this param after every reload).
+            drawings = (if (drawingsVisible) {
                 drawings + buildInProgressDrawing(drawingKind, drawingPoints)
             } else {
                 emptyList()
-            },
+            }) + buildRangeRingDrawings(rangeRingCenter),
             // Graticule follows the viewport (was hardcoded to Mountain
             // View — invisible for any user outside ±2° of the
             // Googleplex). Quantized to 0.5° so micro-pans don't re-push
@@ -1445,6 +1462,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             tools = listOf(
                 ToolEntry("draw", Icons.Filled.Brush, "Drawing"),
                 ToolEntry("measure", Icons.Filled.Straighten, "Measure"),
+                ToolEntry("rangerings", Icons.Filled.TrackChanges, "Range Rings"),
                 ToolEntry("layers", Icons.Filled.Layers, "Layers"),
                 // ADS-B moved to the ADS-B plugin — its on/off control now
                 // lives in Settings → Plugins → ADS-B (the plugin's
@@ -1462,11 +1480,22 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             onSelect = { tool ->
                 when (tool.id) {
                     "measure" -> {
+                        rangeRingsActive = false
                         measurementActive = true
                         measurementPoints = emptyList()
                         toast("Measure mode — tap map to add points")
                     }
-                    "draw" -> drawingPickerOpen = true
+                    "rangerings" -> {
+                        measurementActive = false
+                        drawingKind = null
+                        rangeRingsActive = true
+                        rangeRingCenter = null
+                        toast("Range rings — tap map to set center")
+                    }
+                    "draw" -> {
+                        rangeRingsActive = false
+                        drawingPickerOpen = true
+                    }
                     "layers" -> layersSheetOpen = true
                     "chat" -> onOpenTab("chat")
                     "missionsync" -> onOpenTab("missionsync")
@@ -2052,6 +2081,19 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             )
         }
 
+        if (rangeRingsActive) {
+            RangeRingsOverlay(
+                center = rangeRingCenter,
+                distancesMeters = soy.engindearing.omnitak.mobile.data.rangebearing.RangeRings.DEFAULT_DISTANCES_M,
+                onClear = { rangeRingCenter = null },
+                onClose = {
+                    rangeRingsActive = false
+                    rangeRingCenter = null
+                },
+                modifier = Modifier.align(Alignment.TopStart),
+            )
+        }
+
         if (layersSheetOpen) {
             LayersDialog(
                 gridEnabled = gridEnabled,
@@ -2246,6 +2288,60 @@ private fun MeasurementOverlay(
         androidx.compose.foundation.layout.Spacer(Modifier.width(12.dp))
         androidx.compose.material3.TextButton(onClick = onUndo, enabled = points.isNotEmpty()) {
             androidx.compose.material3.Text("Undo", color = TacticalAccent)
+        }
+        androidx.compose.material3.TextButton(onClick = onClose) {
+            androidx.compose.material3.Text("Done", color = TacticalAccent)
+        }
+    }
+}
+
+/** #152 — concentric range rings around [center] as transient native LINE
+ *  drawings (no fill). Delegates to [RangeRings] (unit-tested); these never
+ *  touch the drawing store, they ride the drawing renderer so they paint on the
+ *  GL-buggy Adreno/Mali drivers like every other shape. */
+private fun buildRangeRingDrawings(center: LatLng?): List<Drawing> =
+    center?.let {
+        soy.engindearing.omnitak.mobile.data.rangebearing.RangeRings
+            .ringDrawings(it.latitude, it.longitude)
+    } ?: emptyList()
+
+/**
+ * #152 — range-rings HUD. Mirrors [MeasurementOverlay]: a translucent readout
+ * pinned top-start with the center fix + ring legend, a Clear (re-place center)
+ * and a Done (exit tool) action.
+ */
+@Composable
+private fun RangeRingsOverlay(
+    center: LatLng?,
+    distancesMeters: List<Double>,
+    onClear: () -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    androidx.compose.foundation.layout.Row(
+        modifier = modifier
+            .padding(top = 76.dp, start = 12.dp, end = 12.dp)
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+            .background(TacticalBackground.copy(alpha = 0.9f))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        androidx.compose.material3.Text(
+            if (center == null) {
+                "Range rings · tap map to set center"
+            } else {
+                "Rings ${"%.5f".format(center.latitude)}, ${"%.5f".format(center.longitude)} · " +
+                    distancesMeters.joinToString(" · ") {
+                        soy.engindearing.omnitak.mobile.data.rangebearing.RangeRings.label(it)
+                    }
+            },
+            color = TacticalAccent,
+            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        androidx.compose.foundation.layout.Spacer(Modifier.width(12.dp))
+        androidx.compose.material3.TextButton(onClick = onClear, enabled = center != null) {
+            androidx.compose.material3.Text("Clear", color = TacticalAccent)
         }
         androidx.compose.material3.TextButton(onClick = onClose) {
             androidx.compose.material3.Text("Done", color = TacticalAccent)
