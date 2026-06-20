@@ -8,6 +8,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.TrackChanges
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.AddLocation
@@ -234,6 +235,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     var layersSheetOpen by remember { mutableStateOf(false) }
     // #120 — offline map download sheet.
     var offlineMapsOpen by remember { mutableStateOf(false) }
+    // #154 — military report entry sheet (MEDEVAC / SALUTE / SPOTREP).
+    var reportsSheetOpen by remember { mutableStateOf(false) }
     val offlineRegions by app.offlineRegionStore.regions.collectAsState()
     var teamsPanelOpen by remember { mutableStateOf(false) }
     var panTarget by remember { mutableStateOf<LatLng?>(null) }
@@ -1463,6 +1466,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 ToolEntry("draw", Icons.Filled.Brush, "Drawing"),
                 ToolEntry("measure", Icons.Filled.Straighten, "Measure"),
                 ToolEntry("rangerings", Icons.Filled.TrackChanges, "Range Rings"),
+                ToolEntry("reports", Icons.Filled.Description, "Reports"),
                 ToolEntry("layers", Icons.Filled.Layers, "Layers"),
                 // ADS-B moved to the ADS-B plugin — its on/off control now
                 // lives in Settings → Plugins → ADS-B (the plugin's
@@ -1492,6 +1496,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         rangeRingCenter = null
                         toast("Range rings — tap map to set center")
                     }
+                    "reports" -> reportsSheetOpen = true
                     "draw" -> {
                         rangeRingsActive = false
                         drawingPickerOpen = true
@@ -2137,6 +2142,54 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 provider = userPrefs.mapProvider,
                 customTileUrl = userPrefs.customTileUrl,
                 onDismiss = { offlineMapsOpen = false },
+            )
+        }
+
+        // #154 — military report entry. The report drops as a CoT point at the
+        // operator's position (the location grid prefills from it, editable),
+        // ingests locally so it shows on the map, and broadcasts over the active
+        // TAK connection via MilitaryReportCoT.buildReportEvent — the same
+        // local-ingest + sendCoT path the marker drop uses.
+        if (reportsSheetOpen) {
+            val rptPos = effectiveSelfFix?.let { LatLng(it.lat, it.lon) }
+                ?: cameraTarget ?: selfFix?.let { LatLng(it.lat, it.lon) }
+            val defaultGrid = rptPos?.let {
+                soy.engindearing.omnitak.mobile.data.CoordFormatter
+                    .position(it.latitude, it.longitude, userPrefs.coordFormat)
+            } ?: ""
+            soy.engindearing.omnitak.mobile.ui.components.MilitaryReportSheet(
+                defaultLocationGrid = defaultGrid,
+                onSend = { result ->
+                    val pos = rptPos ?: FALLBACK_GLOBAL_VIEW
+                    val uid = "report-${result.type.name.lowercase()}-${java.util.UUID.randomUUID()}"
+                    val event = soy.engindearing.omnitak.mobile.data.CoTEvent(
+                        uid = uid,
+                        type = result.type.cot,
+                        lat = pos.latitude,
+                        lon = pos.longitude,
+                        callsign = result.type.name,
+                        remarks = result.reportText,
+                    )
+                    app.contactStore.ingest(event)
+                    reportsSheetOpen = false
+                    scope.launch {
+                        val xml = soy.engindearing.omnitak.mobile.data.military.MilitaryReportCoT
+                            .buildReportEvent(
+                                uid = uid,
+                                type = result.type,
+                                senderCallsign = userPrefs.callsign,
+                                lat = pos.latitude,
+                                lon = pos.longitude,
+                                reportText = result.reportText,
+                            )
+                        val sent = runCatching { app.serverManager.sendCoT(xml) }.getOrDefault(false)
+                        toast(
+                            if (sent) "${result.type.name} sent to server"
+                            else "${result.type.name} saved — local only (no server)",
+                        )
+                    }
+                },
+                onDismiss = { reportsSheetOpen = false },
             )
         }
 
