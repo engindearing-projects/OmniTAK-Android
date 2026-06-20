@@ -24,7 +24,6 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -51,8 +50,18 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import soy.engindearing.omnitak.mobile.OmniTAKApp
 import soy.engindearing.omnitak.mobile.data.TAKServer
+import soy.engindearing.omnitak.mobile.domain.DataPackageBootstrap
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
 import soy.engindearing.omnitak.mobile.i18n.Loc
 import soy.engindearing.omnitak.mobile.ui.theme.HostileRed
@@ -83,6 +92,37 @@ fun ServersScreen(
         androidx.compose.runtime.mutableStateOf<TAKServer?>(null)
     }
 
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    // Import a TAK Connection Data Package (.zip) — the ArgusTAK / ATAK
+    // "data package" enrollment method. Streams the picked file straight
+    // through the bootstrap importer (extracts certs, pins the server CA,
+    // adds + auto-connects). Same path the sideload watcher uses.
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch(Dispatchers.IO) {
+            val nm = (uri.lastPathSegment ?: "DataPackage")
+                .substringAfterLast('/').substringAfterLast(':')
+                .removeSuffix(".zip").ifBlank { "DataPackage" }
+            runCatching {
+                context.contentResolver.openInputStream(uri)!!.use { stream ->
+                    DataPackageBootstrap(context, app.certVault, app.serverManager)
+                        .importZipStream(nm, stream)
+                }
+            }.onSuccess { added ->
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Imported “$added”", Toast.LENGTH_LONG).show()
+                }
+            }.onFailure { e ->
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Import failed: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
     Scaffold(
         containerColor = TacticalBackground,
         topBar = {
@@ -99,6 +139,22 @@ fun ServersScreen(
                         Icon(
                             Icons.Filled.QrCodeScanner,
                             contentDescription = "Scan enrollment QR",
+                            tint = TacticalAccent,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                    // Import a TAK Connection Data Package (.zip) — ArgusTAK /
+                    // ATAK "data package" enrollment (certs + CA pin + connect).
+                    IconButton(onClick = {
+                        // Accept any type — providers / email apps tag TAK
+                        // data packages inconsistently (zip vs octet-stream vs
+                        // none), and a strict filter hides them. The importer
+                        // validates the contents, not the MIME.
+                        importLauncher.launch(arrayOf("*/*"))
+                    }) {
+                        Icon(
+                            Icons.Filled.FileDownload,
+                            contentDescription = "Import data package",
                             tint = TacticalAccent,
                             modifier = Modifier.size(20.dp),
                         )
@@ -213,9 +269,9 @@ private fun EmptyServers(modifier: Modifier = Modifier) {
         Spacer(Modifier.height(8.dp))
         Text(
             "Scan (▣) a TAK/ATAK enrollment QR to enroll and connect in one " +
-                "tap, tap + to enter a server manually, or Quick Connect (⚡) " +
-                "to auto-enroll a certificate from a TAK Server's enrollment " +
-                "endpoint.",
+                "tap, tap + to enter a server manually, Quick Connect (⚡) to " +
+                "auto-enroll a certificate from a TAK Server's enrollment " +
+                "endpoint, or Import (⤓) a Connection Data Package (.zip).",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
         )

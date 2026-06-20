@@ -7,12 +7,15 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.xmlpull.v1.XmlPullParser
+import soy.engindearing.omnitak.mobile.data.CaTrust
 import soy.engindearing.omnitak.mobile.data.CertVault
 import soy.engindearing.omnitak.mobile.data.ConnectionProtocol
 import soy.engindearing.omnitak.mobile.data.TAKServer
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.StringReader
+import java.security.KeyStore
+import java.security.cert.X509Certificate
 import java.util.zip.ZipInputStream
 
 /**
@@ -60,8 +63,20 @@ class DataPackageBootstrap(
     }
 
     private fun importZip(zip: File) {
-        var serverPrefXml: String? = null
-        ZipInputStream(zip.inputStream()).use { zin ->
+        zip.inputStream().use { importZipStream(zip.nameWithoutExtension, it) }
+    }
+
+    /**
+     * Import a TAK Connection Data Package (.zip) from any stream — both the
+     * sideload watcher and the in-app file picker funnel here. Extracts certs
+     * + the connection `.pref`, pins the server's CA so a private/self-signed
+     * root is trusted, and adds (auto-connects) the server. Returns the added
+     * server's display name. Runs on an IO thread (caller's responsibility).
+     */
+    fun importZipStream(zipName: String, input: java.io.InputStream): String {
+        var prefXml: String? = null
+        val p12s = LinkedHashMap<String, ByteArray>()
+        ZipInputStream(input).use { zin ->
             while (true) {
                 val entry = zin.nextEntry ?: break
                 if (entry.isDirectory) {
@@ -72,35 +87,93 @@ class DataPackageBootstrap(
                 zin.closeEntry()
                 val name = entry.name
                 when {
-                    name.endsWith("server.pref", ignoreCase = true) -> {
-                        serverPrefXml = String(bytes, Charsets.UTF_8)
+                    // ATAK ships "defaults.pref"; some servers "server.pref" —
+                    // accept any *.pref so we don't miss the connection config.
+                    name.endsWith(".pref", ignoreCase = true) -> {
+                        prefXml = String(bytes, Charsets.UTF_8)
                     }
-                    name.endsWith(".p12", ignoreCase = true) -> {
+                    name.endsWith(".p12", ignoreCase = true) || name.endsWith(".pfx", ignoreCase = true) -> {
                         val displayName = name.substringAfterLast('/')
+                        p12s[displayName] = bytes
                         certVault.importBytes(displayName, bytes)
                     }
                 }
             }
         }
 
-        val xml = serverPrefXml ?: error("server.pref missing in ${zip.name}")
+        val xml = prefXml ?: error("no .pref connection file in $zipName")
         val parsed = parseServerPref(xml)
-        val connect = parsed.connectString ?: error("connectString missing in ${zip.name}")
+        val connect = parsed.connectString ?: error("connectString missing in $zipName")
         val (host, port, protoTag) = parseConnectString(connect)
         val useTLS = protoTag.equals("ssl", ignoreCase = true) || protoTag.equals("tls", ignoreCase = true)
+        val caFileName = parsed.caLocation?.substringAfterLast('/')
         val certFileName = parsed.certificateLocation?.substringAfterLast('/')
+            ?: p12s.keys.firstOrNull { !it.equals(caFileName, ignoreCase = true) }
+
+        // Pin the server's CA so a private/self-signed root validates on the
+        // streaming socket (system trust would reject it). TAK packages carry
+        // the CA both as a dedicated truststore p12 (caLocation/caPassword)
+        // AND inside the client p12's own chain — harvest from both.
+        val caName = pinCaFromPackage(zipName, parsed, caFileName, certFileName, p12s)
 
         val server = TAKServer(
-            name = parsed.description ?: zip.nameWithoutExtension,
+            name = parsed.description ?: zipName,
             host = host,
             port = port,
             protocol = if (useTLS) ConnectionProtocol.TLS.wire else ConnectionProtocol.TCP.wire,
             useTLS = useTLS,
             certificateName = certFileName,
             certificatePassword = parsed.clientPassword,
+            caCertificateName = caName,
         )
         serverManager.addServer(server)
-        Log.i(TAG, "Added server: ${server.name} → ${server.host}:${server.port} TLS=${server.useTLS} cert=${server.certificateName}")
+        Log.i(TAG, "Added server: ${server.name} → ${server.host}:${server.port} TLS=${server.useTLS} cert=${server.certificateName} caPin=${caName ?: "none(system)"}")
+        return server.name
+    }
+
+    /**
+     * Harvest the server CA from the package's p12s, write it to the vault as
+     * a PEM pin, and return the vault name (or null → fall back to system
+     * trust). Sources in priority: the truststore p12 (caLocation/caPassword),
+     * then the CA carried in the client p12's chain. Only true CA certs are
+     * pinned — the client leaf (basicConstraints == -1) is skipped.
+     */
+    private fun pinCaFromPackage(
+        base: String,
+        parsed: ParsedPref,
+        caFileName: String?,
+        certFileName: String?,
+        p12s: Map<String, ByteArray>,
+    ): String? {
+        val caCerts = LinkedHashMap<String, X509Certificate>()
+        fun harvest(bytes: ByteArray?, password: String?) {
+            if (bytes == null || password == null) return
+            for (cert in certsInP12(bytes, password)) {
+                val isCa = cert.basicConstraints >= 0 ||
+                    cert.subjectX500Principal == cert.issuerX500Principal
+                if (isCa) caCerts.putIfAbsent(cert.encoded.contentHashCode().toString(), cert)
+            }
+        }
+        harvest(caFileName?.let { p12s[it] }, parsed.caPassword ?: parsed.clientPassword)
+        harvest(certFileName?.let { p12s[it] }, parsed.clientPassword)
+        if (caCerts.isEmpty()) return null
+        val pem = CaTrust.encodePemChain(caCerts.values.toList())
+        return certVault.importBytes("$base-ca.pem", pem)
+    }
+
+    /** All X.509 certs (entry cert + its chain) inside a PKCS#12 blob, or empty on failure. */
+    private fun certsInP12(bytes: ByteArray, password: String): List<X509Certificate> = runCatching {
+        val ks = KeyStore.getInstance("PKCS12")
+        ByteArrayInputStream(bytes).use { ks.load(it, password.toCharArray()) }
+        buildList {
+            for (alias in ks.aliases()) {
+                (ks.getCertificate(alias) as? X509Certificate)?.let { add(it) }
+                ks.getCertificateChain(alias)?.forEach { c -> (c as? X509Certificate)?.let { add(it) } }
+            }
+        }
+    }.getOrElse {
+        Log.w(TAG, "certsInP12 failed: ${it.javaClass.simpleName}: ${it.message}")
+        emptyList()
     }
 
     private data class ParsedPref(
