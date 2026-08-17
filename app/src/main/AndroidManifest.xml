@@ -15,6 +15,12 @@
          the service still runs, the persistent chip just doesn't show. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Field feedback (PatoG, 2026-08) — with only the dataSync type, fused
+         location updates stop the moment the screen locks, so PPLI freezes
+         for everyone while the socket/mesh stay up. The location FGS type
+         keeps while-in-use GPS flowing in the background — no "Allow all
+         the time" (ACCESS_BACKGROUND_LOCATION) prompt needed. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Bluetooth LE for the Meshtastic BLE transport (Android 12+). -->
@@ -99,7 +105,7 @@
         <service
             android:name=".domain.TAKConnectionService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="dataSync|location" />
 
         <!-- Issue #16 — FileProvider for lasso exports (KML / Mission
              Package zip) so we can hand them to the system share sheet

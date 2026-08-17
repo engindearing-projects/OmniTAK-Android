@@ -291,6 +291,7 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
             batteryLevel = node.batteryLevel ?: existing.batteryLevel,
             shortName = node.shortName.ifBlank { existing.shortName },
             longName = node.longName.ifBlank { existing.longName },
+            role = node.role ?: existing.role,
         ) else node
         _nodes.value = _nodes.value + (merged.id to merged)
     }

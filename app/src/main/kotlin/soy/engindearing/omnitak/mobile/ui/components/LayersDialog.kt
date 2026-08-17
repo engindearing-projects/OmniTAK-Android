@@ -36,6 +36,7 @@ fun LayersDialog(
     contactsVisible: Boolean,
     callsignCardVisible: Boolean,
     meshNodesVisible: Boolean = true,
+    meshPairedVisible: Boolean = false,
     map3dEnabled: Boolean = false,
     onToggleGrid: (Boolean) -> Unit,
     onToggleDrawings: (Boolean) -> Unit,
@@ -43,6 +44,7 @@ fun LayersDialog(
     onToggleContacts: (Boolean) -> Unit,
     onToggleCallsignCard: (Boolean) -> Unit,
     onToggleMeshNodes: (Boolean) -> Unit = {},
+    onToggleMeshPaired: (Boolean) -> Unit = {},
     onToggle3d: (Boolean) -> Unit = {},
     onOpenOfflineMaps: (() -> Unit)? = null,
     onDismiss: () -> Unit,
@@ -62,6 +64,17 @@ fun LayersDialog(
                 LayerRow("3D terrain", map3dEnabled, onToggle3d)
                 LayerRow("Contacts", contactsVisible, onToggleContacts)
                 LayerRow("Mesh nodes", meshNodesVisible, onToggleMeshNodes)
+                // Field feedback (PatoG, 2026-08) — radios in Meshtastic role
+                // TAK duplicate their operator's own PLI dot, so they're a
+                // separate opt-in. Standalone trackers (TAK_TRACKER, sensors,
+                // vehicles) ride the main "Mesh nodes" toggle above.
+                if (meshNodesVisible) {
+                    LayerRow(
+                        "    Paired radios (duplicate of operator)",
+                        meshPairedVisible,
+                        onToggleMeshPaired,
+                    )
+                }
                 LayerRow("Drawings", drawingsVisible, onToggleDrawings)
                 LayerRow("Aircraft (ADSB)", aircraftVisible, onToggleAircraft)
                 LayerRow("Lat/Lon grid", gridEnabled, onToggleGrid)

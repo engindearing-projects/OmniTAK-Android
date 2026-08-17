@@ -76,6 +76,10 @@ fun CustomToolbar(
     coachmarkVisible: Boolean,
     canAdd: Boolean,
     canRemove: Boolean,
+    /** Per-item status dot colors keyed by BarItem id — e.g. the Mesh tab's
+     *  radio-link state (field feedback: "is a mesh device even connected?"
+     *  needs an always-visible answer). Absent id = no dot. */
+    statusDots: Map<String, Color> = emptyMap(),
     onSelect: (BarItem) -> Unit,
     onEnterEdit: () -> Unit,
     onDoneEdit: () -> Unit,
@@ -180,6 +184,7 @@ fun CustomToolbar(
                         editing = editing,
                         compact = compact,
                         canRemove = canRemove,
+                        statusDot = statusDots[item.id],
                         jiggleAngle = if (isDragging) 0f else jiggleAngle,
                         isDragging = isDragging,
                         dragTranslationX = if (isDragging) dragOffsetX else 0f,
@@ -262,6 +267,7 @@ private fun BarCell(
     editing: Boolean,
     compact: Boolean,
     canRemove: Boolean,
+    statusDot: Color?,
     jiggleAngle: Float,
     isDragging: Boolean,
     dragTranslationX: Float,
@@ -308,6 +314,20 @@ private fun BarCell(
                     tint = if (selected) item.tint else Color.White.copy(alpha = 0.85f),
                     modifier = Modifier.size(22.dp),
                 )
+                if (statusDot != null) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 3.dp, end = 3.dp)
+                            .size(7.dp)
+                            .clip(CircleShape)
+                            // Thin dark ring so the dot reads on any tint.
+                            .background(Color(0xFF0F1115))
+                            .padding(1.dp)
+                            .clip(CircleShape)
+                            .background(statusDot),
+                    )
+                }
             }
             // #182 — drop the per-cell label in the compact landscape rail;
             // the icon's contentDescription keeps it accessible and the bar

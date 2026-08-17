@@ -20,8 +20,22 @@ data class MeshNode(
     val snr: Double? = null,
     val hopDistance: Int? = null,
     val batteryLevel: Int? = null,
+    /** Meshtastic device role (`User.role`, config.proto enum value), or
+     *  null when the NodeInfo didn't carry one. */
+    val role: Int? = null,
 ) {
     val idHex: String get() = "%08x".format(id.toInt())
+
+    /** Role `TAK` — a radio paired to a phone running a TAK client. Its
+     *  position duplicates the operator's own PLI, so the map can hide it
+     *  (field feedback: two mismatched dots per person). */
+    val isTakPaired: Boolean get() = role == ROLE_TAK
+
+    companion object {
+        /** meshtastic config.proto Config.DeviceConfig.Role values we care about. */
+        const val ROLE_TAK = 7
+        const val ROLE_TAK_TRACKER = 10
+    }
 }
 
 data class MeshPosition(

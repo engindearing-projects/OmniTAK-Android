@@ -110,24 +110,54 @@ class OmniTAKApp : Application() {
         // with ForegroundServiceDidNotStartInTimeException. Waiting
         // [FGS_DEBOUNCE_MS] before calling start() means transient
         // connections never trigger the FGS at all.
+        // Field feedback (PatoG, 2026-08) — the FGS must also run for
+        // mesh-only operation. His MilSim devices with a radio but no TAK
+        // server had no foreground privilege at all, so location (and
+        // eventually the process) died at screen lock. The service now runs
+        // while EITHER a server socket or a mesh radio link is up, and its
+        // location FGS type keeps background GPS flowing for both.
         appScope.launch {
             var pendingStart: Job? = null
-            serverManager.connectionState.collect { state ->
-                when (state) {
-                    is ConnectionState.Connected -> {
+            fun currentLinkLabel(): String? {
+                val server = serverManager.connectionState.value as? ConnectionState.Connected
+                val meshUp = meshtastic.activeConnectionState.value is ConnectionState.Connected ||
+                    meshcore.activeConnectionState.value is ConnectionState.Connected
+                return when {
+                    server != null && meshUp -> "${server.serverName} + mesh"
+                    server != null -> server.serverName
+                    meshUp -> "mesh radio"
+                    else -> null
+                }
+            }
+            combine(
+                serverManager.connectionState,
+                meshtastic.activeConnectionState,
+                meshcore.activeConnectionState,
+            ) { server, mesh, meshCore ->
+                val states = listOf(server, mesh, meshCore)
+                when {
+                    states.any { it is ConnectionState.Connected } -> FgsWant.START
+                    // Connecting / Failed hold the service as before — a
+                    // transient reconnect must not bounce the FGS.
+                    states.all { it is ConnectionState.Disconnected } -> FgsWant.STOP
+                    else -> FgsWant.HOLD
+                }
+            }.distinctUntilChanged().collect { want ->
+                when (want) {
+                    FgsWant.START -> {
                         pendingStart?.cancel()
                         pendingStart = appScope.launch {
                             delay(FGS_DEBOUNCE_MS)
-                            if (serverManager.connectionState.value is ConnectionState.Connected) {
-                                TAKConnectionService.start(this@OmniTAKApp, state.serverName)
+                            currentLinkLabel()?.let { label ->
+                                TAKConnectionService.start(this@OmniTAKApp, label)
                             }
                         }
                     }
-                    ConnectionState.Disconnected -> {
+                    FgsWant.STOP -> {
                         pendingStart?.cancel()
                         TAKConnectionService.stop(this@OmniTAKApp)
                     }
-                    else -> { /* Connecting / Failed: leave service state alone */ }
+                    FgsWant.HOLD -> { /* leave service state alone */ }
                 }
             }
         }
@@ -833,3 +863,6 @@ private fun meshChannelTitle(channel: AdminResponse.Channel): String {
         else -> "Mesh: Channel ${channel.index}"
     }
 }
+
+/** Desired foreground-service state derived from the server + mesh links. */
+private enum class FgsWant { START, HOLD, STOP }

@@ -130,6 +130,18 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     // visible — matches iOS.
     val userPrefs by app.userPrefsStore.prefs.collectAsState(initial = soy.engindearing.omnitak.mobile.data.UserPrefs())
     val meshNodesVisible = userPrefs.meshNodesLayerVisible
+    // Field feedback (PatoG, 2026-08) — split "paired radios" (Meshtastic
+    // role TAK: the phone next to them already broadcasts the operator's
+    // PLI, so the node dot is a duplicate) from standalone trackers
+    // (vehicles / mission objects with no TAK client). Hidden by default.
+    val meshPairedVisible = userPrefs.meshPairedNodesVisible
+    val meshNodesById by app.activeMeshManager.nodes.collectAsState()
+    val pairedMeshUids = remember(meshNodesById) {
+        meshNodesById.values
+            .filter { it.isTakPaired }
+            .map { soy.engindearing.omnitak.mobile.data.MeshtasticCoTConverter.takUid(it.id) }
+            .toSet()
+    }
     // GAP-110 — persisted UI toggles. These survive relaunch instead of
     // resetting to defaults each time the user opens the app. Aliases so
     // existing read sites stay terse.
@@ -434,10 +446,19 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     // dead 3D zoom buttons came from exactly this split).
     val visibleContacts: List<soy.engindearing.omnitak.mobile.data.CoTEvent> =
         if (contactsVisible) {
-            if (meshNodesVisible) contacts.values.toList()
-            // Hide mesh-origin contacts — they all share the `MESHTASTIC-`
-            // UID prefix produced by `MeshtasticCoTConverter.takUid`.
-            else contacts.values.filterNot { it.uid.startsWith("MESHTASTIC-") }
+            // Mesh-origin contacts share the `MESHTASTIC-` UID prefix
+            // produced by `MeshtasticCoTConverter.takUid`. The master mesh
+            // toggle hides them all; with it on, paired radios (role TAK —
+            // duplicate of the operator's own PLI dot) stay hidden unless
+            // the operator opts back in.
+            contacts.values.filter { c ->
+                when {
+                    !c.uid.startsWith("MESHTASTIC-") -> true
+                    !meshNodesVisible -> false
+                    c.uid in pairedMeshUids -> meshPairedVisible
+                    else -> true
+                }
+            }
         } else {
             emptyList()
         }
@@ -2161,12 +2182,16 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 contactsVisible = contactsVisible,
                 callsignCardVisible = callsignCardVisible,
                 meshNodesVisible = meshNodesVisible,
+                meshPairedVisible = meshPairedVisible,
                 map3dEnabled = map3dEnabled,
                 onToggleGrid = { v -> mutatePref { it.copy(gridEnabled = v) } },
                 onToggleDrawings = { v -> mutatePref { it.copy(drawingsVisible = v) } },
                 onToggleAircraft = { v -> mutatePref { it.copy(aircraftVisible = v) } },
                 onToggleContacts = { v -> mutatePref { it.copy(contactsVisible = v) } },
                 onToggleCallsignCard = { v -> mutatePref { it.copy(callsignCardVisible = v) } },
+                onToggleMeshPaired = { v ->
+                    mutatePref { it.copy(meshPairedNodesVisible = v) }
+                },
                 onToggleMeshNodes = { v ->
                     scope.launch { app.userPrefsStore.setMeshNodesLayerVisible(v) }
                 },

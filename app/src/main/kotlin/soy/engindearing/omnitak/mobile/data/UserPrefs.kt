@@ -68,6 +68,12 @@ data class UserPrefs(
     val customTileUrl: String = "",
     val autoPublishMeshToTak: Boolean = true,
     val meshNodesLayerVisible: Boolean = true,
+    // Field feedback (PatoG, 2026-08) — a radio in Meshtastic role TAK is
+    // paired to a phone that broadcasts its own PLI, so its node marker is a
+    // second, slightly-off dot for the same person. Hidden by default;
+    // standalone trackers (TAK_TRACKER / sensors / vehicles) stay visible
+    // under the main mesh toggle.
+    val meshPairedNodesVisible: Boolean = false,
     // GAP-110 — persisted UI toggles. Each one mirrors a switch the operator
     // hits via the long-press radial menu / Layers sheet / map controls. Used
     // to evaporate on relaunch (`var X by remember { mutableStateOf(...) }`)
@@ -172,6 +178,7 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_CUSTOM_TILE_URL = stringPreferencesKey("custom_tile_url")
     private val KEY_AUTO_PUBLISH_MESH = booleanPreferencesKey("auto_publish_mesh_to_tak")
     private val KEY_MESH_LAYER_VISIBLE = booleanPreferencesKey("mesh_nodes_layer_visible")
+    private val KEY_MESH_PAIRED_VISIBLE = booleanPreferencesKey("mesh_paired_nodes_visible")
     // GAP-110 keys
     private val KEY_CALLSIGN_CARD = booleanPreferencesKey("callsign_card_visible")
     private val KEY_GRID = booleanPreferencesKey("grid_enabled")
@@ -220,6 +227,7 @@ class UserPrefsStore(private val context: Context) {
             p[KEY_CUSTOM_TILE_URL] = next.customTileUrl
             p[KEY_AUTO_PUBLISH_MESH] = next.autoPublishMeshToTak
             p[KEY_MESH_LAYER_VISIBLE] = next.meshNodesLayerVisible
+            p[KEY_MESH_PAIRED_VISIBLE] = next.meshPairedNodesVisible
             p[KEY_CALLSIGN_CARD] = next.callsignCardVisible
             p[KEY_GRID] = next.gridEnabled
             p[KEY_DRAWINGS_VIS] = next.drawingsVisible
@@ -348,6 +356,7 @@ class UserPrefsStore(private val context: Context) {
         customTileUrl = p[KEY_CUSTOM_TILE_URL] ?: "",
         autoPublishMeshToTak = p[KEY_AUTO_PUBLISH_MESH] ?: true,
         meshNodesLayerVisible = p[KEY_MESH_LAYER_VISIBLE] ?: true,
+        meshPairedNodesVisible = p[KEY_MESH_PAIRED_VISIBLE] ?: false,
         callsignCardVisible = p[KEY_CALLSIGN_CARD] ?: true,
         gridEnabled = p[KEY_GRID] ?: false,
         drawingsVisible = p[KEY_DRAWINGS_VIS] ?: true,
