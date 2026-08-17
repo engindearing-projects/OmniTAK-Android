@@ -63,6 +63,7 @@ import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.OmniTAKApp
 import soy.engindearing.omnitak.mobile.i18n.Loc
 import soy.engindearing.omnitak.mobile.data.CoordFormat
+import soy.engindearing.omnitak.mobile.data.Echelon
 import soy.engindearing.omnitak.mobile.data.DistanceUnit
 import soy.engindearing.omnitak.mobile.data.MapProvider
 import soy.engindearing.omnitak.mobile.data.UserPrefs
@@ -135,6 +136,17 @@ fun SettingsScreen(
             TeamColorDropdown(
                 value = prefs.team,
                 onSelect = { v -> mutate { it.copy(team = v) } },
+            )
+
+            // #159 — operator echelon / org size. The selected level's APP-6
+            // amplifier (•, ••, •••, I, II, III, XX, XXX) draws above the self
+            // symbol on the map; "Off" clears it. Glyph labels keep the row
+            // compact for all nine choices.
+            SectionHeader("Echelon")
+            SegmentedRow(
+                options = listOf("" to "Off") + Echelon.entries.map { it.code to it.amplifier },
+                selected = prefs.echelon,
+                onSelect = { v -> mutate { it.copy(echelon = v) } },
             )
 
             // ── Configuration Profiles ──────────────────────────────────────
