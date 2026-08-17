@@ -134,6 +134,37 @@ class MeshtasticProtoParserTest {
         assertEquals(12.5, node.snr!!, 1e-3)
         assertEquals(1_700_000_000L, node.lastHeardEpoch)
         assertEquals(2, node.hopDistance)
+        // No role field in this frame — must stay null, not default to 0.
+        assertEquals(null, node.role)
+    }
+
+    // Field feedback (PatoG, 2026-08) — User.role (field 7) distinguishes a
+    // radio paired to a TAK client (role TAK → hideable duplicate dot) from
+    // a standalone tracker. Pin the decode + the isTakPaired split.
+    @Test fun fromRadio_nodeinfo_role_tak_vs_tracker() {
+        fun nodeWithRole(role: Int): MeshNode {
+            val user = ByteArrayOutputStream().apply {
+                writeTagString(this, field = 2, value = "Radio")
+                writeTagString(this, field = 3, value = "RDO")
+                writeTagVarint(this, field = 7, value = role.toULong())
+            }.toByteArray()
+            val nodeInfo = ByteArrayOutputStream().apply {
+                writeTagVarint(this, field = 1, value = 0x1234UL)
+                writeTagBytes(this, field = 4, value = user)
+            }.toByteArray()
+            val fromRadio = ByteArrayOutputStream().apply {
+                writeTagBytes(this, field = 4, value = nodeInfo)
+            }.toByteArray()
+            return (MeshtasticProtoParser.parseFromRadio(fromRadio) as FromRadioFrame.NodeInfoFrame).node
+        }
+
+        val paired = nodeWithRole(MeshNode.ROLE_TAK)
+        assertEquals(MeshNode.ROLE_TAK, paired.role)
+        assertTrue(paired.isTakPaired)
+
+        val tracker = nodeWithRole(MeshNode.ROLE_TAK_TRACKER)
+        assertEquals(MeshNode.ROLE_TAK_TRACKER, tracker.role)
+        assertTrue(!tracker.isTakPaired)
     }
 
     @Test fun fromRadio_my_info() {

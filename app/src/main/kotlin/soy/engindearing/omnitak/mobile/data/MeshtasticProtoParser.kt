@@ -158,6 +158,7 @@ object MeshtasticProtoParser {
         var nodeNumSeen = false
         var shortName = ""
         var longName = ""
+        var role: Int? = null
         var position: MeshPosition? = null
         var snr: Double? = null
         var lastHeard: Long = System.currentTimeMillis() / 1000
@@ -186,15 +187,15 @@ object MeshtasticProtoParser {
                     }
                 }
                 4 -> {
-                    // user submessage — long_name (2), short_name (3) are
-                    // the only fields we surface. iOS uses field 2 = user
-                    // historically; the modern proto puts user at field 4.
-                    // Accept either.
+                    // user submessage — long_name (2), short_name (3), and
+                    // role (7). iOS uses field 2 = user historically; the
+                    // modern proto puts user at field 4. Accept either.
                     if (wire != 2) { idx = skipField(bytes, idx, wire); continue }
                     val sub = readLengthDelimited(bytes, idx) ?: break
-                    val (sn, ln) = parseUser(sub.first)
-                    if (sn.isNotEmpty()) shortName = sn
-                    if (ln.isNotEmpty()) longName = ln
+                    val user = parseUser(sub.first)
+                    if (user.shortName.isNotEmpty()) shortName = user.shortName
+                    if (user.longName.isNotEmpty()) longName = user.longName
+                    if (user.role != null) role = user.role
                     idx = sub.second
                 }
                 2 -> {
@@ -202,9 +203,10 @@ object MeshtasticProtoParser {
                     // payload shape.
                     if (wire != 2) { idx = skipField(bytes, idx, wire); continue }
                     val sub = readLengthDelimited(bytes, idx) ?: break
-                    val (sn, ln) = parseUser(sub.first)
-                    if (sn.isNotEmpty()) shortName = sn
-                    if (ln.isNotEmpty()) longName = ln
+                    val user = parseUser(sub.first)
+                    if (user.shortName.isNotEmpty()) shortName = user.shortName
+                    if (user.longName.isNotEmpty()) longName = user.longName
+                    if (user.role != null) role = user.role
                     idx = sub.second
                 }
                 5 -> {
@@ -278,13 +280,18 @@ object MeshtasticProtoParser {
             snr = snr,
             hopDistance = hopsAway,
             batteryLevel = battery,
+            role = role,
         )
     }
 
-    private fun parseUser(bytes: ByteArray): Pair<String, String> {
+    /** Decoded `User` submessage fields we surface off a NodeInfo. */
+    data class ParsedUser(val shortName: String, val longName: String, val role: Int?)
+
+    private fun parseUser(bytes: ByteArray): ParsedUser {
         var idx = 0
         var shortName = ""
         var longName = ""
+        var role: Int? = null
         while (idx < bytes.size) {
             val (tag, afterTag) = readVarint(bytes, idx) ?: break
             val field = (tag shr 3).toInt()
@@ -301,10 +308,15 @@ object MeshtasticProtoParser {
                     val (s, after) = readString(bytes, idx) ?: break
                     shortName = s; idx = after
                 }
+                7 -> { // role (Config.DeviceConfig.Role) — TAK vs TAK_TRACKER
+                    if (wire != 0) { idx = skipField(bytes, idx, wire); continue }
+                    val (v, after) = readVarint(bytes, idx) ?: break
+                    role = v.toInt(); idx = after
+                }
                 else -> idx = skipField(bytes, idx, wire)
             }
         }
-        return shortName to longName
+        return ParsedUser(shortName, longName, role)
     }
 
     private fun parseDeviceMetricsBattery(bytes: ByteArray): Int? {

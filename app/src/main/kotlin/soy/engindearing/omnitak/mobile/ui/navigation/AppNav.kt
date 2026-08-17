@@ -4,6 +4,8 @@ import android.view.WindowManager
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
+import androidx.compose.ui.graphics.Color
+import soy.engindearing.omnitak.mobile.domain.ConnectionState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -191,6 +193,22 @@ fun AppNav() {
     val barItems = ToolbarCatalog.resolve(workingIds)
     val coachmarkVisible = !prefs.toolbarCoachmarkSeen && currentRoute == "map" && !editing
 
+    // Field feedback (PatoG, 2026-08) — the Mesh tab icon carries an
+    // always-visible link-state dot so "is a radio even connected?" never
+    // needs a tab visit: green = connected, amber = connecting,
+    // red = failed, grey = no device.
+    val meshtasticState by app.meshtastic.activeConnectionState.collectAsState()
+    val meshcoreState by app.meshcore.activeConnectionState.collectAsState()
+    val meshDot = when {
+        meshtasticState is ConnectionState.Connected ||
+            meshcoreState is ConnectionState.Connected -> Color(0xFF34C759)
+        meshtasticState is ConnectionState.Connecting ||
+            meshcoreState is ConnectionState.Connecting -> Color(0xFFFFCC00)
+        meshtasticState is ConnectionState.Failed ||
+            meshcoreState is ConnectionState.Failed -> Color(0xFFFF3B30)
+        else -> Color(0xFF5A5F66)
+    }
+
     Scaffold(
         bottomBar = {
             CustomToolbar(
@@ -200,6 +218,7 @@ fun AppNav() {
                 coachmarkVisible = coachmarkVisible,
                 canAdd = workingIds.size < ToolbarCatalog.MAX_ITEMS,
                 canRemove = workingIds.size > ToolbarCatalog.MIN_ITEMS,
+                statusDots = mapOf("mesh" to meshDot),
                 onSelect = { dispatch(it) },
                 onEnterEdit = { enterEdit() },
                 onDoneEdit = {
