@@ -1,6 +1,8 @@
 package soy.engindearing.omnitak.mobile.ui.screens
 
+import android.content.Context
 import android.net.Uri
+import android.net.nsd.NsdManager
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -43,6 +45,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -54,9 +57,11 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.flow.flowOf
 import soy.engindearing.omnitak.mobile.OmniTAKApp
 import soy.engindearing.omnitak.mobile.data.ConnectionProtocol
 import soy.engindearing.omnitak.mobile.data.TAKServer
+import soy.engindearing.omnitak.mobile.data.discovery.TakNsdDiscovery
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalBackground
 
@@ -100,6 +105,14 @@ fun AddServerScreen(onDone: () -> Unit) {
 
     val port = portText.toIntOrNull()
     val canSave = name.isNotBlank() && host.isNotBlank() && port != null && port in 1..65535
+
+    // #158 — live Bonjour/mDNS browse of _tak._tcp while this screen is open
+    // (stops when it leaves composition). Tapping a hit prefills the form;
+    // nothing renders when the LAN is quiet.
+    val discovered by remember {
+        val nsd = context.getSystemService(Context.NSD_SERVICE) as? NsdManager
+        if (nsd != null) TakNsdDiscovery(nsd).discover() else flowOf(emptyList())
+    }.collectAsState(initial = emptyList())
 
     Scaffold(
         containerColor = TacticalBackground,
@@ -195,11 +208,46 @@ fun AddServerScreen(onDone: () -> Unit) {
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
             )
 
+            if (discovered.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Discovered on this network",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = TacticalAccent,
+                    )
+                    discovered.forEach { found ->
+                        OutlinedButton(
+                            onClick = {
+                                name = found.name
+                                host = found.host
+                                portText = found.port.toString()
+                                useTLS = found.useTLS
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(found.name, style = MaterialTheme.typography.titleSmall)
+                                Text(
+                                    "${found.host}:${found.port}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+                                )
+                            }
+                            Text(
+                                if (found.useTLS) "TLS" else "TCP",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TacticalAccent,
+                            )
+                        }
+                    }
+                }
+            }
+
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
                 label = { Text("Name") },
-                placeholder = { Text("e.g. FreeTAK") },
+                placeholder = { Text("e.g. Team Server") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
                 colors = tacticalOutlineColors(),
