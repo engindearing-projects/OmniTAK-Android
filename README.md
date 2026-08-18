@@ -4,11 +4,11 @@
 
 Open-source TAK (Team Awareness Kit) client for Android, built with Kotlin + Jetpack Compose.
 
-OmniTAK speaks Cursor-on-Target (CoT) over TLS to any TAK Server, supports tactical map rendering via MapLibre, ADS-B traffic display, Meshtastic radios, drawing tools, and more — designed for search-and-rescue, civil defense, and outdoor operations.
+OmniTAK speaks Cursor-on-Target (CoT) over TLS to any TAK Server, supports tactical map rendering via MapLibre, ADS-B traffic display, Meshtastic radios, drawing tools, and more, designed for search-and-rescue, civil defense, and outdoor operations.
 
 > **Bring your own TAK Server.** OmniTAK is a client. Stand up [TAK Server](https://tak.gov) (community CIV edition), [OpenTAKServer](https://github.com/brian7704/OpenTAKServer), or [taky](https://github.com/tkuester/taky) and point OmniTAK at it.
 
-## 🧪 Testers wanted
+## Testers wanted
 
 OmniTAK for Android is in **Google Play closed testing**, and every tester helps push it toward the public Play Store release. The iOS build is already live on the [App Store](https://apps.apple.com/us/app/omnitakmobile/id6755246992).
 
@@ -18,15 +18,15 @@ OmniTAK for Android is in **Google Play closed testing**, and every tester helps
 
 [![Latest release](https://img.shields.io/github/v/release/engindearing-projects/OmniTAK-Android?label=latest&sort=semver)](https://github.com/engindearing-projects/OmniTAK-Android/releases/latest)
 
-**Current release: [v0.38.0 (versionCode 97)](https://github.com/engindearing-projects/OmniTAK-Android/releases/tag/v0.38.0)** — 2D map rendering batch: dropped markers, contacts, and operator drawings now render on the 2D map across all GPUs, imported KML renders fully (points, lines, and polygons) with clustering for large files, markers refresh instantly on create/edit/delete, and tap-to-edit + lasso select/delete reliably hit dropped markers. Builds on 0.37.0 (KML pins, red-framed coords, offline regions, icon-pack import, FEMA symbols, QR enrollment, EN/PL/DE/FR).
+**Current release: [v0.38.0 (versionCode 97)](https://github.com/engindearing-projects/OmniTAK-Android/releases/tag/v0.38.0)**. 2D map rendering batch: dropped markers, contacts, and operator drawings now render on the 2D map across all GPUs, imported KML renders fully (points, lines, and polygons) with clustering for large files, markers refresh instantly on create/edit/delete, and tap-to-edit + lasso select/delete reliably hit dropped markers. Builds on 0.37.0 (KML pins, red-framed coords, offline regions, icon-pack import, FEMA symbols, QR enrollment, EN/PL/DE/FR).
 
 - **Signed APK (sideload):** [OmniTAK-0.38.0-vc97.apk](https://github.com/engindearing-projects/OmniTAK-Android/releases/download/v0.38.0/OmniTAK-0.38.0-vc97.apk)
 - **Always-latest APK:** [releases/latest](https://github.com/engindearing-projects/OmniTAK-Android/releases/latest)
 - **Google Play (closed testing):** [sign up at omnitak.engindearing.soy](https://omnitak.engindearing.soy) with your Google-account email
 
-> **Upgrading?** versionCode is monotonic — every release ratchets the integer up. Android allows in-place upgrade as long as the signing cert is unchanged.
+> **Upgrading?** versionCode is monotonic. Every release ratchets the integer up. Android allows in-place upgrade as long as the signing cert is unchanged.
 
-Verify the APK before installing — signing cert SHA-256 should be `9f3b1fd54ad4eb1dc5b45d91deac4699869617d3d2ac425a1b70337aa0eb13af`:
+Verify the APK before installing, signing cert SHA-256 should be `9f3b1fd54ad4eb1dc5b45d91deac4699869617d3d2ac425a1b70337aa0eb13af`:
 
 ```bash
 apksigner verify --print-certs OmniTAK-0.38.0-vc97.apk
@@ -40,22 +40,22 @@ apksigner verify --print-certs OmniTAK-0.38.0-vc97.apk
 
 ## Features
 
-- **TAK Server connectivity** — TCP / TLS / mTLS with client-certificate enrollment
-- **Cursor-on-Target** — full CoT XML parser, marker rendering, server messaging
-- **Tactical map** — MapLibre Native Android with custom layers (contacts, drawing, aircraft, mesh nodes, grid, measurement)
-- **ADS-B traffic** — aircraft overlay with bring-your-own provider
-- **Meshtastic** — TCP connection to Meshtastic mesh radios
-- **Drawing tools** — points, lines, polygons, range/bearing, measurement
-- **Multi-server management** — connect to multiple TAK servers
-- **Radial menu** — quick actions on map long-press
-- **Material 3 dark theme** — tactical color palette
+- **TAK Server connectivity**: TCP / TLS / mTLS with client-certificate enrollment
+- **Cursor-on-Target**: full CoT XML parser, marker rendering, server messaging
+- **Tactical map**: MapLibre Native Android with custom layers (contacts, drawing, aircraft, mesh nodes, grid, measurement)
+- **ADS-B traffic**: aircraft overlay with bring-your-own provider
+- **Meshtastic**: TCP connection to Meshtastic mesh radios
+- **Drawing tools**: points, lines, polygons, range/bearing, measurement
+- **Multi-server management**: connect to multiple TAK servers
+- **Radial menu**: quick actions on map long-press
+- **Material 3 dark theme**: tactical color palette
 
 ## Requirements
 
 - Android 8.0 (API 26) or later
 - Android Studio Ladybug or later (for development)
 - JDK 17
-- A TAK Server you can reach (BYO — see above)
+- A TAK Server you can reach (BYO, see above)
 
 ## Getting started
 
@@ -73,7 +73,7 @@ To install on a connected device:
 ./gradlew installDebug
 ```
 
-Or open the project in Android Studio and run normally — debug builds work out-of-the-box without any signing key configuration.
+Or open the project in Android Studio and run normally, debug builds work out-of-the-box without any signing key configuration.
 
 ### Release builds (your own signing key)
 
@@ -95,22 +95,22 @@ If `keystore.properties` is absent, release builds gracefully fall back to the d
 
 ```
 app/src/main/kotlin/soy/engindearing/omnitak/mobile/
-├── data/            # Models + persistence (TAKServer, CoTEvent, ChatMessage, …)
-├── domain/          # State stores (ServerManager, ChatStore, ContactStore, …)
+├── data/            # Models + persistence (TAKServer, CoTEvent, ChatMessage, etc.)
+├── domain/          # State stores (ServerManager, ChatStore, ContactStore, etc.)
 └── ui/
-    ├── screens/     # Top-level screens (Map, Servers, Chat, Meshtastic, Settings, …)
-    ├── components/  # Reusable layers and widgets (TacticalMap, RadialMenu, …)
+    ├── screens/     # Top-level screens (Map, Servers, Chat, Meshtastic, Settings, etc.)
+    ├── components/  # Reusable layers and widgets (TacticalMap, RadialMenu, etc.)
     ├── navigation/  # Compose Navigation graph
     └── theme/       # Material 3 theme + tactical colors
 ```
 
-The app is pure Kotlin + Compose with no native bridge. A future release will integrate the shared OmniTAK Rust core via JNI — its source is being prepared for separate open-source release as **OmniTAK-Core**.
+The app is pure Kotlin + Compose with no native bridge. A future release will integrate the shared OmniTAK Rust core via JNI. Its source is being prepared for separate open-source release as **OmniTAK-Core**.
 
 ### Plugins
 
 OmniTAK ships a compile-time plugin SDK (`:plugins:plugin-sdk`) and a reference
 plugin (`:plugins:example-adsb`, the ADS-B aircraft overlay). Plugins are
-statically-linked Gradle modules — no dynamic/remote code, so the app stays
+statically-linked Gradle modules, no dynamic/remote code, so the app stays
 Play-Store compliant. See **[docs/PLUGIN_AUTHORING.md](docs/PLUGIN_AUTHORING.md)**
 for the contract, the host seams (map overlay / radial / CoT / settings), and a
 step-by-step "add a plugin" guide. Plugin authoring mirrors the iOS SDK so a
@@ -153,11 +153,11 @@ Apache License 2.0. See [LICENSE](LICENSE).
 
 OmniTAK-Android uses the following open-source components:
 
-- [MapLibre Native Android](https://github.com/maplibre/maplibre-native) — BSD 2-Clause
-- [AndroidX](https://developer.android.com/jetpack/androidx) — Apache 2.0
-- [kotlinx.serialization](https://github.com/Kotlin/kotlinx.serialization) — Apache 2.0
-- [Jetpack Compose](https://developer.android.com/jetpack/compose) — Apache 2.0
-- [Unishox2](https://github.com/siara-cc/Unishox2) (siara-cc) — Apache 2.0 — pure-Kotlin port for Meshtastic TAKPacket string compression
+- [MapLibre Native Android](https://github.com/maplibre/maplibre-native): BSD 2-Clause
+- [AndroidX](https://developer.android.com/jetpack/androidx): Apache 2.0
+- [kotlinx.serialization](https://github.com/Kotlin/kotlinx.serialization): Apache 2.0
+- [Jetpack Compose](https://developer.android.com/jetpack/compose): Apache 2.0
+- [Unishox2](https://github.com/siara-cc/Unishox2) (siara-cc): Apache 2.0, pure-Kotlin port for Meshtastic TAKPacket string compression
 
 ## Acknowledgments
 
