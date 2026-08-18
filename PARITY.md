@@ -15,114 +15,114 @@ These are the architectural calls made up front. Don't reopen them in PRs withou
 
 ## Open parity gaps
 
-Tracked as a single checklist; tick off when both platforms match. Each item should land as **paired commits** — one PR per repo, referencing the same gap ID.
+Tracked as a single checklist; tick off when both platforms match. Each item should land as **paired commits**: one PR per repo, referencing the same gap ID.
 
-### P1 — primary navigation
-- [x] **GAP-001** iOS: replace hamburger drawer with bottom tab bar (Map / Chat / Servers / Mesh / Settings) — done in `RootTabView.swift`
-- [x] **GAP-002** Android: bottom tab bar already in place — keep it
+### P1: primary navigation
+- [x] **GAP-001** iOS: replace hamburger drawer with bottom tab bar (Map / Chat / Servers / Mesh / Settings): done in `RootTabView.swift`
+- [x] **GAP-002** Android: bottom tab bar already in place: keep it
 - [x] **GAP-003** Both: identical tab order, labels, icons (SF Symbols ↔ Material icons mapped 1:1)
-- [x] **GAP-004** Android: replace flat NavigationBar with floating Liquid Glass capsule matching iOS 26 aesthetic — `LiquidGlassNavBar.kt`. Per-tab brand colors, tinted halo on selection, drop shadow, translucent surface.
+- [x] **GAP-004** Android: replace flat NavigationBar with floating Liquid Glass capsule matching iOS 26 aesthetic: `LiquidGlassNavBar.kt`. Per-tab brand colors, tinted halo on selection, drop shadow, translucent surface.
 
-### P2 — map basemap
+### P2: map basemap
 - [x] **GAP-010 (interim)** iOS: default switched from `.satellite` to `.standard` (street map with labels)
-- [x] **GAP-010-android-dark** Android basemap upgraded to CartoDB Dark Matter — pure tactical look, both clients now dark by default
+- [x] **GAP-010-android-dark** Android basemap upgraded to CartoDB Dark Matter: pure tactical look, both clients now dark by default
 - [ ] **GAP-010 (final)** iOS: optional swap MKMapView → MLNMapView to render the same MapLibre style natively. Lower priority now that both look tactical.
 - [ ] **GAP-011** Both: provide identical built-in basemap picker (OSM, OpenTopo, Satellite, Dark)
 - [ ] **GAP-012** Both: persist last-selected basemap
 
-### P3 — status bar
+### P3: status bar
 - [x] **GAP-020** Canonical metric set locked: `dot · server-name · ↓ · ↑ · ±accuracy · time · ☰`
 - [x] **GAP-021** iOS adopted text `↓` / `↑` arrows (cyan / orange), matching Android ATAKStatusBar
 - [x] **GAP-022** iOS time formatter switched to 24h `HH:mm`
 - [x] **GAP-023** Android `±Nm` accuracy badge wired through ATAKStatusBar (stubbed value pending GAP-030b)
 
-### P4 — self-position display
-- [x] **GAP-030** PPLI card visible on both — iOS already had it; Android added `SelfPositionCard.kt`
+### P4: self-position display
+- [x] **GAP-030** PPLI card visible on both: iOS already had it; Android added `SelfPositionCard.kt`
 - [x] **GAP-030c** Hide-from-Layers toggle on both. Long-press → Radial → Layers → Callsign Card switch. Mirrors operator complaints that the panel was covering map data.
 - [ ] **GAP-030b** Wire real telemetry on Android: FusedLocationProviderClient flow + UserPrefsStore callsign (currently stubbed)
 - [ ] **GAP-031** Card position: iOS floats at user location, Android docks bottom-right above bottom nav. Pick one canonical position and align.
-- [x] **GAP-032** Android: replaced MapLibre default blue pulse with tactical-accent ATAK bullseye drawable + bearing chevron — `ic_self_marker.xml` / `ic_self_marker_bearing.xml`. iOS still uses MKMapView default blue dot; matching iOS to this style is filed as GAP-032b.
-- [x] **GAP-032b** iOS: primary MapViewController delegate now returns a configured MKAnnotationView with `SelfPositionMarkerImage.bullseye` for MKUserLocation. Same hex / proportions as Android `ic_self_marker.xml`. Other map delegates (Map3D, RadialMenuMapOverlay, MeasurementService) still default — adopt later.
+- [x] **GAP-032** Android: replaced MapLibre default blue pulse with tactical-accent ATAK bullseye drawable + bearing chevron: `ic_self_marker.xml` / `ic_self_marker_bearing.xml`. iOS still uses MKMapView default blue dot; matching iOS to this style is filed as GAP-032b.
+- [x] **GAP-032b** iOS: primary MapViewController delegate now returns a configured MKAnnotationView with `SelfPositionMarkerImage.bullseye` for MKUserLocation. Same hex / proportions as Android `ic_self_marker.xml`. Other map delegates (Map3D, RadialMenuMapOverlay, MeasurementService) still default: adopt later.
 
-### P5 — map controls
+### P5: map controls
 - [ ] **GAP-040** Both: same overlay buttons in same positions
-- [ ] **GAP-041** Both: scale bar visible by default. iOS already has one; Android needs camera-change listener + meters/pixel calc — deferred.
+- [ ] **GAP-041** Both: scale bar visible by default. iOS already has one; Android needs camera-change listener + meters/pixel calc: deferred.
 - [x] **GAP-042** Android: stacked zoom +/− FABs added at BottomStart, paired with locator. `MapControlFab` helper. TacticalMap accepts `zoomInTrigger` / `zoomOutTrigger` Int counters.
 - [ ] **GAP-043** Both: locator FAB returns to user position
 
-### P6 — long-press radial menu
+### P6: long-press radial menu
 - [x] **GAP-050** iOS: RadialMenuView already implemented
 - [x] **GAP-051** Android: RadialMenu.kt already implemented
 - [ ] **GAP-052** Both: same set of radial actions, same icons, same color tokens
 
-### P7 — design tokens
-- [x] **GAP-060** Shared design-tokens spec lives at [DESIGN_TOKENS.md](DESIGN_TOKENS.md) — color palette (surface / brand / affiliation / status / nav-tab tints / text), typography scale, spacing scale, shape radii, elevation tiers. Identical file in both repos.
+### P7: design tokens
+- [x] **GAP-060** Shared design-tokens spec lives at [DESIGN_TOKENS.md](DESIGN_TOKENS.md): color palette (surface / brand / affiliation / status / nav-tab tints / text), typography scale, spacing scale, shape radii, elevation tiers. Identical file in both repos.
 - [ ] **GAP-061** iOS: extract to `Color+Tactical.swift` referencing DESIGN_TOKENS.md hexes
 - [ ] **GAP-062** Android: expand `ui/theme/Color.kt` to cover every DESIGN_TOKENS token
 - [ ] **GAP-063** Typography scale extracted into shared types referenced by both
 
-### P8 — onboarding
-- [ ] **GAP-070** iOS has FirstTimeOnboarding flow — Android has none, decide if we add it
+### P8: onboarding
+- [ ] **GAP-070** iOS has FirstTimeOnboarding flow: Android has none, decide if we add it
 - [ ] **GAP-071** If yes, identical copy and visuals
 
-### P9 — feature gaps (Android-side)
+### P9: feature gaps (Android-side)
 Features iOS has that Android doesn't yet. Triage which need parity vs which can wait.
 
-- [ ] **GAP-080** Data Package import (.zip) — iOS has, Android missing
-- [x] **GAP-081** CSR enrollment (port 8446) — Quick Connect ships in 0.9.0 (vc52)
-- [ ] **GAP-082** Video feeds (HLS / RTSP / SRT) — iOS has, Android missing
-- [ ] **GAP-083** Photo attachments with EXIF — iOS has, Android missing
-- [ ] **GAP-084** Plugin system — iOS has, Android missing
-- [ ] **GAP-085** ADS-B traffic display — iOS has, Android has scaffolding (`AdsbService.kt`)
+- [ ] **GAP-080** Data Package import (.zip): iOS has, Android missing
+- [x] **GAP-081** CSR enrollment (port 8446): Quick Connect ships in 0.9.0 (vc52)
+- [ ] **GAP-082** Video feeds (HLS / RTSP / SRT): iOS has, Android missing
+- [ ] **GAP-083** Photo attachments with EXIF: iOS has, Android missing
+- [ ] **GAP-084** Plugin system: iOS has, Android missing
+- [ ] **GAP-085** ADS-B traffic display: iOS has, Android has scaffolding (`AdsbService.kt`)
 
-### P10 — feature gaps (iOS-side)
+### P10: feature gaps (iOS-side)
 Features Android has that iOS may benefit from. Same triage.
 
-- [ ] **GAP-090** None known yet — to be filled in as discovered
+- [ ] **GAP-090** None known yet: to be filled in as discovered
 
-### P11 — Android closed-test feedback (P-E, May 2026)
-Real practitioner feedback from Android closed test. Some are bugs to fix, some are features to add. iOS may have the same issues — audit during port.
+### P11: Android closed-test feedback (P-E, May 2026)
+Real practitioner feedback from Android closed test. Some are bugs to fix, some are features to add. iOS may have the same issues, audit during port.
 
-- [~] **GAP-100** Callsign on main screen stuck at hardcoded `"OMNI-1"` — `MapScreen.kt` was passing a literal string instead of `userPrefs.callsign`. **Code shipped — awaiting SxS verification on emulator before final tick.**
-- [~] **GAP-101** Map tile picker (Settings) didn't switch the basemap — `TacticalMap` defaulted to CARTO Dark and `MapScreen` never overrode it. Now wires `MapProvider` enum to a per-provider style JSON (OSM standard / OpenTopoMap / Esri World Imagery / CARTO Dark) and re-applies via `DisposableEffect(styleJson)`. Settings copy updated. **Code shipped — awaiting SxS.**
-- [~] **GAP-102** Top-left + top-right hamburger menus on main screen — were wired to empty `Slice 6:` lambdas. Now route via existing `onOpenTab`: server icon → Servers tab; menu icon → Settings tab. **Code shipped — awaiting SxS.**
-- [~] **GAP-103** Settings text fields jumpy — DataStore round-trip on every keystroke. Local `mutableStateOf` draft now insulates the field from re-emission; remember-key re-syncs on external changes. Fixed for Callsign (Team is now a dropdown — see GAP-104). **Code shipped — awaiting SxS.**
-- [~] **GAP-104** Team field replaced with ATAK standard color dropdown — 14 canonical colors with swatches matching CoT spec (White, Yellow, Orange, Magenta, Red, Maroon, Purple, Dark Blue, Blue, Cyan, Teal, Green, Dark Green, Brown). **Code shipped — awaiting SxS. iOS port pending.**
-- [~] **GAP-105** Server auth menu — server icon on the status bar opens Servers tab (GAP-102); Add Server form has username + password; **deep-link import landed** — `atak://`, `omnitak://`, and `https://?host=…` URIs add a server in one tap. Phone QR scanners deep-link into us natively. **Client-cert mTLS landed** — `.p12` picker (Storage Access Framework) + cert password field on the Add Server form; `CertVault` stores PKCS12 bytes under `<filesDir>/tak-certs/`; `TAKConnection.openTlsSocket()` builds a `KeyManager` from the imported cert so `port 8089` mTLS no longer fails with `PEER_DID_NOT_RETURN_A_CERTIFICATE`. Verified against TAK Server 5.7-RELEASE-8 with the `engie-test.p12` cert from `configureInDocker.sh`. Data-package `.zip` handling still deferred. **Code shipped — awaiting SxS.**
-- [~] **GAP-105a** Chat send path was throwing `NetworkOnMainThreadException` on every TAK GeoChat send because `TAKConnection.send()` wrote to the socket on the caller thread, not `Dispatchers.IO` as its docstring claimed. Result: every outbound chat marked `failed` even though the server was connected. `send()` is now `suspend` + `withContext(Dispatchers.IO)`, `ServerManager.sendCoT()` is `suspend`, and `ChatScreen.sendChat()` wraps the TAK call in `scope.launch` to mirror the mesh path. Verified end-to-end against TAK 5.7 — message bubble shows `· sent` and TAK Server holds an active subscription. **Shipped.**
-- [~] **GAP-106** UTM added to the coordinate-format picker. Display still pending GAP-030b (real position telemetry) — same status as MGRS. **Code shipped — awaiting SxS. iOS port pending.**
-- [~] **GAP-107** Custom WMTS basemap — fourth picker option ("Custom") reveals a tile-URL field. Anything XYZ-templated (`https://host/{z}/{x}/{y}.png`) works. Falls back to OSM if blank/invalid. **Code shipped — awaiting SxS.**
-- [~] **GAP-109** Meshtastic device settings UI — `MeshDeviceSettingsScreen.kt` reachable via "Device settings" on the Mesh tab. Covers long/short name, role (CLIENT / CLIENT_MUTE / ROUTER / ROUTER_CLIENT / REPEATER / TRACKER / TAK / etc.), PLI broadcast interval (with 15/30/60/120/300 s quick-pick), and primary channel name + LoRa preset (LONG_FAST / LONG_SLOW / etc.). Backed by `MeshDeviceConfigStore` (DataStore-backed draft). iOS parity pending. References: [meshsat-android](https://github.com/cubeos-app/meshsat-android), [columba](https://github.com/torlando-tech/columba). **Code shipped — awaiting SxS.**
-- [~] **GAP-109a** Push-to-device write path landed. New `AdminMessageSerializer` hand-rolls the four admin-port submessages we need (`set_owner`, `set_config{device.role}`, `set_config{position.position_broadcast_secs}`, `set_channel{channel0.name}`, `set_config{lora.modem_preset}`) and wraps each in a `ToRadio` with portnum 6 / `want_response = true`. `MeshtasticManager.pushDeviceConfig(...)` dispatches them sequentially over the active TCP or BLE transport and reports how many landed. Settings screen now shows a real **"Push to device"** button when a radio is connected; falls back to the prior copy when offline. Field numbers / enum ordinals taken from the canonical Meshtastic firmware `.proto` set; if upstream reshuffles them we follow. **Code shipped — awaiting SxS.**
-- [~] **GAP-110** Several main-screen toggles (Layers panel — callsign card, grid, drawings, aircraft, contacts visibility — and Follow Me) didn't survive a relaunch because they lived in `var ... by remember { mutableStateOf(...) }` instead of DataStore. Six new boolean fields on `UserPrefs`; reads alias from `userPrefs`, writes go through `mutatePref { it.copy(...) }`. **Code shipped — awaiting SxS.**
-- [x] **GAP-111** Dead-route audit — every clickable in the UI tree was checked for empty lambdas / TODO callbacks. Clean after GAP-102 wired the only two offenders. No further changes.
-- [x] **GAP-112** EUDs rendered as plain blue rectangles with no callsign — `CoTParser` didn't extract `<__group name role>`, and `ContactLayer` used the MapLibre Annotation API (`.title()` = tooltip only) instead of feeding the inline-style `contacts-src` GeoJsonSource. Now parses `__group` into `CoTEvent.teamName/role`, `displayColor` resolves team-name → 14-color TAK palette (overriding affiliation), and `ContactLayer` pushes a FeatureCollection with `color` + `callsign` properties so the existing `contacts-circles` + `contacts-labels` style layers render correctly. PR #49 (closes P-E TAK Discord 2026-05-27 report 1). iOS parity pending. **Shipped — verified on emulator + local TAK 5.7.**
-- [x] **GAP-113** Self marker hardcoded blue — `TacticalMap.activateLocation()` registered the LocationComponent bitmap without any team tint. Now reads `UserPrefs.team` and tints the foreground glyph + bearing chevron + pulse + accuracy rings via `TakTeamColor.fromName()` (palette from GAP-112). Settings UI picker tracked separately as #51. PR #53 (closes P-E report 2). iOS parity pending. **Shipped.**
-- [x] **GAP-114** Map view reverted to Spokane on every cold start — `MapCameraStore` held the camera in memory only (never serialized). Now persists `lastTargetLat/Lon/Zoom` via DataStore (UserPrefsStore pattern). `MapScreen` cold-start priority is now `persisted → self-fix → FALLBACK_GLOBAL_VIEW (0°N 0°E zoom 2)`; the Spokane hardcode and a stray Cesium Spokane fly-to are both removed. PR #50 (closes P-E report 3). iOS parity pending. **Shipped — verified on emulator.**
-- [x] **GAP-115** Chat tab didn't surface contacts that hadn't sent a GeoChat — `ChatScreen.ConversationListView` read only `ChatStore.conversations` (created on incoming `<mesg>` parse). Now merges in every contact from `ContactStore` as a "no messages yet" stub; tapping a stub seeds a full `ChatConversation` (with participant UID + callsign) so the send path resolves correctly on first message. De-duped by UID, own UID excluded. PR #48 (closes P-E report 4). iOS audit pending. **Shipped — verified on emulator (Blue-1 / Orange-1/2/4/7 / Red-1 visible in chat list with "No messages yet" before any chat traffic).**
-- [x] **GAP-116** EUDs disappeared after Map→Chat→Map navigation — stale `Marker` refs in the old Annotation-API `ContactLayer.markers` map. Subsumed by GAP-112 architecture overhaul: `ContactStore` is a `StateFlow`, `MapScreen` re-collects with `collectAsState()` on every recompose (so fresh snapshots survive screen lifecycle), `ContactLayer.update()` re-pushes to the new `MapLibreMap`'s `contacts-src` on every style-load. Verified on emulator via logcat — `ContactLayer pushed 12 contacts` continuing through the navigation cycle. No separate PR needed. (closes P-E report 5).
-- [x] **GAP-117** Hot regression in v0.33.0 — markers (both PPLI EUDs and locally-dropped markers from the radial menu) silently failed to paint despite `ContactLayer pushed N contacts to contacts-src` showing in logcat. Root cause: GAP-112 routed `setGeoJson(FeatureCollection.fromJson(json))` through the MapLibre Java overload whose null-guard silently no-ops when `features()` is null (Gson `fromJson` can produce this on otherwise-valid input). The native source ended up with zero features so `contacts-circles` had nothing to paint. Fix: call `setGeoJson(String)` directly — goes straight to `nativeSetGeoJsonString`, bypasses the Java guard. Belt-and-suspenders: also install `ContactSymbolLayer` (bitmap `Style.addImage` + `SymbolLayer`, same path `LocationComponent` uses) alongside the inline `contacts-circles` for drivers where `CircleLayer` paint expressions silently fail on the GL fragment pipeline (Adreno 610, SwiftShader). PR #57 / shipped in v0.34.1. **Shipped — verified end-to-end on emulator (red hostile marker visible at Paris drop coords).**
+- [~] **GAP-100** Callsign on main screen stuck at hardcoded `"OMNI-1"`: `MapScreen.kt` was passing a literal string instead of `userPrefs.callsign`. **Code shipped, awaiting SxS verification on emulator before final tick.**
+- [~] **GAP-101** Map tile picker (Settings) didn't switch the basemap: `TacticalMap` defaulted to CARTO Dark and `MapScreen` never overrode it. Now wires `MapProvider` enum to a per-provider style JSON (OSM standard / OpenTopoMap / Esri World Imagery / CARTO Dark) and re-applies via `DisposableEffect(styleJson)`. Settings copy updated. **Code shipped, awaiting SxS.**
+- [~] **GAP-102** Top-left + top-right hamburger menus on main screen: were wired to empty `Slice 6:` lambdas. Now route via existing `onOpenTab`: server icon → Servers tab; menu icon → Settings tab. **Code shipped, awaiting SxS.**
+- [~] **GAP-103** Settings text fields jumpy: DataStore round-trip on every keystroke. Local `mutableStateOf` draft now insulates the field from re-emission; remember-key re-syncs on external changes. Fixed for Callsign (Team is now a dropdown, see GAP-104). **Code shipped, awaiting SxS.**
+- [~] **GAP-104** Team field replaced with ATAK standard color dropdown: 14 canonical colors with swatches matching CoT spec (White, Yellow, Orange, Magenta, Red, Maroon, Purple, Dark Blue, Blue, Cyan, Teal, Green, Dark Green, Brown). **Code shipped, awaiting SxS. iOS port pending.**
+- [~] **GAP-105** Server auth menu: server icon on the status bar opens Servers tab (GAP-102); Add Server form has username + password; **deep-link import landed**: `atak://`, `omnitak://`, and `https://?host=...` URIs add a server in one tap. Phone QR scanners deep-link into us natively. **Client-cert mTLS landed**: `.p12` picker (Storage Access Framework) + cert password field on the Add Server form; `CertVault` stores PKCS12 bytes under `<filesDir>/tak-certs/`; `TAKConnection.openTlsSocket()` builds a `KeyManager` from the imported cert so `port 8089` mTLS no longer fails with `PEER_DID_NOT_RETURN_A_CERTIFICATE`. Verified against TAK Server 5.7-RELEASE-8 with the `engie-test.p12` cert from `configureInDocker.sh`. Data-package `.zip` handling still deferred. **Code shipped, awaiting SxS.**
+- [~] **GAP-105a** Chat send path was throwing `NetworkOnMainThreadException` on every TAK GeoChat send because `TAKConnection.send()` wrote to the socket on the caller thread, not `Dispatchers.IO` as its docstring claimed. Result: every outbound chat marked `failed` even though the server was connected. `send()` is now `suspend` + `withContext(Dispatchers.IO)`, `ServerManager.sendCoT()` is `suspend`, and `ChatScreen.sendChat()` wraps the TAK call in `scope.launch` to mirror the mesh path. Verified end-to-end against TAK 5.7: message bubble shows `· sent` and TAK Server holds an active subscription. **Shipped.**
+- [~] **GAP-106** UTM added to the coordinate-format picker. Display still pending GAP-030b (real position telemetry): same status as MGRS. **Code shipped, awaiting SxS. iOS port pending.**
+- [~] **GAP-107** Custom WMTS basemap: fourth picker option ("Custom") reveals a tile-URL field. Anything XYZ-templated (`https://host/{z}/{x}/{y}.png`) works. Falls back to OSM if blank/invalid. **Code shipped, awaiting SxS.**
+- [~] **GAP-109** Meshtastic device settings UI: `MeshDeviceSettingsScreen.kt` reachable via "Device settings" on the Mesh tab. Covers long/short name, role (CLIENT / CLIENT_MUTE / ROUTER / ROUTER_CLIENT / REPEATER / TRACKER / TAK / etc.), PLI broadcast interval (with 15/30/60/120/300 s quick-pick), and primary channel name + LoRa preset (LONG_FAST / LONG_SLOW / etc.). Backed by `MeshDeviceConfigStore` (DataStore-backed draft). iOS parity pending. References: [meshsat-android](https://github.com/cubeos-app/meshsat-android), [columba](https://github.com/torlando-tech/columba). **Code shipped, awaiting SxS.**
+- [~] **GAP-109a** Push-to-device write path landed. New `AdminMessageSerializer` hand-rolls the four admin-port submessages we need (`set_owner`, `set_config{device.role}`, `set_config{position.position_broadcast_secs}`, `set_channel{channel0.name}`, `set_config{lora.modem_preset}`) and wraps each in a `ToRadio` with portnum 6 / `want_response = true`. `MeshtasticManager.pushDeviceConfig(...)` dispatches them sequentially over the active TCP or BLE transport and reports how many landed. Settings screen now shows a real **"Push to device"** button when a radio is connected; falls back to the prior copy when offline. Field numbers / enum ordinals taken from the canonical Meshtastic firmware `.proto` set; if upstream reshuffles them we follow. **Code shipped: awaiting SxS.**
+- [~] **GAP-110** Several main-screen toggles (Layers panel: callsign card, grid, drawings, aircraft, contacts visibility, and Follow Me) didn't survive a relaunch because they lived in `var ... by remember { mutableStateOf(...) }` instead of DataStore. Six new boolean fields on `UserPrefs`; reads alias from `userPrefs`, writes go through `mutatePref { it.copy(...) }`. **Code shipped, awaiting SxS.**
+- [x] **GAP-111** Dead-route audit: every clickable in the UI tree was checked for empty lambdas / TODO callbacks. Clean after GAP-102 wired the only two offenders. No further changes.
+- [x] **GAP-112** EUDs rendered as plain blue rectangles with no callsign: `CoTParser` didn't extract `<__group name role>`, and `ContactLayer` used the MapLibre Annotation API (`.title()` = tooltip only) instead of feeding the inline-style `contacts-src` GeoJsonSource. Now parses `__group` into `CoTEvent.teamName/role`, `displayColor` resolves team-name → 14-color TAK palette (overriding affiliation), and `ContactLayer` pushes a FeatureCollection with `color` + `callsign` properties so the existing `contacts-circles` + `contacts-labels` style layers render correctly. PR #49 (closes P-E TAK Discord 2026-05-27 report 1). iOS parity pending. **Shipped, verified on emulator + local TAK 5.7.**
+- [x] **GAP-113** Self marker hardcoded blue: `TacticalMap.activateLocation()` registered the LocationComponent bitmap without any team tint. Now reads `UserPrefs.team` and tints the foreground glyph + bearing chevron + pulse + accuracy rings via `TakTeamColor.fromName()` (palette from GAP-112). Settings UI picker tracked separately as #51. PR #53 (closes P-E report 2). iOS parity pending. **Shipped.**
+- [x] **GAP-114** Map view reverted to Spokane on every cold start: `MapCameraStore` held the camera in memory only (never serialized). Now persists `lastTargetLat/Lon/Zoom` via DataStore (UserPrefsStore pattern). `MapScreen` cold-start priority is now `persisted → self-fix → FALLBACK_GLOBAL_VIEW (0°N 0°E zoom 2)`; the Spokane hardcode and a stray Cesium Spokane fly-to are both removed. PR #50 (closes P-E report 3). iOS parity pending. **Shipped, verified on emulator.**
+- [x] **GAP-115** Chat tab didn't surface contacts that hadn't sent a GeoChat: `ChatScreen.ConversationListView` read only `ChatStore.conversations` (created on incoming `<mesg>` parse). Now merges in every contact from `ContactStore` as a "no messages yet" stub; tapping a stub seeds a full `ChatConversation` (with participant UID + callsign) so the send path resolves correctly on first message. De-duped by UID, own UID excluded. PR #48 (closes P-E report 4). iOS audit pending. **Shipped, verified on emulator (Blue-1 / Orange-1/2/4/7 / Red-1 visible in chat list with "No messages yet" before any chat traffic).**
+- [x] **GAP-116** EUDs disappeared after Map→Chat→Map navigation: stale `Marker` refs in the old Annotation-API `ContactLayer.markers` map. Subsumed by GAP-112 architecture overhaul: `ContactStore` is a `StateFlow`, `MapScreen` re-collects with `collectAsState()` on every recompose (so fresh snapshots survive screen lifecycle), `ContactLayer.update()` re-pushes to the new `MapLibreMap`'s `contacts-src` on every style-load. Verified on emulator via logcat, `ContactLayer pushed 12 contacts` continuing through the navigation cycle. No separate PR needed. (closes P-E report 5).
+- [x] **GAP-117** Hot regression in v0.33.0: markers (both PPLI EUDs and locally-dropped markers from the radial menu) silently failed to paint despite `ContactLayer pushed N contacts to contacts-src` showing in logcat. Root cause: GAP-112 routed `setGeoJson(FeatureCollection.fromJson(json))` through the MapLibre Java overload whose null-guard silently no-ops when `features()` is null (Gson `fromJson` can produce this on otherwise-valid input). The native source ended up with zero features so `contacts-circles` had nothing to paint. Fix: call `setGeoJson(String)` directly, goes straight to `nativeSetGeoJsonString`, bypasses the Java guard. Belt-and-suspenders: also install `ContactSymbolLayer` (bitmap `Style.addImage` + `SymbolLayer`, same path `LocationComponent` uses) alongside the inline `contacts-circles` for drivers where `CircleLayer` paint expressions silently fail on the GL fragment pipeline (Adreno 610, SwiftShader). PR #57 / shipped in v0.34.1. **Shipped, verified end-to-end on emulator (red hostile marker visible at Paris drop coords).**
 
-### P13 — Meshtastic depth (best-in-class client)
-Goal: become the best Meshtastic client on Android — deeper than the official app for tactical use because every feature lands inside the same TAK-shaped UI. Filed in response to "make this the best Meshtastic client" practitioner ask.
+### P13: Meshtastic depth (best-in-class client)
+Goal: become the best Meshtastic client on Android, deeper than the official app for tactical use because every feature lands inside the same TAK-shaped UI. Filed in response to "make this the best Meshtastic client" practitioner ask.
 
-- [~] **GAP-120** Mesh nodes visible on the map — every NodeInfo with a position renders as a contact at the right place; positionless nodes still appear in the node list. **Shipped.**
-- [~] **GAP-121** Tappable node detail sheet — long_name, short_name, position (with explicit "no GPS lock yet" copy), SNR, hop distance, battery, last-heard humanized. ModalBottomSheet, reusable for future map-marker tap. **Shipped.**
+- [~] **GAP-120** Mesh nodes visible on the map: every NodeInfo with a position renders as a contact at the right place; positionless nodes still appear in the node list. **Shipped.**
+- [~] **GAP-121** Tappable node detail sheet: long_name, short_name, position (with explicit "no GPS lock yet" copy), SNR, hop distance, battery, last-heard humanized. ModalBottomSheet, reusable for future map-marker tap. **Shipped.**
 - [~] **GAP-122** Mesh text chat over portnum-1 (TEXT_MESSAGE_APP). Bidirectional: incoming texts surface as ChatMessages bucketed by `MESH-CH<n>` conversation; outgoing routes through `sendMeshChat()` instead of the TAK CoT GeoChat path when the convo id starts with `MESH-CH`. Primary channel seeded up-front so the Chat tab has a target before any traffic. **Shipped.**
-- [~] **GAP-123** Multi-channel awareness — `requestDeviceConfig()` now reads back all 8 Meshtastic channel slots, not just channel 0. Non-disabled slots auto-seed/rename a chat conversation using the operator's actual channel name (eg. "Mesh: Primary" → "Mesh: OmniTAK", or "Mesh: Channel 3" → "Mesh: Local"). Disabled slots stay hidden. `AdminResponse.Channel` now carries the raw role ordinal (0=DISABLED / 1=PRIMARY / 2=SECONDARY) so the consumer can filter without losing data. iOS parity pending. **Shipped.**
-- [~] **GAP-124** Mesh direct messages — every node row + the node-detail sheet now have a "Message" action that jumps into the Chat tab on a `MESH-DM-{nodeIdHex}` conversation. RX path detects directed packets (`packet.to == myNodeNum`) and buckets them as DMs (titled "DM: {senderCallsign}") instead of channel chat; broadcast still bucket by channel. TX path sets `MeshPacket.to` to the recipient's nodenum (parsed from the convo id) instead of the broadcast addr. RX echo of our own outgoing sends is skipped via `packet.from == myNodeNum` so the bubble doesn't double-display. Nav route extended to `chat?convoId={...}` so the Mesh tab can pre-select a conversation. iOS parity pending. **Shipped.**
+- [~] **GAP-123** Multi-channel awareness: `requestDeviceConfig()` now reads back all 8 Meshtastic channel slots, not just channel 0. Non-disabled slots auto-seed/rename a chat conversation using the operator's actual channel name (eg. "Mesh: Primary" → "Mesh: OmniTAK", or "Mesh: Channel 3" → "Mesh: Local"). Disabled slots stay hidden. `AdminResponse.Channel` now carries the raw role ordinal (0=DISABLED / 1=PRIMARY / 2=SECONDARY) so the consumer can filter without losing data. iOS parity pending. **Shipped.**
+- [~] **GAP-124** Mesh direct messages: every node row + the node-detail sheet now have a "Message" action that jumps into the Chat tab on a `MESH-DM-{nodeIdHex}` conversation. RX path detects directed packets (`packet.to == myNodeNum`) and buckets them as DMs (titled "DM: {senderCallsign}") instead of channel chat; broadcast still bucket by channel. TX path sets `MeshPacket.to` to the recipient's nodenum (parsed from the convo id) instead of the broadcast addr. RX echo of our own outgoing sends is skipped via `packet.from == myNodeNum` so the bubble doesn't double-display. Nav route extended to `chat?convoId={...}` so the Mesh tab can pre-select a conversation. iOS parity pending. **Shipped.**
 
-### P12 — Roadmap (bigger asks)
+### P12: Roadmap (bigger asks)
 - [ ] **GAP-108** Server-pushed app config / data package settings. Operator pushes settings (PLI intervals, default basemap, server URL, callsign rules) to clients via OpenTAKserver, config file, or `.zip` data package. Real differentiator vs ATAK / iTAK / TAKaware. Source of complaint: 80-node airsoft event needing centralised PLI intervals.
-- [ ] **GAP-109b** Meshtastic admin-message acks — surface routing/ack frames from the radio in the UI so the operator sees per-message success or "radio rejected this field". Today `pushDeviceConfig` just reports how many writes landed at the wire layer; whether the radio applied them is invisible until protobuf decode of `FromRadio.routing` ships.
+- [ ] **GAP-109b** Meshtastic admin-message acks: surface routing/ack frames from the radio in the UI so the operator sees per-message success or "radio rejected this field". Today `pushDeviceConfig` just reports how many writes landed at the wire layer; whether the radio applied them is invisible until protobuf decode of `FromRadio.routing` ships.
 
 ## How to work a parity gap
 
 1. Pick an unchecked GAP that's not blocked by a higher-priority one
-2. Open an issue in **both** repos titled `parity: GAP-NNN — short description` and cross-link
+2. Open an issue in **both** repos titled `parity: GAP-NNN, short description` and cross-link
 3. Implement on the platform that's behind. If both need work, decide source of truth first
 4. Open paired PRs. Reference the same GAP ID in both PR titles
-5. Both PRs merge together (or close together — within a week)
+5. Both PRs merge together (or close together, within a week)
 6. Tick the box in this file in **both repos**
 7. Update PARITY.md in the other repo to match
 

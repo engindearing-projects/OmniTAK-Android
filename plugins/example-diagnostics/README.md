@@ -1,17 +1,17 @@
-# example-diagnostics — the Diagnostics reference plugin
+# example-diagnostics: the Diagnostics reference plugin
 
 `:plugins:example-diagnostics` is the **second** bundled OmniTAK plugin and the
 Android counterpart of iOS's `DiagnosticsPlugin`. Where `:plugins:example-adsb`
 exercises the map-overlay + settings-row hooks, this one exercises the OTHER two
 host hooks so the entire SDK surface is demonstrated by real bundled plugins:
 
-- `registerRadialAction` — a "Diagnostics" map long-press action that logs and
+- `registerRadialAction`: a "Diagnostics" map long-press action that logs and
   records the tapped coordinate.
-- `registerCoTHandler` — observes every inbound CoT event, counts it, and
+- `registerCoTHandler`: observes every inbound CoT event, counts it, and
   returns **false** (does NOT consume) so the core pipeline is untouched.
 
 It implements [`OmniTAKPlugin`](../plugin-sdk/src/main/kotlin/soy/engindearing/omnitak/plugin/OmniTAKPlugin.kt)
-and depends on **only** `:plugins:plugin-sdk` + Compose — never on `:app`, and
+and depends on **only** `:plugins:plugin-sdk` + Compose, never on `:app`, and
 (unlike ADS-B) not even on MapLibre, since it needs no map engine.
 
 ## Off by default
@@ -20,7 +20,7 @@ This plugin ships **DISABLED by default**, matching iOS's
 `registeredDisabledByDefault`. `OmniTAKApp.loadBundledPlugins()` seeds its
 `plugin_<id>_enabled` flag to `false` on first run (the id is in
 `OmniTAKApp.DISABLED_BY_DEFAULT`), so the Plugins list shows it as a second
-entry that is OFF. It never affects shipping users — it only proves the surface
+entry that is OFF. It never affects shipping users, it only proves the surface
 works and gives plugin authors a second, simpler template.
 
 ## What's inside
@@ -39,7 +39,7 @@ host.registerRadialAction(PluginRadialAction("soy.engindearing.diagnostics.probe
 }
 host.registerCoTHandler { event ->
     state.recordCoTEvent()
-    false   // observe only — never consume
+    false   // observe only, never consume
 }
 host.registerSettingsRow("Diagnostics", Icons.Filled.BugReport)
 ```

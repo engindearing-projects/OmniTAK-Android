@@ -1,4 +1,4 @@
-# Release build — signed AAB for Play Store
+# Release build: signed AAB for Play Store
 
 ## Current build to upload
 
@@ -14,8 +14,8 @@
 | versionCode | versionName | Track | Status |
 |---|---|---|---|
 | 1 | 0.1.0 | Closed (release "2.10.4") | Available to selected testers |
-| 2 | 0.1.0 | Internal (release "0.1.0 — clean-room launch") | Available to internal testers |
-| 2 | 0.1.0 | Closed (release "0.1.0 — clean-room launch") | In review |
+| 2 | 0.1.0 | Internal (release "0.1.0, clean-room launch") | Available to internal testers |
+| 2 | 0.1.0 | Closed (release "0.1.0, clean-room launch") | In review |
 
 **Next versionCode to use: 4** (vc3 is staged but not yet uploaded).
 
@@ -90,4 +90,4 @@ A backup of the keystore should live somewhere off-disk (encrypted cloud drive,
 2. **Production** → **Create new release**
 3. Upload `playstore-assets/OmniTAK-v0.1.0.aab`
 4. Paste release notes from `listing.md` § "Production release notes"
-5. Save → Review → Roll out to production (after listing + content rating + data safety are filled in — see `listing.md` checklist)
+5. Save → Review → Roll out to production (after listing + content rating + data safety are filled in, see `listing.md` checklist)
