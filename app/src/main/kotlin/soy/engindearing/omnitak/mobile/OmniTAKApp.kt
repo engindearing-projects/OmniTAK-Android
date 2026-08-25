@@ -27,6 +27,7 @@ import soy.engindearing.omnitak.mobile.domain.ChatStore
 import soy.engindearing.omnitak.mobile.domain.ContactStore
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
 import soy.engindearing.omnitak.mobile.domain.DataPackageBootstrap
+import soy.engindearing.omnitak.mobile.domain.DittoMeshService
 import soy.engindearing.omnitak.mobile.domain.DrawingStore
 import soy.engindearing.omnitak.mobile.domain.MapCameraStore
 import soy.engindearing.omnitak.mobile.domain.MeshCoTBridge
@@ -79,6 +80,16 @@ class OmniTAKApp : Application() {
         // mesh broadcast toggles) can read prefs.value immediately.
         appScope.launch {
             userPrefsStore.prefs.collect { cachedPrefs.value = it }
+        }
+
+        // Ditto peer mesh — prefs-driven lifecycle. applyPrefs is idempotent
+        // (start on enable, stop on disable, rebuild on channel change), so
+        // collecting every prefs write is fine. No-ops when the build carries
+        // no Ditto credentials.
+        appScope.launch {
+            userPrefsStore.prefs.collect { p ->
+                dittoMesh.applyPrefs(p.dittoMeshEnabled, p.dittoMeshChannel, p.dittoGatewayEnabled)
+            }
         }
 
         // #119 — Restore locally-dropped markers from the previous session,
@@ -205,10 +216,15 @@ class OmniTAKApp : Application() {
                 serverManager.connectionState,
                 meshtastic.activeConnectionState,
                 meshcore.activeConnectionState,
-            ) { serverState, meshState, meshCoreState ->
+                // Ditto counts as connectivity: two phones alone in a field
+                // must still exchange PPLI, and the broadcaster's sendCoT
+                // path fans onto the peer mesh even with zero servers up.
+                dittoMesh.state,
+            ) { serverState, meshState, meshCoreState, dittoState ->
                 serverState is ConnectionState.Connected ||
                     meshState is ConnectionState.Connected ||
-                    meshCoreState is ConnectionState.Connected
+                    meshCoreState is ConnectionState.Connected ||
+                    dittoState is DittoMeshService.State.Syncing
             }
                 .distinctUntilChanged()
                 .collect { eitherConnected ->
@@ -671,7 +687,76 @@ class OmniTAKApp : Application() {
             // gateway can push the server picture down to the LoRa mesh. The
             // event is already tagged TAK_SERVER by the inbound path above.
             inboundRelay = { event -> relayInbound(event) },
+            // Ditto peer mesh — every app-originated broadcast also lands on
+            // the peer mesh, even with zero servers connected. Deferred lambda
+            // so the two lazy singletons can reference each other.
+            dittoPublish = { xml -> dittoMesh.publish(xml) },
         )
+    }
+
+    /** Ditto peer-to-peer mesh — full-fidelity CoT sync with nearby OmniTAK
+     *  devices over BLE / Wi-Fi Aware / LAN, no TAK server required. Runs
+     *  ALONGSIDE the LoRa mesh (Meshtastic/MeshCore), not behind
+     *  [activeMeshManager]: different radio, different bandwidth class, and
+     *  an operator may legitimately run both at once. Lifecycle is prefs-
+     *  driven from [onCreate]; inert without build credentials. */
+    val dittoMesh: DittoMeshService by lazy {
+        DittoMeshService(
+            context = this,
+            scope = appScope,
+            // isRelay — gateway-forwarded traffic must not echo back onto the
+            // mesh (see ServerManager.sendCoT).
+            sendToServer = { xml -> serverManager.sendCoT(xml, isRelay = true) },
+            serverConnected = { serverManager.connectionState.value is ConnectionState.Connected },
+        ).also { svc ->
+            // Same inbound contract as the Meshtastic sink: self-echo drop,
+            // b-t-f → chat, everything else → contact store tagged with its
+            // transport. NO relayInbound here — the Ditto gateway relays
+            // inside the service (original XML, not a re-encode), and feeding
+            // the #179 LoRa relay too would double-forward under one toggle.
+            svc.cotSink = { event -> dittoInbound(event) }
+        }
+    }
+
+    /** Inbound sink for Ditto-mesh CoT. Mirrors the Meshtastic cotSink wiring
+     *  (self-drop → classify → ingest) with the #180 source tag "Ditto". */
+    private fun dittoInbound(event: soy.engindearing.omnitak.mobile.data.CoTEvent) {
+        val selfUid = cachedPrefs.value.selfUid
+        val selfCallsign = cachedPrefs.value.callsign
+        val isSelf = (selfUid.isNotBlank() && event.uid == selfUid) ||
+            (selfCallsign.isNotBlank() && event.callsign == selfCallsign)
+        if (isSelf) return
+        when (MeshCoTRouter.classify(event)) {
+            MeshCoTRouter.Destination.CHAT -> {
+                // Ditto carries the full GeoChat XML (rawXml always set), so
+                // the full parse is the primary path; the field fallback only
+                // covers malformed detail blocks.
+                val chatMsg = event.rawXml?.let {
+                    runCatching {
+                        soy.engindearing.omnitak.mobile.data.ChatXml.parse(it, selfUid.ifBlank { null })
+                    }.getOrNull()
+                } ?: soy.engindearing.omnitak.mobile.data.ChatMessage(
+                    id = event.uid,
+                    conversationId = soy.engindearing.omnitak.mobile.data.ChatRoom.ALL_USERS,
+                    senderUid = event.uid,
+                    senderCallsign = event.callsign ?: event.uid,
+                    text = event.remarks.ifBlank { "[mesh chat]" },
+                    timeIso = event.timeIso
+                        ?: soy.engindearing.omnitak.mobile.data.CotXml.isoMillis(),
+                    status = soy.engindearing.omnitak.mobile.data.ChatStatus.RECEIVED,
+                    isFromSelf = false,
+                )
+                chatStore.ingest(chatMsg)
+                meshChatNotifier.notify(chatMsg)
+            }
+            MeshCoTRouter.Destination.CONTACT -> {
+                contactStore.ingest(
+                    event.copy(
+                        source = soy.engindearing.omnitak.mobile.data.CoTSource.mesh("Ditto"),
+                    ),
+                )
+            }
+        }
     }
 
     /** #179 — the mesh↔server CoT gateway. Bridges inbound CoT both ways when
@@ -680,7 +765,11 @@ class OmniTAKApp : Application() {
      *  per-uid throttling server→mesh. See [MeshServerRelay]. */
     val meshServerRelay: soy.engindearing.omnitak.mobile.domain.MeshServerRelay by lazy {
         soy.engindearing.omnitak.mobile.domain.MeshServerRelay(
-            sendToServer = { xml -> serverManager.sendCoT(xml) },
+            // isRelay — LoRa-mesh-heard traffic pushed up to the servers is
+            // relay traffic; without the flag it would also fan onto the
+            // Ditto peer mesh, and gateway devices would re-broadcast each
+            // other's forwards.
+            sendToServer = { xml -> serverManager.sendCoT(xml, isRelay = true) },
             sendToMesh = { event -> activeMeshManager.sendCoTOverMesh(event) },
             // Prefer the original wire XML (preserves full detail / symbology);
             // fall back to rebuilding the minimal envelope from the parsed fields.

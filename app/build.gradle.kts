@@ -41,6 +41,22 @@ android {
             "CESIUM_ION_TOKEN",
             "\"${localProps.getProperty("CESIUM_ION_TOKEN") ?: ""}\"",
         )
+
+        // Ditto peer-to-peer mesh credentials — same local.properties route as
+        // the Cesium token (public repo, secrets never committed). All empty
+        // by default: with no database ID the mesh stays off entirely and a
+        // clean checkout / CI build is unaffected. Key names mirror iOS
+        // Config.xcconfig. SHARED_KEY + OFFLINE_LICENSE (air-gap shipping
+        // mode) win over the development playground TOKEN when both are set.
+        listOf(
+            "DITTO_DATABASE_ID",
+            "DITTO_URL",
+            "DITTO_TOKEN",
+            "DITTO_SHARED_KEY",
+            "DITTO_OFFLINE_LICENSE",
+        ).forEach { key ->
+            buildConfigField("String", key, "\"${localProps.getProperty(key) ?: ""}\"")
+        }
     }
 
     // Upload keystore lives outside source control. Set the four props in
@@ -156,6 +172,13 @@ dependencies {
 
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+
+    // Ditto peer-to-peer mesh — full-fidelity CoT sync between nearby OmniTAK
+    // devices over BLE / Wi-Fi Aware / LAN with no TAK server (DittoMeshService).
+    // Pinned to the EXACT version iOS pins (scripts/add_ditto_mesh.rb): Ditto
+    // peers must run compatible protocol versions to sync, and the two
+    // platforms have to mesh with each other — they move together, deliberately.
+    implementation("com.ditto:ditto-kotlin:5.0.3")
 
     // EncryptedSharedPreferences for TAK server passwords + .p12 passphrases
     // (Keystore-backed AES256-GCM). The server-list JSON in DataStore keeps

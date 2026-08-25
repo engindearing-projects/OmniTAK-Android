@@ -306,6 +306,11 @@ fun AppNav() {
             composable("mesh_topology") {
                 MeshTopologyScreen(onBack = { nav.popBackStack() })
             }
+            composable("peermesh") {
+                soy.engindearing.omnitak.mobile.ui.screens.DittoMeshScreen(
+                    onBack = { nav.popBackStack() },
+                )
+            }
             composable("mesh/device-settings") {
                 MeshDeviceSettingsScreen(onDone = { nav.popBackStack() })
             }
