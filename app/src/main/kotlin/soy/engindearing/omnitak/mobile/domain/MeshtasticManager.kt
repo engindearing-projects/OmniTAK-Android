@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -86,6 +87,43 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
     private var bytesRx: Long = 0L
     @Volatile private var _myNodeNum: UInt? = null
     val myNodeNum: UInt? get() = _myNodeNum
+
+    /** BLE auto-reconnect — the address [connectBle] was last asked to
+     *  reach. Non-null keeps [ensureReconnectLoopStarted]'s loop retrying
+     *  every [BLE_RECONNECT_INTERVAL_MS] whenever we're not connected; cleared
+     *  by a user-initiated [disconnect] so tapping "Disconnect" doesn't
+     *  immediately reconnect. Survives an involuntary drop (radio
+     *  power-off / out of range) so it resumes once back in range. */
+    private val _reconnectTargetAddress = MutableStateFlow<String?>(null)
+    private var reconnectTargetAddress: String?
+        get() = _reconnectTargetAddress.value
+        set(value) { _reconnectTargetAddress.value = value }
+    private var reconnectLoopStarted = false
+
+    /** True whenever the BLE auto-reconnect loop has a radio it's trying
+     *  to reach. OmniTAKApp keeps the foreground service alive on this
+     *  signal alone — not just "Connected" — so Android's Doze mode
+     *  doesn't stall the reconnect loop's delay/BLE calls once the
+     *  screen turns off between retries. */
+    val autoReconnectPending: StateFlow<Boolean> =
+        _reconnectTargetAddress.map { it != null }
+            .stateIn(scope, SharingStarted.Eagerly, false)
+
+    private fun ensureReconnectLoopStarted() {
+        if (reconnectLoopStarted) return
+        reconnectLoopStarted = true
+        scope.launch {
+            while (true) {
+                delay(BLE_RECONNECT_INTERVAL_MS)
+                val target = reconnectTargetAddress ?: continue
+                if (_activeTransport.value != MeshConnectionType.BLUETOOTH) continue
+                val current = activeConnectionState.value
+                if (current is ConnectionState.Connected || current is ConnectionState.Connecting) continue
+                Log.i(TAG, "BLE auto-reconnect: retrying $target")
+                connectBle(target)
+            }
+        }
+    }
 
     /** #171 — last wall-clock ms a given marker uid was sent over mesh, for
      *  the per-uid send debounce. Guarded by its own monitor; the map can
@@ -178,6 +216,12 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
         if (_activeTransport.value == MeshConnectionType.TCP) disconnect()
         frameCollector?.cancel()
         _activeTransport.value = MeshConnectionType.BLUETOOTH
+        // Remember this address so the auto-reconnect loop keeps retrying
+        // it if the link drops (radio power-off / out of range) — covers
+        // both "was connected then lost" and "this very attempt failed
+        // because the radio isn't in range yet".
+        reconnectTargetAddress = deviceAddress
+        ensureReconnectLoopStarted()
         frameCollector = scope.launch {
             client.frames.collect { frame -> dispatchFrame(frame) }
         }
@@ -241,6 +285,11 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
         when (_activeTransport.value) {
             MeshConnectionType.TCP -> tcpClient.disconnect()
             MeshConnectionType.BLUETOOTH -> {
+                // User-initiated — stop the auto-reconnect loop from
+                // immediately reclaiming the link. An involuntary drop
+                // (radio power-off / out of range) never calls this, so
+                // reconnectTargetAddress stays set for that case.
+                reconnectTargetAddress = null
                 // Fire-and-forget — the BLE client's own scope handles
                 // the suspending teardown, and the connection observer
                 // flips state to Disconnected.
@@ -698,6 +747,9 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
 
     companion object {
         private const val TAG = "MeshtasticManager"
+        /** How often the BLE auto-reconnect loop checks whether the last
+         *  radio is back in range. */
+        private const val BLE_RECONNECT_INTERVAL_MS: Long = 20_000
         private const val PORTNUM_TEXT_MESSAGE_APP = 1
         private const val PORTNUM_POSITION_APP = 3
         private const val PORTNUM_ADMIN_APP = 6

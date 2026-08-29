@@ -126,6 +126,14 @@ class OmniTAKApp : Application() {
                     server != null && meshUp -> "${server.serverName} + mesh"
                     server != null -> server.serverName
                     meshUp -> "mesh radio"
+                    // Field feedback (2026-08) — link dropped (radio power-off /
+                    // out of range) but the BLE auto-reconnect loop is still
+                    // trying every 20s. Keeping a label here is what keeps the
+                    // FGS alive below, which in turn is what keeps that retry
+                    // loop running once the screen locks — without it Doze
+                    // stalls the delay()/BLE calls and reconnect silently stops
+                    // working the moment the app leaves the foreground.
+                    meshtastic.autoReconnectPending.value -> "reconnecting to mesh radio…"
                     else -> null
                 }
             }
@@ -133,10 +141,15 @@ class OmniTAKApp : Application() {
                 serverManager.connectionState,
                 meshtastic.activeConnectionState,
                 meshcore.activeConnectionState,
-            ) { server, mesh, meshCore ->
+                meshtastic.autoReconnectPending,
+            ) { server, mesh, meshCore, meshReconnectPending ->
                 val states = listOf(server, mesh, meshCore)
                 when {
                     states.any { it is ConnectionState.Connected } -> FgsWant.START
+                    // A BLE radio dropped but we're still retrying it —
+                    // start (or keep) the FGS so the retry loop survives
+                    // Doze instead of stalling until the app is foregrounded.
+                    meshReconnectPending -> FgsWant.START
                     // Connecting / Failed hold the service as before — a
                     // transient reconnect must not bounce the FGS.
                     states.all { it is ConnectionState.Disconnected } -> FgsWant.STOP
