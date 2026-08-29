@@ -9,7 +9,7 @@ plugins {
 
 android {
     namespace = "soy.engindearing.omnitak.mobile"
-    compileSdk = 35
+    compileSdk = 36
     // Pin to the locally-installed NDK so AGP can find llvm-objcopy when it
     // needs to (re)strip overlaid prebuilt libs from app/src/main/jniLibs/
     // and extract their debug info into BUNDLE-METADATA. Without this AGP
@@ -20,9 +20,9 @@ android {
     defaultConfig {
         applicationId = "soy.engindearing.omnitak.mobile"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 105
-        versionName = "0.42.0"
+        targetSdk = 36
+        versionCode = 106
+        versionName = "0.42.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
