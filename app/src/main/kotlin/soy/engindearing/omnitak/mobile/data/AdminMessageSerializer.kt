@@ -183,9 +183,11 @@ object AdminMessageSerializer {
      */
     fun buildSetPositionBroadcastSecs(myNodeNum: UInt, secs: Int): ByteArray {
         val safe = secs.coerceIn(0, 24 * 60 * 60).toULong()
-        // PositionConfig.position_broadcast_secs = field 4, varint.
+        // PositionConfig.position_broadcast_secs = field 1, varint. Field 4 is
+        // the deprecated `gps_enabled` bool — writing seconds there sets a
+        // boolean and leaves the cadence untouched.
         val positionConfig = ByteArrayOutputStream().apply {
-            MeshWire.appendVarintField(this, field = 4, value = safe)
+            MeshWire.appendVarintField(this, field = 1, value = safe)
         }.toByteArray()
         // Config.position = field 2, wire type 2.
         val config = ByteArrayOutputStream().apply {

@@ -129,7 +129,9 @@ object AdminMessageParser {
         return AdminResponse.DeviceConfig(role = role)
     }
 
-    /** PositionConfig.position_broadcast_secs = field 4 (varint). */
+    /** PositionConfig.position_broadcast_secs = field 1 (varint). Field 4 is
+     *  the deprecated `gps_enabled` bool — reading it back yielded 0 or 1
+     *  where the UI expected seconds. */
     private fun parsePositionConfig(bytes: ByteArray): AdminResponse.PositionConfig {
         var idx = 0
         var secs = 0
@@ -138,7 +140,7 @@ object AdminMessageParser {
             val field = (tag shr 3).toInt()
             val wire = (tag and 0x7UL).toInt()
             idx = afterTag
-            if (field == 4 && wire == 0) {
+            if (field == 1 && wire == 0) {
                 val (v, after) = readVarint(bytes, idx) ?: break
                 secs = v.toInt()
                 idx = after
