@@ -29,6 +29,12 @@ import java.io.ByteArrayOutputStream
  */
 object AdminMessageSerializer {
 
+    /** nanopb `User.long_name` is char[40] — 39 bytes plus the NUL. */
+    private const val MAX_LONG_NAME_BYTES = 39
+
+    /** nanopb `User.short_name` is char[5] — 4 bytes plus the NUL. */
+    private const val MAX_SHORT_NAME_BYTES = 4
+
     /** Meshtastic portnum for AdminMessage payloads on the local radio. */
     private const val PORTNUM_ADMIN_APP: ULong = 6UL
 
@@ -368,10 +374,10 @@ object AdminMessageSerializer {
         val out = ByteArrayOutputStream()
         // 1: id (string) — only when the caller supplied one.
         appendString(out, field = 1, value = id)
-        // 2: long_name (string, max ~40 chars)
-        appendString(out, field = 2, value = longName.take(39))
-        // 3: short_name (string, max 4 chars per firmware constraint)
-        appendString(out, field = 3, value = shortName.take(4))
+        // 2: long_name — nanopb char[40], so 39 usable bytes.
+        appendString(out, field = 2, value = clampUtf8(longName, MAX_LONG_NAME_BYTES))
+        // 3: short_name — nanopb char[5], so 4 usable bytes.
+        appendString(out, field = 3, value = clampUtf8(shortName, MAX_SHORT_NAME_BYTES))
         // 6: is_licensed (bool) — omit the proto3 default (false).
         if (isLicensed) MeshWire.appendVarintField(out, field = 6, value = 1UL)
         return out.toByteArray()
@@ -437,6 +443,38 @@ object AdminMessageSerializer {
     // region Wire helpers — see [MeshWire] ------------------------------
 
     /** proto3 skip-default semantics: omit empty strings entirely. */
+    /**
+     * Clamp [value] to [maxBytes] of UTF-8, cutting only on a character
+     * boundary.
+     *
+     * The firmware stores these names in fixed nanopb buffers, so the limit is
+     * bytes — `String.take(n)` counts UTF-16 units, and 39 Chinese characters
+     * is 117 bytes. Over-long or half-a-character input makes nanopb reject the
+     * field and drop the entire AdminMessage, so the rename silently does
+     * nothing rather than failing loudly.
+     *
+     * Cuts on code points, which keeps surrogate pairs intact. A ZWJ emoji
+     * sequence can still be split into its parts — that stays valid UTF-8 and
+     * renders as separate glyphs, which beats dropping the write.
+     */
+    internal fun clampUtf8(value: String, maxBytes: Int): String {
+        if (value.toByteArray(Charsets.UTF_8).size <= maxBytes) return value
+        val out = StringBuilder()
+        var used = 0
+        var i = 0
+        while (i < value.length) {
+            val codePoint = value.codePointAt(i)
+            val width = Character.charCount(codePoint)
+            val piece = value.substring(i, i + width)
+            val size = piece.toByteArray(Charsets.UTF_8).size
+            if (used + size > maxBytes) break
+            out.append(piece)
+            used += size
+            i += width
+        }
+        return out.toString()
+    }
+
     private fun appendString(out: ByteArrayOutputStream, field: Int, value: String) {
         if (value.isEmpty()) return
         MeshWire.appendString(out, field = field, value = value)
