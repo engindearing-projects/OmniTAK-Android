@@ -4,7 +4,7 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
-    kotlin("plugin.serialization") version "2.0.21"
+    kotlin("plugin.serialization") version "2.2.10"
 }
 
 android {
@@ -162,8 +162,11 @@ dependencies {
     // only non-secret fields; see SecureCredentialStore.
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
-    // MapLibre Android (open-source fork of Mapbox) — parallel to iOS
-    implementation("org.maplibre.gl:android-sdk:11.8.0")
+    // MapLibre Android (open-source fork of Mapbox) — parallel to iOS.
+    // 13.x switched the renderer from OpenGL ES to Vulkan, which fixes the
+    // GeoJSON SymbolLayer/CircleLayer GPU paint failure on Adreno/Mali
+    // (#77 / #80 / #124). Requires Kotlin 2.2.x (see root build.gradle.kts).
+    implementation("org.maplibre.gl:android-sdk:13.3.0")
 
     // OkHttp — used ONLY to install a custom HTTP client into MapLibre via
     // HttpRequestUtil.setOkHttpClient(), so we can send an identifying
