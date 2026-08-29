@@ -163,7 +163,6 @@
       for(const uid of Array.from(_state.entities.keys()))if(!seen.has(uid))window.OmniBridge.removeEntity(uid);
     },
     removeEntity(uid){const v=_state.viewer;if(!v)return;const e=_state.entities.get(uid);if(e){v.entities.remove(e);_state.entities.delete(uid);}},
-    removeAll(){const v=_state.viewer;if(!v)return;v.entities.removeAll();_state.entities.clear();_state.drawings.clear();},
     flyTo(arg){const e=_parse(arg);if(!e)return;const v=_state.viewer;if(!v)return;
       v.camera.flyTo({destination:Cesium.Cartesian3.fromDegrees(e.lon,e.lat,(typeof e.range==='number')?e.range:5000),
         orientation:{heading:Cesium.Math.toRadians(e.heading||0),pitch:Cesium.Math.toRadians(typeof e.pitch==='number'?e.pitch:-30),roll:0},duration:1.2});
@@ -236,7 +235,6 @@
           if(typeof _state._priorPct==='number')v.camera.percentageChanged=_state._priorPct;}
       }
     },
-    ping(){return _state.ready?'pong':'loading'},
     upsertDrawing(arg){const d=_parse(arg);if(!d||!d.uid||!d.kind||!Array.isArray(d.coords)||d.coords.length===0)return;const v=_state.viewer;if(!v)return;
       const color=_drawColor(d.color,0.85),fillC=_drawColor(d.color,0.25),width=typeof d.width==='number'?d.width:3;
       const prior=_state.drawings.get(d.uid);if(prior)v.entities.remove(prior);

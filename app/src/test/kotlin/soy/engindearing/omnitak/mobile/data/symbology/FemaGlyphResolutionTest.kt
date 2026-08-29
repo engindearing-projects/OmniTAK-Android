@@ -21,7 +21,7 @@ import soy.engindearing.omnitak.mobile.data.FemaIconCatalog
  *     key (NOT a shared "takicon-fema-…" from the category alone), and
  *     no two kinds share the same key.
  *  4. [TakIconRegistry.handles] is true for FEMA iconset paths so the
- *     ContactSymbolLayer routes them through the TAK-suite path rather
+ *     marker renderer routes them through the TAK-suite path rather
  *     than falling through to MIL-STD art.
  *  5. Non-FEMA paths are rejected cleanly.
  *

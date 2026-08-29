@@ -554,7 +554,7 @@ private fun AffiliationChip(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
-    val color = Color(ContactLayer.previewColor(affiliation))
+    val color = Color(affiliationPreviewColor(affiliation))
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(20.dp))
@@ -576,4 +576,14 @@ private fun AffiliationChip(
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
         )
     }
+}
+
+/** Stable affiliation preview color for the chip row — mirrors the
+ *  affiliation palette in CoTEvent.displayColor (team-color overrides
+ *  don't apply to a not-yet-placed marker). */
+private fun affiliationPreviewColor(affiliation: CoTAffiliation): Int = when (affiliation) {
+    CoTAffiliation.FRIEND  -> 0xFF4ADE80.toInt()
+    CoTAffiliation.HOSTILE -> 0xFFF44336.toInt()
+    CoTAffiliation.NEUTRAL -> 0xFFFFC107.toInt()
+    else                   -> 0xFFB39DDB.toInt()
 }

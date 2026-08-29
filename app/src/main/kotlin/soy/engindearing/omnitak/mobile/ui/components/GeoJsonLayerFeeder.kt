@@ -11,8 +11,8 @@ import org.maplibre.android.style.sources.GeoJsonSource
  * GeoJsonSource. Six layer feeders used to hand-build the envelope and
  * call divergent setGeoJson overloads — four of them on the
  * `FeatureCollection.fromJson` overload whose Java-layer null-features
- * guard can silently no-op (the hazard ContactLayer documented but only
- * two copies had applied).
+ * guard can silently no-op (a hazard the removed contacts layer documented
+ * but only two copies had applied).
  *
  * Always uses the String overload: it goes straight to
  * nativeSetGeoJsonString, bypassing the FeatureCollection guard.

@@ -1,6 +1,5 @@
 package soy.engindearing.omnitak.mobile.domain
 
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.ChatMessage
@@ -49,17 +48,6 @@ interface MeshFrameworkManager {
      *  transport. Returns true on wire-layer dispatch. */
     suspend fun sendCoTOverMesh(event: CoTEvent, channelIndex: UInt = 0u): Boolean
 
-    /** Start a BLE scan, returning a flow of framework-neutral hits.
-     *  Null when BLE is unavailable (e.g. no Context / radio off). */
-    suspend fun startMeshScan(timeoutMs: Long = 10_000): Flow<MeshScanResult>?
-
     /** Stop an in-flight BLE scan. */
     fun stopMeshScan()
 }
-
-/** Framework-neutral BLE discovery result for the mesh framework picker. */
-data class MeshScanResult(
-    val name: String?,
-    val address: String,
-    val rssi: Int,
-)

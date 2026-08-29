@@ -292,11 +292,6 @@ class UserPrefsStore(private val context: Context) {
         update { it.copy(broadcastOverMesh = value) }
     }
 
-    /** Persist the mesh PPLI broadcast interval (coerced to 30..60 seconds). */
-    suspend fun setMeshBroadcastIntervalSecs(value: Int) {
-        update { it.copy(meshBroadcastIntervalSecs = value.coerceIn(30, 60)) }
-    }
-
     /** Persist the operator's chosen mesh framework (Meshtastic | MeshCore). */
     suspend fun setSelectedMeshFramework(value: MeshFramework) {
         update { it.copy(selectedMeshFramework = value) }

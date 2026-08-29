@@ -20,8 +20,8 @@ import kotlin.math.sin
  *
  * #80: drawings were invisible on the 2D map on Adreno/Mali/the emulator — the
  * same GeoJsonSource GL paint bug that hid contacts (#77) and KML lines/polygons
- * (#136). DrawingLayer pushes the FeatureCollection into the source fine, but the
- * driver won't rasterize the Fill/Line layers; toggling the 3D globe (a different
+ * (#136). The old DrawingLayer (removed) pushed the FeatureCollection into the
+ * source fine, but the driver won't rasterize the Fill/Line layers; toggling the 3D globe (a different
  * renderer) is what made them "reappear". The Annotation API uses the native
  * renderer (same as LocationComponent) and paints on every GPU — and, unlike the
  * style-layer path, doesn't depend on layer-insertion order across style reloads,

@@ -191,7 +191,7 @@ class CoTParserFemaTest {
     }
 
     // ── #46: TakIconRegistry.handles() covers FEMA iconset paths ─────────────
-    // These verify the ContactSymbolLayer routing gate: a received FEMA marker
+    // These verify the icon-registry routing gate: a received FEMA marker
     // with a parsed iconsetPath must not fall through to the MIL-STD path.
 
     @Test
@@ -199,7 +199,7 @@ class CoTParserFemaTest {
         val icon = FemaIconCatalog.iconFor(FemaIconCatalog.Kind.COMMAND_POST)!!
         assertTrue(
             "TakIconRegistry.handles() must return true for a FEMA iconsetPath so " +
-                "ContactSymbolLayer does not fall through to MIL-STD",
+                "the marker renderer does not fall through to MIL-STD",
             soy.engindearing.omnitak.mobile.data.symbology.TakIconRegistry.handles(
                 icon.cotType, icon.iconsetPath,
             ),

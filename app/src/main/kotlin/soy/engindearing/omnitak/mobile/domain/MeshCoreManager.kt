@@ -16,7 +16,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -97,12 +96,6 @@ class MeshCoreManager(private val context: Context? = null) : MeshFrameworkManag
     fun bleRssi(): StateFlow<Int>? = client?.rssi
 
     // region Scan ---------------------------------------------------------
-
-    override suspend fun startMeshScan(timeoutMs: Long): Flow<MeshScanResult>? {
-        val c = clientOrNull() ?: return null
-        c.startScan(timeoutMs)
-        return c.scanResults.map { MeshScanResult(it.name, it.address, it.rssi) }
-    }
 
     /** Concrete-typed BLE scan for the MeshCore pane (parallels
      *  [MeshtasticManager.startBleScan]). Null when BLE is unavailable. */

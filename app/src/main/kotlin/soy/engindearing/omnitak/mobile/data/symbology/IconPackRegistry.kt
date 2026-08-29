@@ -16,7 +16,7 @@ import java.io.File
  * [IconPackImporter]. This registry:
  *   - persists the pack metadata list across launches (packs.json)
  *   - resolves a `usericon iconsetpath` to the pack that owns it
- *   - loads the matching image file as a [Bitmap] for the ContactSymbolLayer
+ *   - loads the matching image file as a [Bitmap] for the marker renderers
  *   - exposes the full selectable catalogue for the [MarkerIconPickerSheet]
  *
  * Thread safety: all mutating state is guarded by [lock]. Reads and bitmap

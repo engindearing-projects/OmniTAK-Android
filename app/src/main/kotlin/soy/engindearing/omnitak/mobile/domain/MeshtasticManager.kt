@@ -227,11 +227,6 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
         bleClient?.stopScan()
     }
 
-    /** [MeshFrameworkManager] scan — maps the Meshtastic BLE scan results
-     *  into the framework-neutral [MeshScanResult] the picker consumes. */
-    override suspend fun startMeshScan(timeoutMs: Long): Flow<MeshScanResult>? =
-        startBleScan(timeoutMs)?.map { MeshScanResult(it.name, it.address, it.rssi) }
-
     override fun stopMeshScan() = stopBleScan()
 
     /** RSSI of the active BLE link, or null if BLE not initialized. */
@@ -293,10 +288,6 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
             longName = node.longName.ifBlank { existing.longName },
         ) else node
         _nodes.value = _nodes.value + (merged.id to merged)
-    }
-
-    fun clearNodes() {
-        _nodes.value = emptyMap()
     }
 
     private fun handlePacket(packet: soy.engindearing.omnitak.mobile.data.MeshPacketDecoded) {

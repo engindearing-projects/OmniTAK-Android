@@ -9,10 +9,12 @@ import org.junit.Test
  *
  * KmlOverlayRenderer inserts every cached/imported raster overlay with
  * `addLayerAbove(layer, "basemap-tiles")`, so the overlay sits just above the
- * basemap but below every operational overlay (grid, drawings, measurements,
- * contacts, aircraft) and the self-marker. That ordering is only correct if
- * `basemap-tiles` really is the bottom layer with the overlays stacked above
- * it. This pins the buildTacticalStyle layer order so the anchor can't drift.
+ * basemap but below every operational style overlay (grid, measurements,
+ * aircraft) and the self-marker. (Contacts and drawings render via native
+ * annotations, which always draw above style layers.) That ordering is only
+ * correct if `basemap-tiles` really is the bottom layer with the overlays
+ * stacked above it. This pins the buildTacticalStyle layer order so the
+ * anchor can't drift.
  */
 class TacticalStyleLayerOrderTest {
 
@@ -34,11 +36,9 @@ class TacticalStyleLayerOrderTest {
         // a raster inserted just above basemap-tiles renders beneath them.
         val overlaysAboveBasemap = listOf(
             "grid-line",
-            "drawings-fill",
-            "drawings-outline",
             "measurement-line",
-            "contacts-circles",
-            "contacts-labels",
+            "measurement-points",
+            "measurement-labels",
             "aircraft-circle",
             "aircraft-label",
         )

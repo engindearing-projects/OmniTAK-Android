@@ -438,15 +438,6 @@ class ServerManager(
         return server
     }
 
-    fun updateServer(server: TAKServer) {
-        val idx = _servers.value.indexOfFirst { it.id == server.id }
-        if (idx < 0) return
-        val updated = _servers.value.toMutableList().apply { this[idx] = server }
-        _servers.value = updated
-        if (_activeServer.value?.id == server.id) _activeServer.value = server
-        persist(updated)
-    }
-
     fun deleteServer(id: String) {
         // #176 — tombstone first so a stale DataStore re-emission (the pre-delete
         // snapshot still in flight) can't resurrect this row before the persist

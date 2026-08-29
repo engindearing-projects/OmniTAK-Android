@@ -195,7 +195,7 @@ class OmniTAKApp : Application() {
         // opt out of the always-on BLE scan (battery cost). When a
         // drone broadcasts OpenDroneID, its track flows scanner →
         // RemoteIdTrackStore → RemoteIdToCoTConverter → ContactStore,
-        // and ContactLayer renders it with the SUAPMHQ---- multirotor
+        // and the marker renderers draw it with the SUAPMHQ---- multirotor
         // or SUAPMFQ---- fixed-wing symbol that Phase D's catalogue
         // provides.
         appScope.launch {

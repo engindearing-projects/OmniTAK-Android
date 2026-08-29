@@ -34,9 +34,8 @@ object MilStdIconCache {
     // values give more legible interior detail (rotor caret on
     // SUAPMHQ multirotor, wing detail on fixed-wing UAS) but
     // exacerbate cold-cache churn on every size change and visually
-    // dominate neighbouring contacts. Revisit alongside the
-    // [ContactSymbolLayer] migration when high-density CoT rendering
-    // is properly engineered.
+    // dominate neighbouring contacts. Revisit if high-density CoT
+    // rendering is ever re-engineered.
     private const val DEFAULT_SIZE_PX = 64
 
     private data class Key(val sidc: String, val sizePx: Int)

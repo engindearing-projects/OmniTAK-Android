@@ -522,12 +522,5 @@ class MeshtasticBleClient(context: Context) : BleManager(context) {
             Manifest.permission.BLUETOOTH_SCAN,
             Manifest.permission.BLUETOOTH_CONNECT,
         )
-
-        /** Simple Bluetooth-availability + radio-on probe. */
-        fun isBluetoothReady(context: Context): Boolean {
-            val mgr = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
-                ?: return false
-            return mgr.adapter?.isEnabled == true
-        }
     }
 }

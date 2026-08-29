@@ -99,8 +99,4 @@ class MultiUasRegistry(
         val entry = _drones.value.firstOrNull { it.manager === activeMgr } ?: return
         disconnect(entry.droneId)
     }
-
-    /** True iff the active manager is a real connected drone (not the
-     *  idle sentinel). Useful for "do we have a drone at all" guards. */
-    fun isAnyConnected(): Boolean = _active.value !== idleManager
 }

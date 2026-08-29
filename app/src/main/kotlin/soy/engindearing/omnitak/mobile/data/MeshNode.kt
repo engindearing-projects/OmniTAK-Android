@@ -5,11 +5,8 @@ package soy.engindearing.omnitak.mobile.data
  * model — node id is the 32-bit radio address (rendered as lowercase
  * hex for display). Position is optional (some nodes never send one).
  *
- * This slice ships the data model + TCP client + bridge to CoT, but
- * **no protobuf decoding** yet — getting protobuf into the build is a
- * follow-up (requires adding the meshtastic .proto set + a codegen
- * step). For now, nodes get populated via manual test injection and
- * the TCP client streams raw bytes so we can verify the transport.
+ * Populated from decoded FromRadio frames ([MeshtasticProtoParser])
+ * arriving over the BLE or TCP transport.
  */
 data class MeshNode(
     val id: Long,
@@ -31,14 +28,3 @@ data class MeshPosition(
 )
 
 enum class MeshConnectionType { BLUETOOTH, TCP }
-
-data class MeshtasticDevice(
-    val id: String,
-    val name: String,
-    val connectionType: MeshConnectionType,
-    val devicePath: String,
-    val isConnected: Boolean,
-    val snr: Double? = null,
-    val hopCount: Int? = null,
-    val batteryLevel: Int? = null,
-)

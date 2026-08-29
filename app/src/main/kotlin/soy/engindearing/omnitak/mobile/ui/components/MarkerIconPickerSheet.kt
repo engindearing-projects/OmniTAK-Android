@@ -96,7 +96,7 @@ private const val BADGE_MARKER_COT_TYPE = "a-u-G"
  *
  * The choice is handed back as a [MarkerIconChoice] and flows into the placed
  * [soy.engindearing.omnitak.mobile.data.CoTEvent], so the symbol renders
- * through the same [ContactSymbolLayer] / Cesium path received markers use —
+ * through the same marker-renderer / Cesium path received markers use —
  * closing the "standard TAK icon sets … selectable when placing markers" half
  * of #98. (Per-marker import of arbitrary custom iconsets is Phase 2.)
  *

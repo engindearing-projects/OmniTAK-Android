@@ -318,7 +318,7 @@ class IconsetPackParserTest {
     // ── TakIconRegistry integration ───────────────────────────────────────
     //
     // An imported pack's iconset path must flow through the registry's
-    // `handles()` / `styleImageId()` so the ContactSymbolLayer renders it.
+    // `handles()` / `styleImageId()` so the marker renderer renders it.
 
     @Test
     fun `importedPack iconsetPath passes TakIconRegistry handles check`() {

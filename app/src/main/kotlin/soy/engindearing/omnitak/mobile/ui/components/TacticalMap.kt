@@ -194,9 +194,9 @@ fun TacticalMap(
                     .build()
                 map.setStyle(Style.Builder().fromJson(styleJson)) { style ->
                     // #77: contacts render via native annotations (ContactMarkerRenderer),
-                    // not the contacts-src GeoJsonSource circle/symbol layers, which the
-                    // GL driver silently fails to paint on Adreno/Mali/emulator (they show
-                    // on Cesium but never on 2D). The Annotation path paints everywhere.
+                    // never GeoJsonSource circle/symbol layers — the GL driver silently
+                    // fails to paint those on Adreno/Mali/emulator (they show on Cesium
+                    // but never on 2D). The Annotation path paints everywhere.
                     ContactMarkerRenderer.update(map, context, bindings.contacts)
                     MeasurementLayer.update(map, currentMeasurementPoints)
                     DrawingShapeRenderer.apply(map, currentDrawings)
@@ -987,7 +987,7 @@ private const val TAP_HIT_RADIUS_PX = 72f
  * Tactical dark basemap powered by CartoDB Dark Matter raster tiles
  * (https://carto.com/help/building-maps/basemap-list/). Free, no API
  * key, well-attributed, and gives a high-contrast tactical surface
- * that lets operational overlays (contacts, drawings, grid, aircraft)
+ * that lets operational overlays (measurements, grid, aircraft)
  * pop without competing with brightly-styled OSM cartography.
  *
  * Operational layers and their GeoJSON sources live inline in the
@@ -996,16 +996,19 @@ private const val TAP_HIT_RADIUS_PX = 72f
  * callback occasionally renders nothing despite the calls reporting
  * success and the source/layer appearing in the style — a
  * MapLibre-Android GL quirk we haven't root-caused. Declaring
- * everything in the style JSON avoids that path entirely;
- * `ContactLayer.update` pushes fresh feature data to the existing
- * source via `setGeoJson`.
+ * everything in the style JSON avoids that path entirely; the live
+ * feeders (MeasurementLayer, GridLayer, the ADS-B plugin's
+ * AircraftLayer) push fresh feature data into the existing sources
+ * via `setGeoJson`. Contacts and drawings render through native
+ * annotations instead (see the #77 note above) — their old style
+ * sources/layers were removed.
  */
 /**
  * Build a tactical-overlay style JSON wrapped around any XYZ raster
- * basemap. The operational layers (contacts, measurements, drawings,
- * grid, aircraft) live inline so MapLibre-Android renders them on the
- * first style load — a workaround for the addLayer GL quirk noted on
- * the original const below.
+ * basemap. The operational layers (measurements, grid, aircraft) live
+ * inline so MapLibre-Android renders them on the first style load — a
+ * workaround for the addLayer GL quirk noted on the original const
+ * below.
  *
  * GAP-101 — extracted from the original TACTICAL_DARK_STYLE so the
  * basemap raster source can be swapped per [MapProvider] preference
@@ -1040,15 +1043,7 @@ private const val TACTICAL_STYLE_HEAD = """
 // belong to ADS-B logic — the plugin's AircraftLayer.update silently no-ops if
 // the source is gone, and aircraft stop rendering.
 private const val TACTICAL_STYLE_OVERLAYS = """,
-    "contacts-src": {
-      "type": "geojson",
-      "data": {"type": "FeatureCollection", "features": []}
-    },
     "measurement-src": {
-      "type": "geojson",
-      "data": {"type": "FeatureCollection", "features": []}
-    },
-    "drawings-src": {
       "type": "geojson",
       "data": {"type": "FeatureCollection", "features": []}
     },
@@ -1071,25 +1066,6 @@ private const val TACTICAL_STYLE_OVERLAYS = """,
         "line-color": "#FFC107",
         "line-width": 2,
         "line-opacity": 0.85
-      }
-    },
-    {
-      "id": "drawings-fill",
-      "type": "fill",
-      "source": "drawings-src",
-      "filter": ["==", ["get", "kind"], "polygon"],
-      "paint": {
-        "fill-color": ["coalesce", ["get", "color"], "#4ADE80"],
-        "fill-opacity": 0.2
-      }
-    },
-    {
-      "id": "drawings-outline",
-      "type": "line",
-      "source": "drawings-src",
-      "paint": {
-        "line-color": ["coalesce", ["get", "color"], "#4ADE80"],
-        "line-width": 3
       }
     },
     {
@@ -1125,33 +1101,6 @@ private const val TACTICAL_STYLE_OVERLAYS = """,
         "text-size": 12,
         "text-offset": [0, -1.4],
         "text-allow-overlap": true
-      },
-      "paint": {
-        "text-color": "#FFFFFF",
-        "text-halo-color": "#0A1628",
-        "text-halo-width": 1.5
-      }
-    },
-    {
-      "id": "contacts-circles",
-      "type": "circle",
-      "source": "contacts-src",
-      "paint": {
-        "circle-radius": 10,
-        "circle-stroke-width": 2,
-        "circle-stroke-color": "#0A1628",
-        "circle-color": ["to-color", ["coalesce", ["get", "color"], "#B39DDB"]]
-      }
-    },
-    {
-      "id": "contacts-labels",
-      "type": "symbol",
-      "source": "contacts-src",
-      "layout": {
-        "text-field": ["get", "callsign"],
-        "text-size": 11,
-        "text-offset": [0, 1.4],
-        "text-allow-overlap": false
       },
       "paint": {
         "text-color": "#FFFFFF",

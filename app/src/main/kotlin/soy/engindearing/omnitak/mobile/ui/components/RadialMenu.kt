@@ -13,7 +13,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -24,10 +23,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
 import kotlin.math.cos
 import kotlin.math.roundToInt
@@ -136,16 +133,4 @@ fun RadialMenu(
             )
         }
     }
-}
-
-/** Small text caption shown under a radial ring for one-tap context. */
-@Composable
-fun RadialCaption(text: String, modifier: Modifier = Modifier) {
-    Text(
-        text,
-        color = TacticalAccent,
-        fontSize = 12.sp,
-        fontWeight = FontWeight.Medium,
-        modifier = modifier,
-    )
 }

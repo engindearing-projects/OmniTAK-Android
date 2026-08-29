@@ -21,9 +21,19 @@ class RegionDownloaderTest {
 
     private fun bbox() = BoundingBox(north = 47.62, south = 47.60, east = -122.32, west = -122.34)
 
-    /** A sink that records every written XYZ-equivalent tile. */
+    /**
+     * A sink that records every written XYZ-equivalent tile.
+     *
+     * ConcurrentHashMap, not HashMap: [RegionDownloader] fetches behind a
+     * semaphore from `launch(Dispatchers.IO)`, so `put` genuinely arrives on
+     * several threads at once. A plain HashMap loses writes under that — the
+     * symptom is this test intermittently reporting one fewer tile than it
+     * downloaded, which reads like a tile-math bug and is not one. The
+     * production sink writes through SQLiteDatabase, which serializes
+     * internally, so only the fake was ever unsafe.
+     */
     private class CountingSink : TileSink {
-        val store = HashMap<Triple<Int, Int, Int>, ByteArray>()
+        val store = java.util.concurrent.ConcurrentHashMap<Triple<Int, Int, Int>, ByteArray>()
         override fun put(z: Int, column: Int, tmsRow: Int, data: ByteArray) {
             store[Triple(z, column, tmsRow)] = data
         }

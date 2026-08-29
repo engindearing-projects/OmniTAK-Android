@@ -116,10 +116,6 @@ class UASManager(
     val videoSource: StateFlow<VideoSource> = _videoSource.asStateFlow()
     fun setVideoSource(source: VideoSource) { _videoSource.value = source }
 
-    /** Convenience setter for the common RTSP case (used by the Quick
-     *  Connect screen's preset/clear buttons). */
-    fun setRtspUrl(url: String) { setVideoSource(VideoSource.rtsp(url)) }
-
     /** Soft geofence radius (meters from home) — fly-here, pursue, and
      *  missions reject targets outside this radius. 0 = disabled. Set
      *  from UAS Quick Connect screen. Defaults to 500 m which clears

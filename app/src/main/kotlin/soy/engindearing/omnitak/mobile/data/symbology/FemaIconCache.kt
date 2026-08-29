@@ -10,9 +10,8 @@ import soy.engindearing.omnitak.mobile.data.FemaIconCatalog
 import java.io.IOException
 
 /**
- * Process-wide cache of rasterised FEMA / ICS-237 glyph icons for the
- * [soy.engindearing.omnitak.mobile.ui.components.ContactSymbolLayer] and
- * the legacy [soy.engindearing.omnitak.mobile.ui.components.ContactLayer].
+ * Process-wide cache of rasterised FEMA / ICS-237 glyph icons for map
+ * marker rendering.
  *
  * SVGs live under `assets/fema/<category>/<kind>.svg` — exactly the path
  * structure the [FemaIconCatalog.iconsetPath] emits via
