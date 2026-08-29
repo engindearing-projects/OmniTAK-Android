@@ -54,7 +54,7 @@ object AdminMessageSerializer {
      *   ChannelSettings.uplink_enabled   = 5 (bool)
      *   ChannelSettings.downlink_enabled = 6 (bool)
      */
-    fun buildSetChannel(channel: MeshChannel, index: Int): ByteArray {
+    fun buildSetChannel(myNodeNum: UInt, channel: MeshChannel, index: Int): ByteArray {
         // ChannelSettings — PSK first (field 2) then name (field 3), matching
         // the share-URL encoder field order.
         val settings = ByteArrayOutputStream().apply {
@@ -87,7 +87,7 @@ object AdminMessageSerializer {
             MeshWire.appendVarint(this, channelMsg.size.toULong())
             write(channelMsg)
         }.toByteArray()
-        return wrapToRadio(admin)
+        return wrapToRadio(admin, myNodeNum)
     }
 
     /**
@@ -100,7 +100,7 @@ object AdminMessageSerializer {
      *   Config.device                 = 1
      *   DeviceConfig.rebroadcast_mode = 6  (enum)
      */
-    fun buildSetRebroadcastMode(mode: RebroadcastMode): ByteArray {
+    fun buildSetRebroadcastMode(myNodeNum: UInt, mode: RebroadcastMode): ByteArray {
         val deviceConfig = ByteArrayOutputStream().apply {
             MeshWire.appendVarintField(this, field = 6, value = mode.wire.toULong())
         }.toByteArray()
@@ -114,7 +114,7 @@ object AdminMessageSerializer {
             MeshWire.appendVarint(this, config.size.toULong())
             write(config)
         }.toByteArray()
-        return wrapToRadio(admin)
+        return wrapToRadio(admin, myNodeNum)
     }
 
     private const val CHANNEL_ROLE_PRIMARY = 1
@@ -135,6 +135,7 @@ object AdminMessageSerializer {
      * `isLicensed = false` are omitted so the firmware keeps whatever it has.
      */
     fun buildSetOwner(
+        myNodeNum: UInt,
         longName: String,
         shortName: String,
         id: String = "",
@@ -147,14 +148,14 @@ object AdminMessageSerializer {
             MeshWire.appendVarint(this, owner.size.toULong())
             write(owner)
         }.toByteArray()
-        return wrapToRadio(admin)
+        return wrapToRadio(admin, myNodeNum)
     }
 
     /**
      * Build a ToRadio with `AdminMessage { set_config { device { role = ... } } }`.
      * Only sets the role — the practitioner-headline knob.
      */
-    fun buildSetDeviceRole(role: MeshRole): ByteArray {
+    fun buildSetDeviceRole(myNodeNum: UInt, role: MeshRole): ByteArray {
         // DeviceConfig.role = field 1, varint of the proto-enum ordinal.
         val deviceConfig = ByteArrayOutputStream().apply {
             MeshWire.appendVarintField(this, field = 1, value = roleProtoOrdinal(role).toULong())
@@ -173,14 +174,14 @@ object AdminMessageSerializer {
             MeshWire.appendVarint(this, config.size.toULong())
             write(config)
         }.toByteArray()
-        return wrapToRadio(admin)
+        return wrapToRadio(admin, myNodeNum)
     }
 
     /**
      * Build a ToRadio with `AdminMessage { set_config { position { position_broadcast_secs = N } } }`.
      * Headline practitioner ask — operator-controlled PLI cadence.
      */
-    fun buildSetPositionBroadcastSecs(secs: Int): ByteArray {
+    fun buildSetPositionBroadcastSecs(myNodeNum: UInt, secs: Int): ByteArray {
         val safe = secs.coerceIn(0, 24 * 60 * 60).toULong()
         // PositionConfig.position_broadcast_secs = field 4, varint.
         val positionConfig = ByteArrayOutputStream().apply {
@@ -198,7 +199,7 @@ object AdminMessageSerializer {
             MeshWire.appendVarint(this, config.size.toULong())
             write(config)
         }.toByteArray()
-        return wrapToRadio(admin)
+        return wrapToRadio(admin, myNodeNum)
     }
 
     /**
@@ -209,7 +210,7 @@ object AdminMessageSerializer {
      * — see [buildSetLoraPreset]. Two messages because Meshtastic
      * splits channel and modem config across two protobuf submessages.
      */
-    fun buildSetChannel0Name(name: String): ByteArray {
+    fun buildSetChannel0Name(myNodeNum: UInt, name: String): ByteArray {
         // ChannelSettings.name = field 3, string.
         val settings = ByteArrayOutputStream().apply {
             appendString(this, field = 3, value = name)
@@ -231,17 +232,17 @@ object AdminMessageSerializer {
             MeshWire.appendVarint(this, channel.size.toULong())
             write(channel)
         }.toByteArray()
-        return wrapToRadio(admin)
+        return wrapToRadio(admin, myNodeNum)
     }
 
     // region Read requests ----------------------------------------------
 
     /** AdminMessage.get_owner_request = field 3 (bool). */
-    fun buildGetOwnerRequest(): ByteArray {
+    fun buildGetOwnerRequest(myNodeNum: UInt): ByteArray {
         val admin = ByteArrayOutputStream().apply {
             MeshWire.appendVarintField(this, field = 3, value = 1UL)
         }.toByteArray()
-        return wrapToRadio(admin)
+        return wrapToRadio(admin, myNodeNum)
     }
 
     /**
@@ -249,27 +250,27 @@ object AdminMessageSerializer {
      * Values: DEVICE=0, POSITION=1, POWER=2, NETWORK=3, DISPLAY=4, LORA=5,
      * BLUETOOTH=6, SECURITY=7, SESSIONKEY=8, DEVICEUI=9.
      */
-    fun buildGetConfigRequest(configType: Int): ByteArray {
+    fun buildGetConfigRequest(myNodeNum: UInt, configType: Int): ByteArray {
         val admin = ByteArrayOutputStream().apply {
             MeshWire.appendVarintField(this, field = 5, value = configType.toULong())
         }.toByteArray()
-        return wrapToRadio(admin)
+        return wrapToRadio(admin, myNodeNum)
     }
 
     /** AdminMessage.get_channel_request = field 1 (varint, 1-based channel index). */
-    fun buildGetChannelRequest(channelIndex: Int): ByteArray {
+    fun buildGetChannelRequest(myNodeNum: UInt, channelIndex: Int): ByteArray {
         val admin = ByteArrayOutputStream().apply {
             // Index in get_channel_request is 1-based; channel 0 is requested as 1.
             val zeroBased = channelIndex.coerceAtLeast(0)
             MeshWire.appendVarintField(this, field = 1, value = (zeroBased + 1).toULong())
         }.toByteArray()
-        return wrapToRadio(admin)
+        return wrapToRadio(admin, myNodeNum)
     }
 
     // endregion
 
     /** Build `set_config { lora { use_preset = true, modem_preset = ... } }`. */
-    fun buildSetLoraPreset(preset: MeshChannelPreset): ByteArray {
+    fun buildSetLoraPreset(myNodeNum: UInt, preset: MeshChannelPreset): ByteArray {
         // LoRaConfig.use_preset = field 1 (bool), modem_preset = field 2 (enum).
         val loraConfig = ByteArrayOutputStream().apply {
             MeshWire.appendVarintField(this, field = 1, value = 1UL)
@@ -287,7 +288,7 @@ object AdminMessageSerializer {
             MeshWire.appendVarint(this, config.size.toULong())
             write(config)
         }.toByteArray()
-        return wrapToRadio(admin)
+        return wrapToRadio(admin, myNodeNum)
     }
 
     /**
@@ -310,6 +311,7 @@ object AdminMessageSerializer {
      * radio's current region untouched.
      */
     fun buildSetLoRaConfig(
+        myNodeNum: UInt,
         region: MeshRegion,
         modemPreset: MeshChannelPreset,
         usePreset: Boolean = true,
@@ -342,7 +344,7 @@ object AdminMessageSerializer {
             MeshWire.appendVarint(this, config.size.toULong())
             write(config)
         }.toByteArray()
-        return wrapToRadio(admin)
+        return wrapToRadio(admin, myNodeNum)
     }
 
     // endregion
@@ -408,16 +410,20 @@ object AdminMessageSerializer {
     /**
      * Wrap an AdminMessage byte blob into a fully-framed ToRadio.
      * Mirror of [AtakPluginSerializer.buildToRadio] but with portnum
-     * `ADMIN_APP` and `to = 0xFFFFFFFF` (broadcast) — the firmware
-     * routes admin payloads to the local radio when delivered on the
-     * admin channel. `wantAck` defaults to true so the operator gets
-     * a delivery signal we can surface in the UI later.
+     * `ADMIN_APP`, addressed to [myNodeNum] — the radio we are physically
+     * attached to. `wantAck` defaults to true so the operator gets a
+     * delivery signal we can surface in the UI later.
      */
-    private fun wrapToRadio(adminBytes: ByteArray): ByteArray = MeshWire.buildToRadio(
+    private fun wrapToRadio(adminBytes: ByteArray, myNodeNum: UInt): ByteArray = MeshWire.buildToRadio(
         portnum = PORTNUM_ADMIN_APP,
         payload = adminBytes,
-        // Broadcast addr — firmware unwraps admin payloads locally.
-        to = MeshWire.BROADCAST_ADDR,
+        // #185 — addressed to the local radio, never broadcast. The firmware's
+        // AdminModule only acts on packets addressed to the node itself, so a
+        // broadcast admin frame is silently ignored *and* put on the air —
+        // which for set_channel means transmitting the channel PSK under
+        // whatever key is currently in use. Every reference client addresses
+        // admin to myNodeNum.
+        to = myNodeNum,
         // want_response + want_ack so the radio sends a delivery signal
         // we can surface in the UI later.
         wantAck = true,

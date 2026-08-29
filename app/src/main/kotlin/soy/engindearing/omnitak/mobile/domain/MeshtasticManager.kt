@@ -491,18 +491,21 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
      */
     suspend fun requestDeviceConfig(): Int {
         val transport = _activeTransport.value ?: return 0
+        // #185 — admin frames are addressed to the attached radio, so we
+        // cannot build one until it has told us its node number.
+        val dest = adminDestination() ?: return 0
         // GAP-123 — ask for all 8 channel slots (Meshtastic firmware caps
         // at 8). Disabled slots come back with role=0 and are filtered
         // out at the chat seeding layer; non-disabled ones become chat
         // conversations with the operator's actual channel names.
         val channelRequests = (0 until 8).map { idx ->
-            AdminMessageSerializer.buildGetChannelRequest(idx)
+            AdminMessageSerializer.buildGetChannelRequest(dest, idx)
         }
         val requests = listOf(
-            AdminMessageSerializer.buildGetOwnerRequest(),
-            AdminMessageSerializer.buildGetConfigRequest(GET_CONFIG_DEVICE),
-            AdminMessageSerializer.buildGetConfigRequest(GET_CONFIG_POSITION),
-            AdminMessageSerializer.buildGetConfigRequest(GET_CONFIG_LORA),
+            AdminMessageSerializer.buildGetOwnerRequest(dest),
+            AdminMessageSerializer.buildGetConfigRequest(dest, GET_CONFIG_DEVICE),
+            AdminMessageSerializer.buildGetConfigRequest(dest, GET_CONFIG_POSITION),
+            AdminMessageSerializer.buildGetConfigRequest(dest, GET_CONFIG_LORA),
         ) + channelRequests
         var sent = 0
         for (bytes in requests) {
@@ -607,13 +610,14 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
      */
     suspend fun pushDeviceConfig(config: MeshDeviceConfig): Int {
         val transport = _activeTransport.value ?: return 0
+        val dest = adminDestination() ?: return 0
 
         val messages = listOf(
-            AdminMessageSerializer.buildSetOwner(config.longName, config.shortName),
-            AdminMessageSerializer.buildSetDeviceRole(config.role),
-            AdminMessageSerializer.buildSetPositionBroadcastSecs(config.positionBroadcastSecs),
-            AdminMessageSerializer.buildSetChannel0Name(config.channelName),
-            AdminMessageSerializer.buildSetLoraPreset(config.channelPreset),
+            AdminMessageSerializer.buildSetOwner(dest, config.longName, config.shortName),
+            AdminMessageSerializer.buildSetDeviceRole(dest, config.role),
+            AdminMessageSerializer.buildSetPositionBroadcastSecs(dest, config.positionBroadcastSecs),
+            AdminMessageSerializer.buildSetChannel0Name(dest, config.channelName),
+            AdminMessageSerializer.buildSetLoraPreset(dest, config.channelPreset),
         )
         var sent = 0
         for (bytes in messages) {
@@ -632,14 +636,14 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
      * `set_channel` AdminMessage. Returns true on wire-layer dispatch.
      */
     suspend fun applyChannel(channel: MeshChannel, index: Int = 0): Boolean =
-        dispatchAdmin(AdminMessageSerializer.buildSetChannel(channel, index))
+        dispatchAdmin { dest -> AdminMessageSerializer.buildSetChannel(dest, channel, index) }
 
     /**
      * #172 — set the radio's rebroadcast scope (PatoG1899's "known channels
      * only"). Returns true on wire-layer dispatch.
      */
     suspend fun applyRebroadcastMode(mode: RebroadcastMode): Boolean =
-        dispatchAdmin(AdminMessageSerializer.buildSetRebroadcastMode(mode))
+        dispatchAdmin { dest -> AdminMessageSerializer.buildSetRebroadcastMode(dest, mode) }
 
     /**
      * #181 — set the radio's LoRa region + modem preset in one admin write
@@ -652,7 +656,7 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
         preset: MeshChannelPreset,
         usePreset: Boolean = true,
     ): Boolean =
-        dispatchAdmin(AdminMessageSerializer.buildSetLoRaConfig(region, preset, usePreset))
+        dispatchAdmin { dest -> AdminMessageSerializer.buildSetLoRaConfig(dest, region, preset, usePreset) }
 
     /**
      * #181 — set the radio's owner (display name) via `set_owner { User }`.
@@ -664,15 +668,33 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
         shortName: String,
         isLicensed: Boolean = false,
     ): Boolean =
-        dispatchAdmin(AdminMessageSerializer.buildSetOwner(longName, shortName, isLicensed = isLicensed))
+        dispatchAdmin { dest -> AdminMessageSerializer.buildSetOwner(dest, longName, shortName, isLicensed = isLicensed) }
 
-    /** Dispatch one already-framed ToRadio admin blob over the active transport. */
-    private suspend fun dispatchAdmin(toRadio: ByteArray): Boolean =
-        when (_activeTransport.value) {
+    /**
+     * #185 — the destination for an admin write: the node number of the radio
+     * we are attached to. Null until the radio has reported it (`my_node_num`
+     * arrives early in the FromRadio config stream). Broadcast is never a
+     * valid admin destination — the firmware ignores it and the frame goes on
+     * the air — so callers must refuse to send rather than fall back.
+     */
+    private fun adminDestination(): UInt? = _myNodeNum?.takeIf { it != 0u && it != BROADCAST_ADDR }
+
+    /**
+     * Frame one admin message for the attached radio and dispatch it over the
+     * active transport. [build] runs only once a destination is known.
+     */
+    private suspend fun dispatchAdmin(build: (UInt) -> ByteArray): Boolean {
+        val dest = adminDestination() ?: run {
+            Log.w(TAG, "admin write skipped — radio has not reported my_node_num yet")
+            return false
+        }
+        val toRadio = build(dest)
+        return when (_activeTransport.value) {
             MeshConnectionType.TCP -> tcpClient.sendBytes(toRadio)
             MeshConnectionType.BLUETOOTH -> bleClient?.sendToRadio(toRadio) ?: false
             null -> false
         }
+    }
 
     companion object {
         private const val TAG = "MeshtasticManager"

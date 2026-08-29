@@ -13,6 +13,10 @@ import org.junit.Test
  */
 class ChannelApplyEncoderTest {
 
+    /** #185 — admin frames are addressed to the attached radio. Value is
+     *  irrelevant to these byte-layout assertions, but must be supplied. */
+    private val myNodeNum = 0x12345678u
+
     // region helpers ------------------------------------------------------
 
     private fun ByteArray.hex(): String = joinToString("") { "%02x".format(it) }
@@ -36,7 +40,7 @@ class ChannelApplyEncoderTest {
         val psk = ByteArray(16) { (it * 7 + 3).toByte() }
         val channel = MeshChannel(name = "OmniTAK", psk = psk)
 
-        val frame = AdminMessageSerializer.buildSetChannel(channel, index = 0)
+        val frame = AdminMessageSerializer.buildSetChannel(myNodeNum, channel, index = 0)
 
         // Ground-truth admin bytes (computed from admin/channel.proto field
         // numbers): set_channel=33 (tag 8a 02), Channel{ settings=2{ psk=2,
@@ -53,7 +57,7 @@ class ChannelApplyEncoderTest {
     @Test
     fun `Meshtastic set_channel at non-zero index sets SECONDARY role and index`() {
         val psk = ByteArray(16) { it.toByte() }
-        val frame = AdminMessageSerializer.buildSetChannel(MeshChannel(name = "Cmd", psk = psk), index = 2)
+        val frame = AdminMessageSerializer.buildSetChannel(myNodeNum, MeshChannel(name = "Cmd", psk = psk), index = 2)
 
         // Channel.index = 1 (varint) = 2, Channel.role = 3 (varint) = SECONDARY(2).
         // index field present: tag 08 02; role field: tag 18 02.
@@ -65,7 +69,7 @@ class ChannelApplyEncoderTest {
 
     @Test
     fun `Meshtastic set_config rebroadcast KNOWN_ONLY encodes enum 3`() {
-        val frame = AdminMessageSerializer.buildSetRebroadcastMode(RebroadcastMode.KNOWN_ONLY)
+        val frame = AdminMessageSerializer.buildSetRebroadcastMode(myNodeNum, RebroadcastMode.KNOWN_ONLY)
 
         // set_config=34 (tag 92 02), Config.device=1{ rebroadcast_mode=6 = 3 }.
         val expected = "9202040a023003".chunked(2).map { it.toInt(16).toByte() }.toByteArray()
@@ -84,7 +88,7 @@ class ChannelApplyEncoderTest {
 
     @Test
     fun `set_config LoRa US LONG_FAST encodes use_preset and region with default preset omitted`() {
-        val frame = AdminMessageSerializer.buildSetLoRaConfig(
+        val frame = AdminMessageSerializer.buildSetLoRaConfig(myNodeNum, 
             region = MeshRegion.US,
             modemPreset = MeshChannelPreset.LONG_FAST,
         )
@@ -98,7 +102,7 @@ class ChannelApplyEncoderTest {
 
     @Test
     fun `set_config LoRa EU868 MEDIUM_FAST encodes preset 4 and region 3`() {
-        val frame = AdminMessageSerializer.buildSetLoRaConfig(
+        val frame = AdminMessageSerializer.buildSetLoRaConfig(myNodeNum, 
             region = MeshRegion.EU_868,
             modemPreset = MeshChannelPreset.MEDIUM_FAST,
         )
@@ -111,7 +115,7 @@ class ChannelApplyEncoderTest {
 
     @Test
     fun `set_config LoRa with UNSET region omits the region field`() {
-        val frame = AdminMessageSerializer.buildSetLoRaConfig(
+        val frame = AdminMessageSerializer.buildSetLoRaConfig(myNodeNum, 
             region = MeshRegion.UNSET,
             modemPreset = MeshChannelPreset.SHORT_FAST,
         )
@@ -141,7 +145,7 @@ class ChannelApplyEncoderTest {
 
     @Test
     fun `set_owner encodes long and short name with correct tags`() {
-        val frame = AdminMessageSerializer.buildSetOwner(longName = "OmniTAK", shortName = "OTK")
+        val frame = AdminMessageSerializer.buildSetOwner(myNodeNum, longName = "OmniTAK", shortName = "OTK")
 
         // set_owner=32 (tag 82 02), User{ long_name=2 (12 07 "OmniTAK"),
         // short_name=3 (1a 03 "OTK") }. id blank + is_licensed false omitted.
@@ -152,7 +156,7 @@ class ChannelApplyEncoderTest {
 
     @Test
     fun `set_owner with is_licensed sets bool field 6`() {
-        val frame = AdminMessageSerializer.buildSetOwner(
+        val frame = AdminMessageSerializer.buildSetOwner(myNodeNum, 
             longName = "W1AW",
             shortName = "W1AW",
             isLicensed = true,
@@ -167,7 +171,7 @@ class ChannelApplyEncoderTest {
 
     @Test
     fun `set_owner truncates short name to 4 chars`() {
-        val frame = AdminMessageSerializer.buildSetOwner(longName = "Node", shortName = "TOOLONG")
+        val frame = AdminMessageSerializer.buildSetOwner(myNodeNum, longName = "Node", shortName = "TOOLONG")
 
         // short_name field 3 must carry exactly 4 bytes: tag 1a, len 04, "TOOL".
         val shortField = ("1a04" + "TOOL".toByteArray().joinToString("") { "%02x".format(it) })
