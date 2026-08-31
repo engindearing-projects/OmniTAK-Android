@@ -68,17 +68,24 @@ Tracked as a single checklist; tick off when both platforms match. Each item sho
 ### P9: feature gaps (Android-side)
 Features iOS has that Android doesn't yet. Triage which need parity vs which can wait.
 
-- [ ] **GAP-080** Data Package import (.zip): iOS has, Android missing
+- [ ] **GAP-080** Data Package import (.zip): iOS has, Android missing (GAP-105 landed mTLS certs; the `.zip` package path is still deferred)
 - [x] **GAP-081** CSR enrollment (port 8446): Quick Connect ships in 0.9.0 (vc52)
-- [ ] **GAP-082** Video feeds (HLS / RTSP / SRT): iOS has, Android missing
+- [~] **GAP-082** Video feeds: ONVIF/RTSP camera viewer (`OnvifCameraScreen.kt`) + UAS video landed; generic HLS / SRT feed manager still missing
 - [ ] **GAP-083** Photo attachments with EXIF: iOS has, Android missing
-- [ ] **GAP-084** Plugin system: iOS has, Android missing
-- [ ] **GAP-085** ADS-B traffic display: iOS has, Android has scaffolding (`AdsbService.kt`)
+- [ ] **GAP-084** Plugin system: iOS has, Android has UI scaffolding only (`PluginDetailScreen.kt`)
+- [x] **GAP-085** ADS-B traffic display: `AdsbService.kt` wired into the map and the Layers aircraft toggle
+- [ ] **GAP-086** Routes + turn-by-turn navigation: iOS `Features/Navigation/` has planning, storage, map overlay, and voice guidance; Android has nothing. Android #192
+- [ ] **GAP-087** Breadcrumb trail / track recording: iOS `BreadcrumbTrailService.swift` + Settings toggle; Android has nothing. Android #193
+- [ ] **GAP-088** Elevation profile / LOS tool UI: core shipped in 0.42.1 (`data/terrain/ElevationProfile.kt`, PR #161) but no tool screen or map wiring reaches it. Android #153
+- [ ] **GAP-089** General geofence UI + alerts: core shipped in 0.42.1 (`data/geofence/Geofencing.kt`, PR #164) and `GeofenceOverlay` renders, but only the UAS home-ring uses it; no create-on-map flow and contact entry/exit alerts are not surfaced. Android #155
 
 ### P10: feature gaps (iOS-side)
 Features Android has that iOS may benefit from. Same triage.
 
-- [ ] **GAP-090** None known yet: to be filled in as discovered
+- [x] **GAP-090** Paired-radio visibility split + mesh link-state dot: landed via iOS PR #110 (2026-08-31), closing the two mesh gaps from Android #186
+- [ ] **GAP-091** Bonjour/mDNS LAN TAK server discovery: Android `TakNsdDiscovery.kt` + Add Server UI (#183); iOS plist groundwork is done, NWBrowser + ServersView wiring missing. iOS #111
+- [ ] **GAP-092** Meshtastic device config UI: Android `MeshDeviceSettingsScreen.kt` (GAP-109/109a) covers name, role, PLI interval, channel + LoRa preset; iOS `MeshtasticSettingsView` has role, rebroadcast, and position interval only. iOS #112; Android's own extension is #181
+- [ ] **GAP-093** Mesh↔server CoT relay (gateway mode): Android `domain/MeshServerRelay.kt`; iOS has nothing (`DittoMeshService` is the unrelated peer mesh). Off by default on both. iOS #113
 
 ### P11: Android closed-test feedback (P-E, May 2026)
 Real practitioner feedback from Android closed test. Some are bugs to fix, some are features to add. iOS may have the same issues, audit during port.
