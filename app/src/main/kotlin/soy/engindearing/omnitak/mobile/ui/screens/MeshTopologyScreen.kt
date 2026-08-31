@@ -310,7 +310,7 @@ private fun hopColor(hops: Int): Color = when {
     else -> Color(0xFFFF3B30)        // red — distant
 }
 
-private fun relativeTime(epochSeconds: Long, nowMs: Long = System.currentTimeMillis()): String {
+fun relativeTime(epochSeconds: Long, nowMs: Long = System.currentTimeMillis()): String {
     if (epochSeconds <= 0) return "—"
     val seconds = (nowMs / 1_000) - epochSeconds
     return when {
