@@ -10,7 +10,7 @@ When you add a new visual element, **reach for a token from this file first**. I
 
 All colors are sRGB. Hex values are the source of truth; per-platform constants below are the canonical mapping.
 
-### Surface palette — tactical dark theme
+### Surface palette: tactical dark theme
 
 | Token | Hex | iOS | Android | Purpose |
 |---|---|---|---|---|
@@ -34,10 +34,10 @@ Mirrors ATAK 2525C affiliation colors. Use these for marker tints, callout chips
 
 | Token | Hex | Affiliation |
 |---|---|---|
-| `affil.friendly` | `#2196F3` | Blue — friendly forces |
-| `affil.hostile` | `#F44336` | Red — hostile / threat |
-| `affil.neutral` | `#FFC107` | Yellow — neutral / unverified |
-| `affil.unknown` | `#9C27B0` | Purple — unknown affiliation |
+| `affil.friendly` | `#2196F3` | Blue, friendly forces |
+| `affil.hostile` | `#F44336` | Red, hostile / threat |
+| `affil.neutral` | `#FFC107` | Yellow, neutral / unverified |
+| `affil.unknown` | `#9C27B0` | Purple, unknown affiliation |
 
 ### Status / network counters
 
@@ -128,7 +128,7 @@ Both platforms use the system default font (SF Pro on iOS, Roboto on Android) fo
 
 ### iOS
 
-Tracked under [GAP-061](PARITY.md). Add a `Color+Tactical.swift` extension with a static `palette` namespace; replace inline `Color(hex:...)` calls site-by-site. Don't break existing screens in one PR — refactor by feature.
+Tracked under [GAP-061](PARITY.md). Add a `Color+Tactical.swift` extension with a static `palette` namespace; replace inline `Color(hex:...)` calls site-by-site. Don't break existing screens in one PR, refactor by feature.
 
 ### Android
 
@@ -142,6 +142,6 @@ When adding a token: **update this file first**, then propagate to both platform
 
 ## See also
 
-- [PARITY.md](PARITY.md) — full parity tracker
+- [PARITY.md](PARITY.md): full parity tracker
 - iOS color usage: `OmniTAKMobile/**/*.swift`
 - Android color usage: `app/src/main/kotlin/**/ui/theme/`, `app_assets/android/values/colors.xml`

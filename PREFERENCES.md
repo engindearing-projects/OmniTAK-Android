@@ -9,14 +9,14 @@ and [OmniTAK-Android](https://github.com/engindearing-projects/OmniTAK-Android/b
 
 Three on-ramps, all of them work today on both platforms:
 
-1. **Settings screen** — every key below is exposed in the in-app
+1. **Settings screen**: every key below is exposed in the in-app
    Settings UI.
-2. **`tak://` deep link** — paste or scan a QR of the form
-   `tak://com.atakmap.app/preference?key1=…&type1=…&value1=…`. Indexed
+2. **`tak://` deep link**: paste or scan a QR of the form
+   `tak://com.atakmap.app/preference?key1=...&type1=...&value1=...`. Indexed
    `keyN`/`typeN`/`valueN` groups, walked until the first missing
    `keyN`. ATAK / iTAK / TAKaware speak the same scheme so any portal
    already generating these for ATAK works against OmniTAK.
-3. **Data package `.zip`** — drop a `MANIFEST.xml` + `server.pref` +
+3. **Data package `.zip`**: drop a `MANIFEST.xml` + `server.pref` +
    `.p12` bundle into the app via Files (iOS) / share-sheet or
    `<app>/files/import/` (Android).
 
@@ -24,7 +24,7 @@ Three on-ramps, all of them work today on both platforms:
 > as the `configBundleUrl` preference. Set it once via deep link or
 > data-package, and every app launch fetches that URL and applies the
 > contents (either a TAK `.zip` data package or a `text/plain` body
-> of `tak://com.atakmap.app/preference?…` URLs, one per line, `#`
+> of `tak://com.atakmap.app/preference?...` URLs, one per line, `#`
 > comments allowed).
 
 `tak://` URL scheme verb summary:
@@ -32,14 +32,14 @@ Three on-ramps, all of them work today on both platforms:
 | Verb | Android | iOS | Notes |
 |---|---|---|---|
 | `/connect` (or bare query) | ✅ | ✅ | `host`, `port`, `proto`/`protocol`, `username`, `password`, `name`. |
-| `/import?url=…` | ✅ | ✅ | http(s) only. Downloads zip, runs data-package importer. |
-| `/preference?keyN=…&typeN=…&valueN=…` | ✅ | ✅ | Indexed groups. Unknown keys silently dropped. |
-| `/enroll?host=…&username=…&token=…` | partial (stages server stub) | ✅ full CSR flow | Full Android CSR enrollment is GAP-081, in flight. |
+| `/import?url=...` | ✅ | ✅ | http(s) only. Downloads zip, runs data-package importer. |
+| `/preference?keyN=...&typeN=...&valueN=...` | ✅ | ✅ | Indexed groups. Unknown keys silently dropped. |
+| `/enroll?host=...&username=...&token=...` | partial (stages server stub) | ✅ full CSR flow | Full Android CSR enrollment is GAP-081, in flight. |
 
 ## Android keys (`app/.../data/UserPrefs.kt`)
 
 Persisted via DataStore. ATAK-side aliases route to the same OmniTAK
-field — anything outside this table is ignored.
+field, anything outside this table is ignored.
 
 | OmniTAK key | Type | Default | ATAK aliases honoured |
 |---|---|---|---|
@@ -47,37 +47,37 @@ field — anything outside this table is ignored.
 | `team` | string (CYAN / one of 14 ATAK canonical colors) | `CYAN` | `locationTeam` |
 | `coordFormat` | enum (`LATLON_DECIMAL`, `LATLON_DMS`, `MGRS`, `UTM`) | `LATLON_DECIMAL` | `coord_display_format` |
 | `distanceUnit` | enum (`METRIC`, `IMPERIAL`) | `METRIC` | `rangeSystem` |
-| `mapProvider` | enum (`OSM_RASTER`, `SATELLITE_HINT`, `TOPO_HINT`, `WMTS_CUSTOM`) | `TOPO_HINT` | — |
-| `customTileUrl` | string (XYZ URL template `https://host/{z}/{x}/{y}.png`) | `""` | — |
-| `autoPublishMeshToTak` | boolean | `true` | — |
-| `meshNodesLayerVisible` | boolean | `true` | — |
-| `callsignCardVisible` | boolean | `true` | — |
-| `gridEnabled` | boolean | `false` | — |
-| `drawingsVisible` | boolean | `true` | — |
-| `aircraftVisible` | boolean | `true` | — |
-| `contactsVisible` | boolean | `true` | — |
-| `followMeActive` | boolean | `false` | — |
+| `mapProvider` | enum (`OSM_RASTER`, `SATELLITE_HINT`, `TOPO_HINT`, `WMTS_CUSTOM`) | `TOPO_HINT` |, |
+| `customTileUrl` | string (XYZ URL template `https://host/{z}/{x}/{y}.png`) | `""` |, |
+| `autoPublishMeshToTak` | boolean | `true` |, |
+| `meshNodesLayerVisible` | boolean | `true` |, |
+| `callsignCardVisible` | boolean | `true` |, |
+| `gridEnabled` | boolean | `false` |, |
+| `drawingsVisible` | boolean | `true` |, |
+| `aircraftVisible` | boolean | `true` |, |
+| `contactsVisible` | boolean | `true` |, |
+| `followMeActive` | boolean | `false` |, |
 | `pliIntervalSecs` | int (5–600) | `30` | `dispatchLocationCotInterval`, `locationReportingInterval` |
-| `configBundleUrl` | string (URL) | `""` | — |
-| `hideSelfFromMeshContacts` | boolean | `true` | — |
-| `autoSyncCallsignToMesh` | boolean | `true` | — |
-| `preferMeshFixForSelfPpli` | boolean | `true` | — |
-| `selfMeshFixFreshnessSecs` | int (5–600) | `60` | — |
+| `configBundleUrl` | string (URL) | `""` |, |
+| `hideSelfFromMeshContacts` | boolean | `true` |, |
+| `autoSyncCallsignToMesh` | boolean | `true` |, |
+| `preferMeshFixForSelfPpli` | boolean | `true` |, |
+| `selfMeshFixFreshnessSecs` | int (5–600) | `60` |, |
 
 **Step 1 of unified identity** (v0.5.0): `hideSelfFromMeshContacts` +
 `autoSyncCallsignToMesh` make the operator's mesh node and TAK client
-wear the same callsign and dedup on display — fixes the TAK_TRACKER
+wear the same callsign and dedup on display, fixes the TAK_TRACKER
 "see yourself twice" pain.
 
 **Step 2 of unified identity** (current): `preferMeshFixForSelfPpli`
 makes the operator's outbound PPLI source the lat/lon from their own
 mesh node instead of the phone GPS, when one is connected and reporting
 fresh fixes. CoT goes out under the operator's TAK identity
-(`<contact callsign=…>`) with `geopointsrc="Meshtastic"` so peers see
+(`<contact callsign=...>`) with `geopointsrc="Meshtastic"` so peers see
 the right provenance. Falls back to phone GPS when the mesh node has
 no position or its `last_heard` is older than `selfMeshFixFreshnessSecs`.
 Matching policy: case-insensitive equality between TAK callsign and
-the node's short *or* long name — which is reliable in practice
+the node's short *or* long name, which is reliable in practice
 because `autoSyncCallsignToMesh` pushes that callsign onto the radio.
 
 ### Android Meshtastic device-config keys
@@ -94,7 +94,7 @@ via the Mesh tab → **Push to device** button:
 | `channel0Name` | string | Primary channel name |
 | `channel0Preset` | enum (`LONG_FAST`, `LONG_SLOW`, `MEDIUM_FAST`, `MEDIUM_SLOW`, `SHORT_FAST`, `SHORT_SLOW`) | LoRa modem preset |
 
-These are *not* yet writable via `tak://preference` — they're
+These are *not* yet writable via `tak://preference`, they're
 device-side config, not app prefs. If the user need is "push PLI
 interval to a whole event from the portal," that lands as part of
 GAP-108 (server-driven config).
@@ -109,13 +109,13 @@ Backed by `UserDefaults`. Same ATAK-side aliases honoured.
 | `userName` | string | `Operator` | `operator` |
 | `unitSystem` | string (`Metric`, `Imperial`) | `Metric` | `distanceUnit`, `rangeSystem` |
 | `mgrsGridEnabled` | boolean | `false` | `gridEnabled` |
-| `mgrsGridDensity` | string (`100km`, `10km`, `1km`) | `1km` | — |
-| `showMGRSLabels` | boolean | `true` | — |
+| `mgrsGridDensity` | string (`100km`, `10km`, `1km`) | `1km` |, |
+| `showMGRSLabels` | boolean | `true` |, |
 | `coordinateDisplayFormat` | string (`DD`, `DM`, `DMS`, `MGRS`, `UTM`, `BNG`) | `MGRS` | `coordFormat`, `coord_display_format` |
-| `breadcrumbTrailsEnabled` | boolean | `true` | — |
-| `trailMaxLength` | int (10–500) | `100` | — |
-| `trailColorName` | string (`cyan`, `green`, `orange`, `red`, `blue`) | `cyan` | — |
-| `appMode` | string (`tactical`, `fire_rescue`, `sar`, `civilian`) | `tactical` | — |
+| `breadcrumbTrailsEnabled` | boolean | `true` |, |
+| `trailMaxLength` | int (10–500) | `100` |, |
+| `trailColorName` | string (`cyan`, `green`, `orange`, `red`, `blue`) | `cyan` |, |
+| `appMode` | string (`tactical`, `fire_rescue`, `sar`, `civilian`) | `tactical` |, |
 
 ### iOS Meshtastic device-config keys
 
@@ -126,7 +126,7 @@ Stored in `MeshDeviceConfigStore` (UserDefaults), pushed via the same
 |---|---|---|
 | `mesh.device.longName` | string | Device long name |
 | `mesh.device.shortName` | string | Short name (max 4 chars) |
-| `mesh.device.role` | enum | `client`, `router`, `tracker`, `tak`, … |
+| `mesh.device.role` | enum | `client`, `router`, `tracker`, `tak`, ... |
 | `mesh.device.pliSecs` | int | PLI broadcast interval |
 | `mesh.device.ch0.name` | string | Primary channel name |
 | `mesh.device.ch0.preset` | enum | LoRa modem preset |
@@ -135,12 +135,12 @@ Stored in `MeshDeviceConfigStore` (UserDefaults), pushed via the same
 
 - **Parity is the design intent.** Where naming differs between
   `UserPrefs` (Android Kotlin) and `@AppStorage` (iOS Swift), the ATAK
-  alias column above is the canonical wire name — use those in any
+  alias column above is the canonical wire name, use those in any
   portal-generated QR code so it works against both.
 - **Boolean coercion is permissive.** `true`/`1`/`yes`/`on` all parse
   truthy; `false`/`0`/`no`/`off` all parse falsy.
-- **Unknown keys are silent.** A `tak://preference?key1=displayRed&…`
-  payload generated for full ATAK still works — OmniTAK accepts the
+- **Unknown keys are silent.** A `tak://preference?key1=displayRed&...`
+  payload generated for full ATAK still works, OmniTAK accepts the
   link, applies what it knows, and drops the rest.
 - **Server credentials are not preferences.** Use `/connect`, `/enroll`,
   or a data package to onboard a server. The `host`/`port`/`cert`
@@ -151,5 +151,5 @@ Stored in `MeshDeviceConfigStore` (UserDefaults), pushed via the same
 | Gap | What it adds |
 |---|---|
 | GAP-081 | Full CSR enrollment on Android (port 8446). iOS has it today; Android currently stages the server stub when `/enroll` fires. |
-| GAP-108 | Server-pushed remote config — operator publishes PLI intervals, basemap defaults, callsign rules, etc. from OpenTAKserver to every connected EUD. |
+| GAP-108 | Server-pushed remote config, operator publishes PLI intervals, basemap defaults, callsign rules, etc. from OpenTAKserver to every connected EUD. |
 | GAP-109a (iOS) | Push-to-device write path for Meshtastic admin messages. Shipped on Android; iOS pending. |

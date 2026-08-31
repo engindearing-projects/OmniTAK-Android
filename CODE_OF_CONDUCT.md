@@ -17,4 +17,4 @@ Reports are kept confidential. Project maintainers may issue warnings, temporary
 
 ## Scope
 
-This Code of Conduct applies to all project spaces — issue tracker, pull requests, discussions, chat, conferences — and to anyone representing the project in public.
+This Code of Conduct applies to all project spaces, issue tracker, pull requests, discussions, chat, conferences, and to anyone representing the project in public.

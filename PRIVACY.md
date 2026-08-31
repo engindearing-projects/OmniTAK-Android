@@ -1,4 +1,4 @@
-# OmniTAK Mobile — Privacy Policy
+# OmniTAK Mobile: Privacy Policy
 
 _Last updated: 2026-04-25_
 
@@ -36,7 +36,7 @@ The app only initiates outbound connections to endpoints you configure:
 | Meshtastic radio (you configure) | Mesh packets per the Meshtastic protocol | While connected to a radio you configured |
 | Map tile servers (defaults: OpenStreetMap, CartoDB) | Map tile requests for the rendered viewport | While the map is visible |
 
-We — Engindearing — operate none of these endpoints. We never receive any of
+We, Engindearing, operate none of these endpoints. We never receive any of
 your data.
 
 ## Permissions the app requests
@@ -59,8 +59,8 @@ knowingly handle any data from children under 13.
 
 ## Open source
 
-OmniTAK Mobile is licensed under Apache 2.0. The full source — including all
-network code — is publicly auditable at:
+OmniTAK Mobile is licensed under Apache 2.0. The full source, including all
+network code, is publicly auditable at:
 
 <https://github.com/engindearing-projects/OmniTAK-Android>
 

@@ -1,10 +1,10 @@
-# example-adsb — the ADS-B reference plugin
+# example-adsb: the ADS-B reference plugin
 
 `:plugins:example-adsb` is the canonical OmniTAK plugin. It shows the minimal
 real-world shape: one HTTP client, one map layer, its own settings, toggle-gated.
 
 It implements [`OmniTAKPlugin`](../plugin-sdk/src/main/kotlin/soy/engindearing/omnitak/plugin/OmniTAKPlugin.kt)
-and depends on **only** `:plugins:plugin-sdk` + MapLibre — never on `:app`.
+and depends on **only** `:plugins:plugin-sdk` + MapLibre, never on `:app`.
 
 ## What's inside
 

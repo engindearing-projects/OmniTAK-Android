@@ -8,7 +8,7 @@ Email **j@engindearing.soy** with:
 
 - A description of the vulnerability
 - Steps to reproduce, or a proof-of-concept
-- Affected version(s) — git commit hash or App Store build number
+- Affected version(s): git commit hash or App Store build number
 - Whether you'd like public credit if a fix is published
 
 We aim to respond within 5 business days. Coordinated disclosure timelines are negotiated case-by-case but generally do not exceed 90 days.
@@ -22,7 +22,7 @@ In scope:
 
 Out of scope:
 
-- Vulnerabilities in third-party dependencies (report upstream — MapLibre, AndroidX, kotlinx.serialization)
+- Vulnerabilities in third-party dependencies (report upstream: MapLibre, AndroidX, kotlinx.serialization)
 - Issues in operator-deployed TAK Servers
 - Social engineering of OmniTAK contributors
 
