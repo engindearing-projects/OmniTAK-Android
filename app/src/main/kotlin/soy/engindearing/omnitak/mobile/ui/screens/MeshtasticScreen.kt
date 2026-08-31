@@ -766,6 +766,7 @@ private fun NodeRow(node: MeshNode, onClick: () -> Unit = {}) {
             )
             Text(
                 "id ${node.idHex}" +
+                    " · ${relativeTime(node.lastHeardEpoch)}" +
                     (node.snr?.let { " · SNR ${"%.1f".format(it)}" } ?: "") +
                     (node.hopDistance?.let { " · hop $it" } ?: ""),
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
