@@ -664,11 +664,20 @@ private suspend fun sendChatInner(
             .getOrDefault(false)
     }
 
-    // Delivered if EITHER transport accepted it — server CoT or
-    // portnum-72 mesh broadcast. FAILED now means both paths failed.
+    // Ditto peer mesh: broadcast chat also fans onto the peer mesh inside
+    // ServerManager.sendCoT. When the mesh is up the message is in the
+    // replicated store and reaches every peer in range — the same lesson the
+    // LoRa path above already learned: rendering FAILED because no *server*
+    // took it is a lie in the flagship serverless case. DMs (serverId !=
+    // null) never ride the mesh, so they get no credit here.
+    val dittoAccepted = convo.serverId == null &&
+        app.dittoMesh.state.value is soy.engindearing.omnitak.mobile.domain.DittoMeshService.State.Syncing
+
+    // Delivered if ANY transport accepted it — server CoT, portnum-72 LoRa
+    // broadcast, or the Ditto peer mesh. FAILED now means every path failed.
     app.chatStore.updateMessageStatus(
         conversationId = convo.id,
         messageId = generated.messageId,
-        status = if (sent || meshSent) ChatStatus.SENT else ChatStatus.FAILED,
+        status = if (sent || meshSent || dittoAccepted) ChatStatus.SENT else ChatStatus.FAILED,
     )
 }
