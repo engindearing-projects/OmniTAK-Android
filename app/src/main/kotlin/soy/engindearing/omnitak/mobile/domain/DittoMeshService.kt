@@ -34,7 +34,7 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * Peer-to-peer CoT sync over Ditto — the "no server, no internet" transport.
  * Android port of iOS `DittoMeshService.swift`; the two must stay
- * wire-identical (same document schema, same Ditto SDK version — 5.0.3,
+ * wire-identical (same document schema, same Ditto SDK version — 5.1.0,
  * pinned in build.gradle.kts and in iOS's scripts/add_ditto_mesh.rb).
  *
  * OmniTAK already has two mesh paths, but both are LoRa: Meshtastic and

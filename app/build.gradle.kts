@@ -4,7 +4,7 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
-    kotlin("plugin.serialization") version "2.0.21"
+    kotlin("plugin.serialization") version "2.3.21"
 }
 
 android {
@@ -109,7 +109,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions { jvmTarget = "17" }
+    kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }
 
     buildFeatures {
         compose = true
@@ -178,7 +178,7 @@ dependencies {
     // Pinned to the EXACT version iOS pins (scripts/add_ditto_mesh.rb): Ditto
     // peers must run compatible protocol versions to sync, and the two
     // platforms have to mesh with each other — they move together, deliberately.
-    implementation("com.ditto:ditto-kotlin:5.0.3")
+    implementation("com.ditto:ditto-kotlin:5.1.0")
 
     // EncryptedSharedPreferences for TAK server passwords + .p12 passphrases
     // (Keystore-backed AES256-GCM). The server-list JSON in DataStore keeps
