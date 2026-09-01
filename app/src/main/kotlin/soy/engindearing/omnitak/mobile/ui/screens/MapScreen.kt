@@ -1436,6 +1436,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 // there). Hamburger goes to Settings.
                 onServerTap = { onOpenTab("servers") },
                 onMenuTap = { onOpenTab("settings") },
+                showDetails = userPrefs.topInfoBarVisible,
                 // One flag per enabled server → "N/M ●●●" multi-server badge.
                 serverConnectedFlags = allServers
                     .filter { it.enabled }

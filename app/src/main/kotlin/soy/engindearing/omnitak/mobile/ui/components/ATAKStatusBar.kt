@@ -51,7 +51,25 @@ fun ATAKStatusBar(
     // "N/M ●●●" cluster so the operator can see at a glance how many of
     // their servers are live. Empty/size-1 falls back to the single dot.
     serverConnectedFlags: List<Boolean> = emptyList(),
+    // "Top info bar" settings toggle. False collapses this down to just the
+    // connection dot — the dot itself is never hidden by the toggle, only
+    // the server name / counters / GPS / clock / menu around it.
+    showDetails: Boolean = true,
 ) {
+    if (!showDetails) {
+        Row(
+            modifier = modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (serverConnectedFlags.size > 1) {
+                MultiServerIndicator(flags = serverConnectedFlags)
+            } else {
+                ConnectionDot(isConnected = isConnected)
+            }
+        }
+        return
+    }
+
     Row(
         modifier = modifier
             .fillMaxWidth()
