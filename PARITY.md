@@ -86,6 +86,9 @@ Features Android has that iOS may benefit from. Same triage.
 - [ ] **GAP-091** Bonjour/mDNS LAN TAK server discovery: Android `TakNsdDiscovery.kt` + Add Server UI (#183); iOS plist groundwork is done, NWBrowser + ServersView wiring missing. iOS #111
 - [ ] **GAP-092** Meshtastic device config UI: Android `MeshDeviceSettingsScreen.kt` (GAP-109/109a) covers name, role, PLI interval, channel + LoRa preset; iOS `MeshtasticSettingsView` has role, rebroadcast, and position interval only. iOS #112; Android's own extension is #181
 - [ ] **GAP-093** Mesh↔server CoT relay (gateway mode): Android `domain/MeshServerRelay.kt`; iOS has nothing (`DittoMeshService` is the unrelated peer mesh). Off by default on both. iOS #113
+- [ ] **GAP-094** Meshtastic BLE auto-reconnect + background survival: Android `MeshtasticManager` retries the last radio every 20s and holds the FGS while a reconnect is pending so Doze can't stall it (#198, contributed); iOS needs the CoreBluetooth idiom instead (standing pending connect + state restoration). iOS #119
+- [ ] **GAP-095** Node list last-seen age: Android `NodeRow` shows `relativeTime(lastHeardEpoch)` beside id/SNR/hops (#198, contributed); iOS node rows lack it. iOS #120
+- [ ] **GAP-096** Map toolbar auto-hide + top info bar toggle: Android floating-overlay toolbar (hide/show never re-layouts the map) + status bar collapse-to-dot, both prefs default on (#198, contributed); port the spirit, audit against the ToolsLauncherSheet direction rather than 1:1. iOS #121
 
 ### P11: Android closed-test feedback (P-E, May 2026)
 Real practitioner feedback from Android closed test. Some are bugs to fix, some are features to add. iOS may have the same issues, audit during port.
