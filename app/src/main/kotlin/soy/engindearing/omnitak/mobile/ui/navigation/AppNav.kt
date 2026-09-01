@@ -382,6 +382,13 @@ fun AppNav() {
                     launchSingleTop = true
                 }
             },
+            onPeerMesh = {
+                showToolsLauncher = false
+                nav.navigate("peermesh") {
+                    popUpTo(nav.graph.startDestinationId) { saveState = true }
+                    launchSingleTop = true
+                }
+            },
             onCustomize = {
                 showToolsLauncher = false
                 navigateTo("map")

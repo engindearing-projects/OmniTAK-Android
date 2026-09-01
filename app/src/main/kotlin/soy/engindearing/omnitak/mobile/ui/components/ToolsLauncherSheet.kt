@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.FlightTakeoff
+import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Public
@@ -55,6 +56,7 @@ fun ToolsLauncherSheet(
     onLasso: () -> Unit,
     onUAS: () -> Unit = {},
     onOnvifCamera: () -> Unit = {},
+    onPeerMesh: () -> Unit = {},
     onGoToCoordinate: () -> Unit = {},
     onCustomize: () -> Unit = {},
     onMapOverlays: () -> Unit = {},
@@ -128,6 +130,18 @@ fun ToolsLauncherSheet(
                 title = "ONVIF Camera (PTZ)",
                 subtitle = "Connect a PTZ IP camera — live RTSP feed + pan/tilt/zoom control",
                 onClick = onOnvifCamera,
+            )
+
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 76.dp),
+                color = Color.White.copy(alpha = 0.08f),
+            )
+
+            ToolsRow(
+                icon = { Icon(Icons.Filled.Hub, contentDescription = null, tint = Color(0xFFFF9F0A)) },
+                title = "Peer Mesh",
+                subtitle = "Phone-to-phone CoT sync over Bluetooth and Wi-Fi — no server needed",
+                onClick = onPeerMesh,
             )
 
             HorizontalDivider(
