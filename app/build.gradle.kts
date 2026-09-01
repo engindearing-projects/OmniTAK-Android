@@ -73,6 +73,18 @@ android {
         getByName("release") {
             isMinifyEnabled = true
             isShrinkResources = true
+            // mgrs-android ships template consumer rules containing
+            // -dontobfuscate plus a global `-keep public class *` — one
+            // library's file silently turning off renaming (and most
+            // shrinking) for the ENTIRE app; Play Console flags the result
+            // as "Obfuscation 0%". Ignore that library's rules — it's
+            // pure-Java math we only call directly, so R8's call tracing
+            // keeps what's used without any of its keeps.
+            optimization {
+                keepRules {
+                    ignoreFrom("mil.nga.mgrs:mgrs-android")
+                }
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
