@@ -389,7 +389,20 @@ class DittoMeshService(
             val license = str(BuildConfig.DITTO_OFFLINE_LICENSE)
             if (key != null && license != null) return Identity.SharedKey(db, key, license)
             val token = str(BuildConfig.DITTO_TOKEN)
-            val url = str(BuildConfig.DITTO_URL)
+            // Mirror iOS: accept the bare host exactly as the Ditto portal
+            // shows it and add the scheme here. iOS is FORCED into this shape
+            // (xcconfig treats "//" as a comment, so an https:// value
+            // truncates to "https:"); Android reads local.properties which has
+            // no such trap, but both platforms must accept the same values.
+            // A lone scheme remnant ("https:") is that truncation artifact —
+            // treat it as unconfigured rather than dialing a garbage host.
+            val url = str(BuildConfig.DITTO_URL)?.let { raw ->
+                when {
+                    raw.matches(Regex("^[A-Za-z][A-Za-z0-9+.-]*:$")) -> null
+                    "://" in raw -> raw
+                    else -> "https://$raw"
+                }
+            }
             if (token != null && url != null) return Identity.Playground(db, url, token)
             return null
         }
