@@ -1,7 +1,19 @@
 package soy.engindearing.omnitak.mobile.ui.navigation
 
 import android.view.WindowManager
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.ui.graphics.Color
@@ -11,17 +23,21 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.OmniTAKApp
 import soy.engindearing.omnitak.mobile.data.UserPrefs
@@ -96,6 +112,27 @@ fun AppNav() {
     var showAddPalette by remember { mutableStateOf(false) }
     var showKmlOverlays by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
+
+    // Auto-hide toolbar (map tab only, default on) — favors map real
+    // estate. Shows on entering the map tab, hides after 3s; tapping the
+    // reveal strip at the bottom edge (added below, over the map content)
+    // bumps revealTrigger to show it again for another 3s. Every other
+    // tab always shows the toolbar unconditionally — it's the only way to
+    // navigate elsewhere, so hiding it there would strand the operator.
+    var toolbarVisible by remember { mutableStateOf(true) }
+    var revealTrigger by remember { mutableIntStateOf(0) }
+    val autoHideActive = prefs.autoHideToolbar && currentRoute == "map"
+    LaunchedEffect(autoHideActive, editing, revealTrigger) {
+        if (autoHideActive && !editing) {
+            toolbarVisible = true
+            delay(3_000)
+            toolbarVisible = false
+        } else {
+            // Off the map tab, feature disabled, or mid-customize edit —
+            // always visible, no hide timer.
+            toolbarVisible = true
+        }
+    }
 
     fun navigateTo(route: String) {
         nav.navigate(route) {
@@ -209,41 +246,60 @@ fun AppNav() {
         else -> Color(0xFF5A5F66)
     }
 
+    // Hoisted so it can render in two different places without repeating
+    // ten-odd parameters: reserving normal layout space in Scaffold's
+    // bottomBar on every non-map screen (so it doesn't cover their
+    // content), or floating as a non-space-reserving overlay on the map
+    // (below) so hiding/showing it never resizes — and therefore never
+    // re-layouts — the map surface underneath.
+    val toolbarContent: @Composable () -> Unit = {
+        CustomToolbar(
+            items = barItems,
+            currentRoute = currentRoute,
+            editing = editing,
+            coachmarkVisible = coachmarkVisible,
+            canAdd = workingIds.size < ToolbarCatalog.MAX_ITEMS,
+            canRemove = workingIds.size > ToolbarCatalog.MIN_ITEMS,
+            statusDots = mapOf("mesh" to meshDot),
+            onSelect = { dispatch(it) },
+            onEnterEdit = { enterEdit() },
+            onDoneEdit = {
+                editing = false
+                persistToolbar()
+            },
+            onRemove = { item ->
+                val next = workingIds.toMutableList().apply { remove(item.id) }
+                if (next.size >= ToolbarCatalog.MIN_ITEMS && ToolbarCatalog.hasDestination(next)) {
+                    workingIds.clear()
+                    workingIds.addAll(next)
+                }
+            },
+            onReorder = { from, to ->
+                if (from in workingIds.indices && to in workingIds.indices && from != to) {
+                    workingIds.add(to, workingIds.removeAt(from))
+                }
+            },
+            onAddTapped = { showAddPalette = true },
+            onDismissCoachmark = {
+                scope.launch { app.userPrefsStore.setToolbarCoachmarkSeen(true) }
+            },
+        )
+    }
+
     Scaffold(
         bottomBar = {
-            CustomToolbar(
-                items = barItems,
-                currentRoute = currentRoute,
-                editing = editing,
-                coachmarkVisible = coachmarkVisible,
-                canAdd = workingIds.size < ToolbarCatalog.MAX_ITEMS,
-                canRemove = workingIds.size > ToolbarCatalog.MIN_ITEMS,
-                statusDots = mapOf("mesh" to meshDot),
-                onSelect = { dispatch(it) },
-                onEnterEdit = { enterEdit() },
-                onDoneEdit = {
-                    editing = false
-                    persistToolbar()
-                },
-                onRemove = { item ->
-                    val next = workingIds.toMutableList().apply { remove(item.id) }
-                    if (next.size >= ToolbarCatalog.MIN_ITEMS && ToolbarCatalog.hasDestination(next)) {
-                        workingIds.clear()
-                        workingIds.addAll(next)
-                    }
-                },
-                onReorder = { from, to ->
-                    if (from in workingIds.indices && to in workingIds.indices && from != to) {
-                        workingIds.add(to, workingIds.removeAt(from))
-                    }
-                },
-                onAddTapped = { showAddPalette = true },
-                onDismissCoachmark = {
-                    scope.launch { app.userPrefsStore.setToolbarCoachmarkSeen(true) }
-                },
-            )
+            // The map route renders its own floating overlay copy below —
+            // nothing here, so Scaffold reserves zero bottom inset for it
+            // and the map always gets the full screen regardless of
+            // toolbar visibility. Every other route keeps the normal
+            // space-reserving bar so the toolbar never overlaps their
+            // (non-map, potentially scrollable-to-the-bottom) content.
+            if (currentRoute != "map") {
+                toolbarContent()
+            }
         },
     ) { inner: PaddingValues ->
+        Box(Modifier.fillMaxSize()) {
         NavHost(
             navController = nav,
             startDestination = "map",
@@ -351,6 +407,41 @@ fun AppNav() {
                     onBack = { nav.popBackStack() },
                 )
             }
+        }
+
+        // Floating overlay copy of the toolbar — map route only. Sits on
+        // top of the map instead of sharing layout space with it, so the
+        // auto-hide animation never changes the map's measured size (that
+        // resize was itself the visible "jump" — a translucent bar
+        // overlapping the map at the edge reads as intentional chrome,
+        // not a glitch).
+        if (currentRoute == "map") {
+            AnimatedVisibility(
+                visible = toolbarVisible,
+                modifier = Modifier.align(Alignment.BottomCenter),
+                enter = fadeIn(tween(150)) + slideInVertically(tween(150)) { it },
+                exit = fadeOut(tween(150)) + slideOutVertically(tween(150)) { it },
+            ) {
+                toolbarContent()
+            }
+        }
+
+        // Reveal strip — invisible tap target pinned to the bottom edge,
+        // live only while the toolbar is auto-hidden. No visual affordance
+        // by design: it IS the bit of extra map the feature exists to
+        // reveal, so drawing a hint over it would defeat the point.
+        if (autoHideActive && !toolbarVisible) {
+            Box(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(40.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { revealTrigger++ },
+            )
+        }
         }
     }
 

@@ -682,6 +682,52 @@ fun SettingsScreen(
                     onCheckedChange = { v -> mutate { it.copy(keepScreenOn = v) } },
                 )
             }
+            // Auto-hide toolbar — map tab only
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Auto-hide toolbar",
+                        color = MaterialTheme.colorScheme.onBackground,
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Text(
+                        "On the map tab, hide the bottom toolbar after 3s to show more map. " +
+                            "Tap the bottom edge to bring it back",
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Switch(
+                    checked = prefs.autoHideToolbar,
+                    onCheckedChange = { v -> mutate { it.copy(autoHideToolbar = v) } },
+                )
+            }
+            // Top info bar — server name, msg counters, GPS accuracy, clock
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Top info bar",
+                        color = MaterialTheme.colorScheme.onBackground,
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Text(
+                        "Show server name, message counters, GPS accuracy, and the clock " +
+                            "above the map. The small TAK server connection dot stays visible either way",
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Switch(
+                    checked = prefs.topInfoBarVisible,
+                    onCheckedChange = { v -> mutate { it.copy(topInfoBarVisible = v) } },
+                )
+            }
             // #178 — staleness overlay: age label + fade on contact pins
             Row(
                 verticalAlignment = Alignment.CenterVertically,
