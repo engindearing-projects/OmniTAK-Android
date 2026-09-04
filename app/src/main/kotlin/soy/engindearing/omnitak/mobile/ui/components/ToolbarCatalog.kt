@@ -5,6 +5,7 @@ import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.FlightTakeoff
 import androidx.compose.material.icons.filled.Gesture
 import androidx.compose.material.icons.filled.Handyman
+import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Settings
@@ -79,6 +80,7 @@ object ToolbarCatalog {
         BarItem("chat", "Chat", Icons.AutoMirrored.Filled.Chat, cChat, BarKind.Destination("chat")),
         BarItem("servers", "Servers", Icons.Filled.Storage, cServers, BarKind.Destination("servers")),
         BarItem("mesh", "Mesh", Icons.Filled.Router, cMesh, BarKind.Destination("mesh")),
+        BarItem("peermesh", "Peer Mesh", Icons.Filled.Hub, cMesh, BarKind.Destination("peermesh")),
         BarItem("settings", "Settings", Icons.Filled.Settings, cSettings, BarKind.Destination("settings")),
         BarItem("uas", "Vehicles", Icons.Filled.FlightTakeoff, cChat, BarKind.Destination("uas")),
         BarItem("onvif", "Camera", Icons.Filled.Videocam, cCamera, BarKind.Destination("onvif")),

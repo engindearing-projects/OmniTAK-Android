@@ -56,7 +56,12 @@ object CotBuilders {
         // If the original parsed XML is around, re-wrap it with the
         // injected <dest> elements. Otherwise synthesize a minimal CoT.
         val now = event.timeIso ?: nowIso()
-        val stale = event.staleIso ?: isoOffset(120)
+        // One hour, matching iOS's marker staleTime. This was 120 seconds,
+        // which made every locally-dropped marker evaporate from all peers'
+        // maps (server AND mesh) two minutes after drop — found live
+        // 2026-08-31 chasing "markers never arrive" during peer-mesh
+        // verification: they arrived, then staleness eviction ate them.
+        val stale = event.staleIso ?: isoOffset(3600)
         val detail = buildString {
             append("<detail>")
             append("<contact")
