@@ -89,6 +89,7 @@ Features Android has that iOS may benefit from. Same triage.
 - [ ] **GAP-094** Meshtastic BLE auto-reconnect + background survival: Android `MeshtasticManager` retries the last radio every 20s and holds the FGS while a reconnect is pending so Doze can't stall it (#198, contributed); iOS needs the CoreBluetooth idiom instead (standing pending connect + state restoration). iOS #119
 - [ ] **GAP-095** Node list last-seen age: Android `NodeRow` shows `relativeTime(lastHeardEpoch)` beside id/SNR/hops (#198, contributed); iOS node rows lack it. iOS #120
 - [ ] **GAP-096** Map toolbar auto-hide + top info bar toggle: Android floating-overlay toolbar (hide/show never re-layouts the map) + status bar collapse-to-dot, both prefs default on (#198, contributed); port the spirit, audit against the ToolsLauncherSheet direction rather than 1:1. iOS #121
+- [ ] **GAP-097** Per-server Marti/Mission REST API port: iOS `TAKServer.secureAPIPort` (nil = 8443) feeds `TAKAPIConfiguration`, carried by `ProfileServer`, editable as "Marti API Port" in the server edit sheet (iOS #114, reported by zeidlos for an OpenTAK host with 8443 taken). Android `TakRestApiClient.SECURE_API_PORT` is still a constant; needs the same field on `TakServer` + Add/Edit Server UI. Android #199
 
 ### P11: Android closed-test feedback (P-E, May 2026)
 Real practitioner feedback from Android closed test. Some are bugs to fix, some are features to add. iOS may have the same issues, audit during port.
