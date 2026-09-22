@@ -34,30 +34,38 @@ object ChatXml {
         val now = CotXml.isoMillis(nowMs)
         val stale = CotXml.isoMillis(nowMs + 3600_000L)
 
-        val chatroom: String
+        // ATAK keys a 1:1 thread by the *recipient UID*: `__chat id`, the
+        // `chatgrp id`/`uid1`, `remarks to` and the event uid all carry it;
+        // `chatroom` and `<marti><dest>` carry the human-readable callsign.
+        // Sending the callsign as the id made ATAK open a "group" named
+        // after itself instead of a thread with us (iOS #125, same bug here).
+        val chatroom: String        // display name of the room
+        val conversationId: String  // what the receiver keys the thread on
         val marti: String
         if (isGroup) {
             chatroom = ChatRoom.ATAK_CHATROOM
+            conversationId = chatroom
             marti = ""
         } else {
             chatroom = recipientCallsign ?: ChatRoom.ATAK_CHATROOM
+            conversationId = recipientUid ?: chatroom
             marti = if (recipientCallsign != null) {
                 "<marti><dest callsign=\"${escape(recipientCallsign)}\"/></marti>"
             } else {
                 ""
             }
         }
-        val chatgrpUid1 = if (isGroup) chatroom else (recipientUid ?: chatroom)
 
         val detail = buildString {
             append("<detail>")
             append(
-                "<__chat id=\"${escape(chatroom)}\" chatroom=\"${escape(chatroom)}\" " +
-                    "senderCallsign=\"${escape(senderCallsign)}\" groupOwner=\"false\">"
+                "<__chat id=\"${escape(conversationId)}\" chatroom=\"${escape(chatroom)}\" " +
+                    "senderCallsign=\"${escape(senderCallsign)}\" groupOwner=\"false\" " +
+                    "messageId=\"${escape(messageId)}\">"
             )
             append(
-                "<chatgrp uid0=\"${escape(senderUid)}\" uid1=\"${escape(chatgrpUid1)}\" " +
-                    "id=\"${escape(chatroom)}\"/>"
+                "<chatgrp uid0=\"${escape(senderUid)}\" uid1=\"${escape(conversationId)}\" " +
+                    "id=\"${escape(conversationId)}\"/>"
             )
             append("</__chat>")
             append(
@@ -65,14 +73,14 @@ object ChatXml {
                     "parent_callsign=\"${escape(senderCallsign)}\" relation=\"p-p\"/>"
             )
             append(
-                "<remarks source=\"BAO.F.OMNITAK.${escape(senderUid)}\" to=\"${escape(chatroom)}\" time=\"$now\">" +
+                "<remarks source=\"BAO.F.OMNITAK.${escape(senderUid)}\" to=\"${escape(conversationId)}\" time=\"$now\">" +
                     escape(text) + "</remarks>"
             )
             append(marti)
             append("</detail>")
         }
         val xml = CotXml.buildEvent(
-            uid = "GeoChat.$senderUid.$chatroom.$messageId",
+            uid = "GeoChat.$senderUid.$conversationId.$messageId",
             type = "b-t-f",
             how = "h-g-i-g-o",
             lat = lat, lon = lon, hae = hae,
