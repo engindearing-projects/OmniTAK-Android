@@ -382,11 +382,29 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 .apply(m, kmlOverlays, app.kmlOverlayStore)
         }
     }
-    // Re-apply MBTiles raster overlays when the set changes.
-    LaunchedEffect(mbtilesOverlays) {
-        mapboxMap?.getStyle { style ->
+    // Re-apply MBTiles raster overlays when the set changes, and re-clamp
+    // the camera's max zoom to whatever the active basemap + visible
+    // MBTiles overlays actually serve (#206 — a ceiling above a provider's
+    // real max makes MapLibre request tiles that don't exist, which reads
+    // as "the map goes blank" when the operator zooms in). Also keyed on
+    // the basemap provider/custom URL so a basemap swap re-widens (or
+    // narrows) the clamp to account for whatever MBTiles overlays are
+    // CURRENTLY visible — TacticalMap's own style-loaded clamp can't see
+    // the overlay list, so this effect is the authoritative, full
+    // recompute (basemap max AND overlay maxes together).
+    LaunchedEffect(mbtilesOverlays, userPrefs.mapProvider, userPrefs.customTileUrl) {
+        val map = mapboxMap
+        map?.getStyle { style ->
             soy.engindearing.omnitak.mobile.ui.components.KmlOverlayRenderer
                 .applyMBTiles(style, mbtilesOverlays, app.mbtilesOverlayStore)
+        }
+        if (map != null) {
+            val basemapMax = soy.engindearing.omnitak.mobile.ui.components
+                .basemapMaxZoomFor(userPrefs.mapProvider).toDouble()
+            val mbtilesMaxes = mbtilesOverlays.filter { it.visible }.map { it.maxZoom.toDouble() }
+            map.setMaxZoomPreference(
+                soy.engindearing.omnitak.mobile.ui.components.zoomClampFor(basemapMax, mbtilesMaxes),
+            )
         }
     }
     // Re-apply single-image raster overlays when the set changes.

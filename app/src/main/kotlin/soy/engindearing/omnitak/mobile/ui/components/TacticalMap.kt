@@ -207,6 +207,16 @@ fun TacticalMap(
                     MeasurementLayer.update(map, currentMeasurementPoints)
                     DrawingShapeRenderer.apply(map, currentDrawings)
                     currentGridCenter?.let { GridLayer.update(map, it) }
+                    // #206 — clamp the camera to what this basemap actually
+                    // serves so pinching in past a provider's real ceiling
+                    // can't land on a blank/placeholder tile. MBTiles
+                    // overlays aren't known here (TacticalMap doesn't take
+                    // them as a parameter) — MapScreen's own
+                    // LaunchedEffect(mbtilesOverlays, mapProvider, ...)
+                    // re-widens the clamp for those right after cold start.
+                    extractBasemapMaxZoom(styleJson)?.let { basemapMax ->
+                        map.setMaxZoomPreference(zoomClampFor(basemapMax, emptyList()))
+                    }
                     // ADS-B aircraft are fed by the ADS-B plugin's overlay via
                     // the live map handle — not from here. The `aircraft-src`
                     // source stays empty until the plugin pushes into it.
@@ -560,6 +570,14 @@ fun TacticalMap(
                     MeasurementLayer.update(map, currentMeasurementPoints)
                     DrawingShapeRenderer.apply(map, currentDrawings)
                     currentGridCenter?.let { GridLayer.update(map, it) }
+                    // #206 — re-clamp for the new basemap. Same caveat as
+                    // cold start: MBTiles maxzoom isn't known here, so
+                    // MapScreen's LaunchedEffect(mbtilesOverlays,
+                    // mapProvider, ...) is the one that re-widens the clamp
+                    // for any currently-visible overlay right after this.
+                    extractBasemapMaxZoom(styleJson)?.let { basemapMax ->
+                        map.setMaxZoomPreference(zoomClampFor(basemapMax, emptyList()))
+                    }
                     // ADS-B re-push after a style reload is handled by the
                     // plugin overlay's LaunchedEffect(map, …), which re-runs
                     // when the new MapLibreMap/style lands. Nothing to do here.
@@ -1088,11 +1106,17 @@ private const val TAP_HIT_RADIUS_PX = 72f
  * basemap raster source can be swapped per [MapProvider] preference
  * without losing the overlays.
  */
-internal fun buildTacticalStyle(name: String, basemapTiles: String, attribution: String): String =
+internal fun buildTacticalStyle(
+    name: String,
+    basemapTiles: String,
+    attribution: String,
+    maxZoom: Int = BASEMAP_MAXZOOM_CUSTOM_DEFAULT,
+): String =
     TACTICAL_STYLE_HEAD
         .replace("@@NAME@@", name)
         .replace("@@TILES@@", basemapTiles)
-        .replace("@@ATTRIBUTION@@", attribution) + TACTICAL_STYLE_OVERLAYS
+        .replace("@@ATTRIBUTION@@", attribution)
+        .replace("@@MAXZOOM@@", maxZoom.toString()) + TACTICAL_STYLE_OVERLAYS
 
 private const val TACTICAL_STYLE_HEAD = """
 {
@@ -1105,10 +1129,129 @@ private const val TACTICAL_STYLE_HEAD = """
         "@@TILES@@"
       ],
       "tileSize": 256,
-      "maxzoom": 20,
+      "maxzoom": @@MAXZOOM@@,
       "attribution": "@@ATTRIBUTION@@"
     }
 """
+
+/**
+ * #206 — per-provider raster maxzoom. A style-source `maxzoom` only
+ * controls MapLibre's own overzoom (tile stretching) behavior, it does NOT
+ * stop the camera from zooming further — the camera-side ceiling is
+ * [zoomClampFor] / `MapLibreMap.setMaxZoomPreference`, applied in
+ * [TacticalMap]. These numbers were measured empirically (HTTP probe with
+ * the app's own tile User-Agent, [soy.engindearing.omnitak.mobile.data.MapTileHttp.buildUserAgent],
+ * against lat 47.66 / lon -117.43 — see PR #206 for the full per-zoom probe
+ * table) because providers respond very differently once asked for tiles
+ * past their real ceiling:
+ *
+ *  - **OSM standard tile layer** (tile.openstreetmap.org): real, distinct
+ *    tiles through z19; HTTP 400 at z20. Ceiling: 19.
+ *  - **OpenTopoMap** (a.tile.opentopomap.org): real, distinct tiles through
+ *    z17; z18/z19/z20 all return HTTP 200 but the exact same bytes — an
+ *    explicit "max zoom layer = 17" placeholder tile, not real data.
+ *    Ceiling: 17.
+ *  - **Esri World Imagery** (server.arcgisonline.com): real, distinct
+ *    imagery through z22 at this (rural) probe location; z23 repeats the
+ *    exact z22 bytes (native ceiling reached there). Matches this app's
+ *    Cesium 3D clamp ([CesiumCameraMath]'s MAX_ZOOM = 22), so 2D and 3D
+ *    read the same at the edge. Ceiling: 22.
+ *  - **CARTO Dark Matter** (basemaps.cartocdn.com): returns HTTP 200 at
+ *    EVERY zoom tested (0 through 22) but it is the exact same
+ *    "API KEY REQUIRED" placeholder image regardless of zoom, location, or
+ *    even User-Agent — CARTO's free unauthenticated basemap tiles have been
+ *    discontinued. This style is not reachable from the app's basemap
+ *    picker ([MapProvider] has no case that selects it — see
+ *    [styleJsonForProvider]; [TACTICAL_STYLE_DARK_MATTER] is only the
+ *    [TacticalMap] composable's own default parameter, always overridden
+ *    by callers), so it does not contribute to #206 in practice. Kept at a
+ *    conservative ceiling pending a real decision on whether to key it,
+ *    replace it, or drop it — flagged separately, not fixed here.
+ */
+internal const val BASEMAP_MAXZOOM_OSM = 19
+internal const val BASEMAP_MAXZOOM_TOPO = 17
+internal const val BASEMAP_MAXZOOM_SATELLITE = 22
+internal const val BASEMAP_MAXZOOM_DARK_MATTER = 19
+internal const val BASEMAP_MAXZOOM_CUSTOM_DEFAULT = 19
+
+/** #206 — [MapProvider] -> its basemap's real maxzoom (see the constants'
+ *  doc above). WMTS_CUSTOM has no per-server stored max-zoom setting today
+ *  (only the tile URL template is persisted — see
+ *  [soy.engindearing.omnitak.mobile.data.UserPrefs.customTileUrl]), so it
+ *  falls back to [BASEMAP_MAXZOOM_CUSTOM_DEFAULT]. */
+internal fun basemapMaxZoomFor(provider: MapProvider): Int = when (provider) {
+    MapProvider.OSM_RASTER -> BASEMAP_MAXZOOM_OSM
+    MapProvider.TOPO_HINT -> BASEMAP_MAXZOOM_TOPO
+    MapProvider.SATELLITE_HINT -> BASEMAP_MAXZOOM_SATELLITE
+    MapProvider.WMTS_CUSTOM -> BASEMAP_MAXZOOM_CUSTOM_DEFAULT
+}
+
+/** Extra zoom levels of MapLibre overzoom (tile stretching) allowed past
+ *  the real ceiling before the camera hard-stops — a little pinch headroom
+ *  without reaching a provider's true "no more data" wall. */
+internal const val OVERZOOM_ALLOWANCE = 2.0
+
+/**
+ * #206 — pure camera-zoom ceiling: the highest of the active basemap's real
+ * maxzoom and any visible MBTiles overlay's maxzoom, plus a small overzoom
+ * allowance. Callers re-derive and re-apply this via
+ * `MapLibreMap.setMaxZoomPreference` any time the basemap or the visible
+ * MBTiles overlay set changes (see [TacticalMap] and MapScreen's
+ * `LaunchedEffect(mbtilesOverlays, ...)`), so the ceiling never gets stuck
+ * at a stale value — zooming out is never blocked by a leftover clamp from
+ * a since-removed overlay or since-swapped basemap.
+ */
+internal fun zoomClampFor(basemapMax: Double, mbtilesMaxes: List<Double>): Double =
+    (mbtilesMaxes + basemapMax).max() + OVERZOOM_ALLOWANCE
+
+/**
+ * #206 — read the basemap raster source's own `maxzoom` back out of a style
+ * JSON built by [buildTacticalStyle]. Used by [TacticalMap]'s own
+ * style-loaded call sites, which only have the raw JSON string (not a
+ * [MapProvider]) to work with — MapScreen, which does have the provider,
+ * uses [basemapMaxZoomFor] directly instead.
+ *
+ * This can't be a simple brace-scoped regex: the `"basemap"` source's own
+ * `"tiles"` value is an XYZ URL template containing LITERAL `{z}`/`{x}`/
+ * `{y}` braces (and [injectTerrain]'s spliced-in `terrain-dem` source has
+ * the same shape, with the same kind of URL, ahead of "basemap" in the
+ * text) — a `[^}]*`-style match stops at the first of those, not the
+ * source object's real closing brace. Instead this walks the JSON text
+ * from `"basemap"`'s own opening brace, tracking string boundaries (so
+ * braces inside quoted values never affect nesting depth) until that
+ * brace's true match, then searches only within that substring.
+ */
+internal fun extractBasemapMaxZoom(styleJson: String): Double? {
+    val keyIndex = styleJson.indexOf("\"basemap\"")
+    if (keyIndex < 0) return null
+    val braceStart = styleJson.indexOf('{', keyIndex)
+    if (braceStart < 0) return null
+
+    var depth = 0
+    var inString = false
+    var escapeNext = false
+    for (i in braceStart until styleJson.length) {
+        val c = styleJson[i]
+        if (escapeNext) {
+            escapeNext = false
+            continue
+        }
+        when {
+            inString && c == '\\' -> escapeNext = true
+            c == '"' -> inString = !inString
+            !inString && c == '{' -> depth++
+            !inString && c == '}' -> {
+                depth--
+                if (depth == 0) {
+                    val basemapBlock = styleJson.substring(braceStart, i + 1)
+                    return Regex("\"maxzoom\"\\s*:\\s*([0-9]+(?:\\.[0-9]+)?)")
+                        .find(basemapBlock)?.groupValues?.get(1)?.toDoubleOrNull()
+                }
+            }
+        }
+    }
+    return null
+}
 
 // CONTRACT WITH THE ADS-B PLUGIN: the `aircraft-src` GeoJSON source plus the
 // `aircraft-circle` and `aircraft-label` layers below are MapLibre style
@@ -1277,21 +1420,25 @@ val TACTICAL_STYLE_OSM = buildTacticalStyle(
     "OmniTAK OSM",
     "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
     "© OpenStreetMap contributors",
+    maxZoom = BASEMAP_MAXZOOM_OSM,
 )
 val TACTICAL_STYLE_TOPO = buildTacticalStyle(
     "OmniTAK Topo",
     "https://a.tile.opentopomap.org/{z}/{x}/{y}.png",
     "© OpenTopoMap (CC-BY-SA), © OpenStreetMap contributors",
+    maxZoom = BASEMAP_MAXZOOM_TOPO,
 )
 val TACTICAL_STYLE_SATELLITE = buildTacticalStyle(
     "OmniTAK Satellite",
     "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
     "Imagery © Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+    maxZoom = BASEMAP_MAXZOOM_SATELLITE,
 )
 val TACTICAL_STYLE_DARK_MATTER = buildTacticalStyle(
     "OmniTAK Tactical Dark",
     "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
     "© OpenStreetMap contributors © CARTO",
+    maxZoom = BASEMAP_MAXZOOM_DARK_MATTER,
 )
 
 /**
@@ -1343,7 +1490,7 @@ fun styleJsonForProvider(
         MapProvider.WMTS_CUSTOM -> {
             val url = normalizeTileUrlPlaceholders(customTileUrl)
             if (url.startsWith("http") && url.contains("{z}") && url.contains("{x}") && url.contains("{y}")) {
-                buildTacticalStyle("OmniTAK Custom WMTS", url, "Custom tile source")
+                buildTacticalStyle("OmniTAK Custom WMTS", url, "Custom tile source", maxZoom = BASEMAP_MAXZOOM_CUSTOM_DEFAULT)
             } else {
                 TACTICAL_STYLE_OSM
             }
