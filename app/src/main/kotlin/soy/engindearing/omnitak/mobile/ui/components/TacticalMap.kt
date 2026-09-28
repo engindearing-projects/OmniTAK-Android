@@ -1,6 +1,7 @@
 package soy.engindearing.omnitak.mobile.ui.components
 
 import android.annotation.SuppressLint
+import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
@@ -21,7 +22,6 @@ import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.location.LocationComponentActivationOptions
 import org.maplibre.android.location.LocationComponentOptions
 import org.maplibre.android.location.modes.CameraMode
-import org.maplibre.android.location.modes.RenderMode
 import soy.engindearing.omnitak.mobile.R
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
@@ -368,6 +368,20 @@ fun TacticalMap(
                             MeasurementLayer.update(map, currentMeasurementPoints)
                             DrawingShapeRenderer.apply(map, currentDrawings)
                             currentGridCenter?.let { GridLayer.update(map, it) }
+                            // #197 — this listener fires on EVERY successful style
+                            // load, including ones MapLibre triggers internally
+                            // (not just the app's own setStyle calls), so it is
+                            // the natural place to retry a render-mode apply that
+                            // bailed out earlier because the style wasn't ready
+                            // yet (map.style == null at the time). Re-applying
+                            // when nothing was skipped is a harmless no-op.
+                            if (currentLocationEnabled && map.locationComponent.isLocationComponentActivated) {
+                                val spec = selfPuckSpecFor(
+                                    selfMarkerStyleFor(currentUseMilStd, currentSelfMarkerTriangle),
+                                )
+                                val cameraMode = if (currentFollowMe) CameraMode.TRACKING_COMPASS else CameraMode.NONE
+                                applyLocationRenderMode(map, spec, cameraMode)
+                            }
                         }
                     }
                 }
@@ -390,7 +404,8 @@ fun TacticalMap(
                     )
                 }
                 if (map.locationComponent.isLocationComponentActivated) {
-                    safeEnableLocation(map)
+                    val spec = selfPuckSpecFor(selfMarkerStyleFor(currentUseMilStd, currentSelfMarkerTriangle))
+                    applyLocationRenderMode(map, spec, CameraMode.NONE)
                 }
             }
         }
@@ -673,11 +688,13 @@ fun TacticalMap(
                         runCatching {
                             mapView.getMapAsync { map ->
                                 if (map.locationComponent.isLocationComponentActivated) {
-                                    map.locationComponent.isLocationComponentEnabled = true
-                                    map.locationComponent.renderMode = RenderMode.COMPASS
-                                    map.locationComponent.cameraMode =
+                                    val spec = selfPuckSpecFor(
+                                        selfMarkerStyleFor(currentUseMilStd, currentSelfMarkerTriangle),
+                                    )
+                                    val cameraMode =
                                         if (currentFollowMe) CameraMode.TRACKING_COMPASS
                                         else CameraMode.NONE
+                                    applyLocationRenderMode(map, spec, cameraMode)
                                 }
                             }
                         }
@@ -778,6 +795,8 @@ fun TacticalMap(
  */
 internal const val COMPASS_TOP_MARGIN_DP = 64
 
+private const val TAG = "TacticalMap"
+
 /** Issue #75 — imperative holder for the self-marker's current dim state
  *  (stale restored fix vs live GPS). Shared between the activation path,
  *  the selfFix forwarding effect, and the style-reload re-apply. */
@@ -811,7 +830,8 @@ private fun activateLocation(
         )
         .build()
     map.locationComponent.activateLocationComponent(options)
-    safeEnableLocation(map)
+    val spec = selfPuckSpecFor(selfMarkerStyleFor(useMilStdSelfSymbol, selfMarkerTriangle))
+    applyLocationRenderMode(map, spec, CameraMode.NONE)
 
     // Issue #75 — render the restored fix immediately instead of leaving
     // the marker invisible until the engine's first delivery (the
@@ -844,14 +864,28 @@ private fun buildPuckOptions(
     // ("Cyan", "Red", "Orange", …). Falls back to cyan — CivTAK default
     // for unaffiliated friendlies — when the name isn't in the palette.
     val teamArgb: Int = TakTeamColor.forName(selfTeamColor) ?: 0xFF00FFFF.toInt()
+    val markerStyle = selfMarkerStyleFor(useMilStdSelfSymbol, selfMarkerTriangle)
+    val spec = selfPuckSpecFor(markerStyle)
 
-    // #83 — triangle self-marker overrides both MIL-STD and disc modes
-    if (selfMarkerTriangle) {
+    // #83/#204 — triangle self-marker overrides both MIL-STD and disc
+    // modes; it is MEANT to rotate with heading, so it stays on
+    // RenderMode.COMPASS (see SelfPuckSpec) — but only the bearing layer
+    // carries the triangle bitmap. COMPASS draws the foreground layer
+    // upright AND the bearing layer rotated at the SAME screen position;
+    // pointing both at the triangle (the pre-fix code) drew it twice
+    // whenever heading != 0. The foreground is a fully transparent 1x1
+    // bitmap so that upright copy is invisible instead of a ghost triangle.
+    if (markerStyle == SELF_MARKER_STYLE_TRIANGLE) {
         val triangleBmp = createTriangleBitmap(64)
-        val triangleStale = fadeBitmap(triangleBmp, STALE_MARKER_ALPHA)
-        style.addImage("omnitak-self-triangle", triangleBmp)
-        style.addImage("omnitak-self-triangle-stale", triangleStale)
-        val imgName = if (dimmed) "omnitak-self-triangle-stale" else "omnitak-self-triangle"
+        val transparentBmp = createTransparentBitmap(1)
+        style.addImage(SELF_TRIANGLE_IMAGE, triangleBmp)
+        style.addImage(SELF_TRIANGLE_STALE_IMAGE, fadeBitmap(triangleBmp, STALE_MARKER_ALPHA))
+        style.addImage(SELF_TRIANGLE_TRANSPARENT_IMAGE, transparentBmp)
+        style.addImage(SELF_TRIANGLE_TRANSPARENT_STALE_IMAGE, transparentBmp)
+        // MapLibre's LocationComponentOptions has no bearingStaleName — the
+        // bearing layer's dim state has to be picked manually here, at
+        // rebuild time, from spec.bearingImage/bearingStaleImage.
+        val bearingImg = if (dimmed) spec.bearingStaleImage!! else spec.bearingImage!!
         return LocationComponentOptions.builder(context)
             .pulseEnabled(!dimmed)
             .pulseColor(teamArgb)
@@ -860,9 +894,9 @@ private fun buildPuckOptions(
             .accuracyAlpha(0.18f)
             .enableStaleState(true)
             .staleStateTimeout(SelfFixPersistence.STALE_AFTER_MS)
-            .bearingName(imgName)
-            .foregroundName(imgName)
-            .foregroundStaleName("omnitak-self-triangle-stale")
+            .bearingName(bearingImg)
+            .foregroundName(spec.foregroundImage!!)
+            .foregroundStaleName(spec.foregroundStaleImage!!)
             .build()
     }
 
@@ -899,24 +933,25 @@ private fun buildPuckOptions(
         .staleStateTimeout(SelfFixPersistence.STALE_AFTER_MS)
 
     if (selfBitmap != null) {
-        // Register the bitmaps with the style so LocationComponent can
-        // reference them by name — MapLibre's LocationComponentOptions
-        // builder accepts resource IDs or names, not direct bitmaps.
-        // Using the same bitmap for foreground and bearing keeps the
-        // symbol upright regardless of heading; the bearing-arrow
-        // chevron is intentionally omitted here because MIL-STD
-        // symbol bodies aren't meant to rotate. Operator heading is
-        // still surfaced numerically in the SelfPositionCard.
-        style.addImage(SELF_FOREGROUND_IMAGE, selfBitmap)
-        style.addImage(SELF_FOREGROUND_STALE_IMAGE, fadeBitmap(selfBitmap, STALE_MARKER_ALPHA))
-        val foreground = if (dimmed) SELF_FOREGROUND_STALE_IMAGE else SELF_FOREGROUND_IMAGE
+        // #204 — MIL-STD symbol bodies aren't meant to rotate (the #159
+        // echelon amplifier assumes an upright symbol). RenderMode.NORMAL
+        // (applied by the caller via SelfPuckSpec.renderMode — see
+        // applyLocationRenderMode) never renders a bearing layer at all,
+        // so there is only ever one copy of the symbol on screen. Operator
+        // heading is still surfaced numerically in the SelfPositionCard.
+        val foregroundLive = spec.foregroundImage!!
+        val foregroundStale = spec.foregroundStaleImage!!
+        style.addImage(foregroundLive, selfBitmap)
+        style.addImage(foregroundStale, fadeBitmap(selfBitmap, STALE_MARKER_ALPHA))
         markerOptionsBuilder
-            .foregroundName(foreground)
-            .bearingName(foreground)
-            .foregroundStaleName(SELF_FOREGROUND_STALE_IMAGE)
+            .foregroundName(if (dimmed) foregroundStale else foregroundLive)
+            .foregroundStaleName(foregroundStale)
+        // spec.bearingImage is null here by design — see SelfPuckSpec.
     } else {
         // Legacy tinted-disc fallback — apply the team color as a tint
         // on the vector drawable so the disc still reflects team identity.
+        // Unchanged by #204: it already uses two distinct drawables, so it
+        // never had the double-draw bug.
         val tint = if (dimmed) fadeArgb(teamArgb, STALE_MARKER_ALPHA) else teamArgb
         markerOptionsBuilder
             .foregroundDrawable(R.drawable.ic_self_marker)
@@ -1002,6 +1037,14 @@ private fun fadeBitmap(src: android.graphics.Bitmap, alpha: Int): android.graphi
 private fun fadeArgb(argb: Int, alpha: Int): Int =
     (argb and 0x00FFFFFF) or (alpha shl 24)
 
+/** #204 — a fully transparent bitmap, used as the triangle self-marker's
+ *  foreground layer so RenderMode.COMPASS's upright (non-rotating) copy is
+ *  invisible instead of a ghost duplicate of the rotating bearing triangle
+ *  (see SelfPuckSpec). MapLibre still needs a non-null foreground image
+ *  registered by name — this is that image, just with alpha 0 everywhere. */
+private fun createTransparentBitmap(sizePx: Int = 1): android.graphics.Bitmap =
+    android.graphics.Bitmap.createBitmap(sizePx, sizePx, android.graphics.Bitmap.Config.ARGB_8888)
+
 /** #83 — white triangle bitmap for the triangle self-marker mode. */
 private fun createTriangleBitmap(sizePx: Int = 64): android.graphics.Bitmap {
     val bmp = android.graphics.Bitmap.createBitmap(sizePx, sizePx, android.graphics.Bitmap.Config.ARGB_8888)
@@ -1033,18 +1076,52 @@ private fun SelfFix.toLocation(): android.location.Location =
         if (speedKmh > 0.0) speed = (speedKmh / 3.6).toFloat()
     }
 
-private const val SELF_FOREGROUND_IMAGE = "omnitak-self-milstd-foreground"
-private const val SELF_FOREGROUND_STALE_IMAGE = "omnitak-self-milstd-foreground-stale"
-
 /** Stale self-marker opacity (0–255). ~45% — subtle, but unmistakably
  *  dimmer than the live marker (issue #75). */
 private const val STALE_MARKER_ALPHA = 115
 
+/**
+ * #197 — applies a [SelfPuckSpec]'s render mode (and the given camera mode)
+ * to an already-activated LocationComponent. Replaces the old
+ * `safeEnableLocation`, which guarded nothing: three unconditional setters,
+ * where `LocationComponent.setRenderMode` throws
+ * `IllegalStateException("Calling getSourceAs when a newer style is
+ * loading/has loaded")` when the style has been swapped/reloaded between
+ * `onMapReady` and the call (stack: `Style.validateState` <-
+ * `SymbolLocationLayerRenderer.refreshSource` <-
+ * `LocationComponent.setRenderMode`). MapLibre 11.8's
+ * `MapLibreMap.getStyle()`/`.style` returns null unless a style is fully
+ * loaded, so that is the readiness gate.
+ *
+ * Returns true when applied, false when it bailed out early (style not
+ * ready yet) or the call still raced a style swap despite the guard —
+ * callers don't need to branch on this themselves: the
+ * `addOnDidFinishLoadingStyleListener` re-push registered in [TacticalMap]
+ * unconditionally re-applies on every subsequent style load, which is a
+ * harmless no-op when nothing was actually skipped.
+ */
 @SuppressLint("MissingPermission")
-private fun safeEnableLocation(map: org.maplibre.android.maps.MapLibreMap) {
-    map.locationComponent.isLocationComponentEnabled = true
-    map.locationComponent.renderMode = RenderMode.COMPASS
-    map.locationComponent.cameraMode = CameraMode.NONE
+private fun applyLocationRenderMode(
+    map: org.maplibre.android.maps.MapLibreMap,
+    spec: SelfPuckSpec,
+    cameraMode: Int,
+): Boolean {
+    if (map.style == null) {
+        Log.w(TAG, "applyLocationRenderMode: style not loaded yet, skipping (will retry on next style load)")
+        return false
+    }
+    return try {
+        map.locationComponent.isLocationComponentEnabled = true
+        map.locationComponent.renderMode = spec.renderMode
+        map.locationComponent.cameraMode = cameraMode
+        true
+    } catch (e: IllegalStateException) {
+        // #197 — the style was swapped/reloaded between the null-check above
+        // and this call (a real, observed race, not just theoretical) — log
+        // and move on instead of crashing.
+        Log.w(TAG, "applyLocationRenderMode: style changed mid-call, skipping (will retry on next style load)", e)
+        false
+    }
 }
 
 /**
