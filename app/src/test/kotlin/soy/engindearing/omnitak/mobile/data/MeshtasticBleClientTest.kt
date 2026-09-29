@@ -1,5 +1,6 @@
 package soy.engindearing.omnitak.mobile.data
 
+import android.bluetooth.BluetoothDevice
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
@@ -156,6 +157,214 @@ class MeshtasticBleClientTest {
             "watchdog must exceed Nordic's connect timeout",
             MeshtasticBleClient.WATCHDOG_TIMEOUT_MS > 15_000L,
         )
+    }
+
+    @Test fun hard_failure_uses_recorded_failure_message_when_present() {
+        // #203 — connectToAddress must not overwrite a reason-bearing Failed
+        // state (set by the ConnectionObserver's onDeviceFailedToConnect) with
+        // a generic reason-less placeholder.
+        val recorded = MeshtasticBleClient.BleFailure(
+            timestampMs = 1_000L,
+            phase = MeshtasticBleClient.BleFailure.Phase.CONNECT,
+            nordicReason = 133,
+            gattStatus = null,
+            bondState = BluetoothDevice.BOND_NONE,
+            consecutiveFailures = 1,
+            message = "connect failed: reason=133",
+        )
+        val state = MeshtasticBleClient.resolveFailedConnectState("AA:BB:CC:DD:EE:FF", false, recorded)
+        assertTrue(state is ConnectionState.Failed)
+        assertEquals("connect failed: reason=133", (state as ConnectionState.Failed).reason)
+    }
+
+    @Test fun hard_failure_falls_back_to_generic_message_without_recorded_failure() {
+        // No BleFailure was recorded for this attempt (e.g. a code path that
+        // never reached the ConnectionObserver) — the old generic message is
+        // still the safety net, not a crash or a blank reason.
+        val state = MeshtasticBleClient.resolveFailedConnectState("AA:BB:CC:DD:EE:FF", false, null)
+        assertTrue(state is ConnectionState.Failed)
+        assertEquals("connect failed for AA:BB:CC:DD:EE:FF", (state as ConnectionState.Failed).reason)
+    }
+
+    // endregion
+
+    // region #203 — BLE failure diagnostics ---------------------------------
+    // BleFailure.next() is the pure builder behind MeshtasticBleClient's
+    // lastFailure StateFlow (populated from onDeviceDisconnected /
+    // onDeviceFailedToConnect / isRequiredServiceSupported / readOnce, none of
+    // which can run on a live BleManager in a JVM test), so these drive the
+    // builder and its formatting helpers directly.
+
+    @Test fun failure_next_with_no_previous_starts_streak_at_one() {
+        // Also stands in for the onDeviceReady reset contract: lastFailure is
+        // set back to null there, so the *next* failure recorded afterwards
+        // must start counting from 1 again, not continue an old streak.
+        val next = MeshtasticBleClient.BleFailure.next(
+            previous = null,
+            phase = MeshtasticBleClient.BleFailure.Phase.CONNECT,
+            reason = 133,
+            status = null,
+            bondState = BluetoothDevice.BOND_NONE,
+            nowMs = 1_000L,
+            message = "connect failed: reason=133",
+        )
+        assertEquals(1, next.consecutiveFailures)
+    }
+
+    @Test fun failure_next_with_same_signature_increments_streak() {
+        val first = MeshtasticBleClient.BleFailure.next(
+            previous = null,
+            phase = MeshtasticBleClient.BleFailure.Phase.LINK_LOSS,
+            reason = 8,
+            status = null,
+            bondState = BluetoothDevice.BOND_NONE,
+            nowMs = 1_000L,
+            message = "link lost: reason=8",
+        )
+        val second = MeshtasticBleClient.BleFailure.next(
+            previous = first,
+            phase = MeshtasticBleClient.BleFailure.Phase.LINK_LOSS,
+            reason = 8,
+            status = null,
+            bondState = BluetoothDevice.BOND_NONE,
+            nowMs = 2_000L,
+            message = "link lost: reason=8",
+        )
+        val third = MeshtasticBleClient.BleFailure.next(
+            previous = second,
+            phase = MeshtasticBleClient.BleFailure.Phase.LINK_LOSS,
+            reason = 8,
+            status = null,
+            bondState = BluetoothDevice.BOND_NONE,
+            nowMs = 3_000L,
+            message = "link lost: reason=8",
+        )
+        assertEquals(1, first.consecutiveFailures)
+        assertEquals(2, second.consecutiveFailures)
+        assertEquals(3, third.consecutiveFailures)
+    }
+
+    @Test fun failure_next_with_different_phase_resets_streak() {
+        val first = MeshtasticBleClient.BleFailure.next(
+            previous = null,
+            phase = MeshtasticBleClient.BleFailure.Phase.CONNECT,
+            reason = 133,
+            status = null,
+            bondState = BluetoothDevice.BOND_NONE,
+            nowMs = 1_000L,
+            message = "connect failed: reason=133",
+        )
+        val second = MeshtasticBleClient.BleFailure.next(
+            previous = first,
+            phase = MeshtasticBleClient.BleFailure.Phase.LINK_LOSS,
+            reason = 133, // same reason, different phase
+            status = null,
+            bondState = BluetoothDevice.BOND_NONE,
+            nowMs = 2_000L,
+            message = "link lost: reason=133",
+        )
+        assertEquals(1, second.consecutiveFailures)
+    }
+
+    @Test fun failure_next_with_different_reason_resets_streak() {
+        val first = MeshtasticBleClient.BleFailure.next(
+            previous = null,
+            phase = MeshtasticBleClient.BleFailure.Phase.CONNECT,
+            reason = 133,
+            status = null,
+            bondState = BluetoothDevice.BOND_NONE,
+            nowMs = 1_000L,
+            message = "connect failed: reason=133",
+        )
+        val second = MeshtasticBleClient.BleFailure.next(
+            previous = first,
+            phase = MeshtasticBleClient.BleFailure.Phase.CONNECT,
+            reason = 8, // different reason, same phase
+            status = null,
+            bondState = BluetoothDevice.BOND_NONE,
+            nowMs = 2_000L,
+            message = "connect failed: reason=8",
+        )
+        assertEquals(1, second.consecutiveFailures)
+    }
+
+    @Test fun failure_next_with_different_status_resets_streak() {
+        val first = MeshtasticBleClient.BleFailure.next(
+            previous = null,
+            phase = MeshtasticBleClient.BleFailure.Phase.READ_TIMEOUT,
+            reason = -5,
+            status = null,
+            bondState = BluetoothDevice.BOND_NONE,
+            nowMs = 1_000L,
+            message = "fromRadio read timed out",
+        )
+        val second = MeshtasticBleClient.BleFailure.next(
+            previous = first,
+            phase = MeshtasticBleClient.BleFailure.Phase.READ_TIMEOUT,
+            reason = -5,
+            status = 8, // different status, same phase+reason
+            bondState = BluetoothDevice.BOND_NONE,
+            nowMs = 2_000L,
+            message = "fromRadio read timed out",
+        )
+        assertEquals(1, second.consecutiveFailures)
+    }
+
+    @Test fun failure_relative_time_buckets() {
+        // Large enough that subtracting up to 3 days' worth of ms never goes
+        // negative (a negative timestampMs would hit the <= 0 "—" branch).
+        val now = 10_000_000_000L
+        assertEquals("—", MeshtasticBleClient.BleFailure.relativeTime(0L, now))
+        assertEquals("just now", MeshtasticBleClient.BleFailure.relativeTime(now + 5_000L, now))
+        assertEquals("30s ago", MeshtasticBleClient.BleFailure.relativeTime(now - 30_000L, now))
+        assertEquals("5m ago", MeshtasticBleClient.BleFailure.relativeTime(now - 5 * 60_000L, now))
+        assertEquals("2h ago", MeshtasticBleClient.BleFailure.relativeTime(now - 2 * 3_600_000L, now))
+        assertEquals("3d ago", MeshtasticBleClient.BleFailure.relativeTime(now - 3 * 86_400_000L, now))
+    }
+
+    @Test fun failure_summary_line_matches_expected_format() {
+        val f = MeshtasticBleClient.BleFailure(
+            timestampMs = 1_000L,
+            phase = MeshtasticBleClient.BleFailure.Phase.CONNECT,
+            nordicReason = 133,
+            gattStatus = null,
+            bondState = BluetoothDevice.BOND_NONE,
+            consecutiveFailures = 1,
+            message = "connect failed: reason=133",
+        )
+        assertEquals(
+            "Last failure: CONNECT reason=133 status=-, bond=NONE, 30s ago",
+            f.summaryLine(nowMs = 31_000L),
+        )
+    }
+
+    @Test fun failure_summary_line_reports_status_and_bonded_state() {
+        val f = MeshtasticBleClient.BleFailure(
+            timestampMs = 1_000L,
+            phase = MeshtasticBleClient.BleFailure.Phase.READ_TIMEOUT,
+            nordicReason = -5,
+            gattStatus = 8,
+            bondState = BluetoothDevice.BOND_BONDED,
+            consecutiveFailures = 1,
+            message = "fromRadio read timed out after 10000ms",
+        )
+        assertTrue(
+            f.summaryLine(nowMs = 1_000L)
+                .startsWith("Last failure: READ_TIMEOUT reason=-5 status=8, bond=BONDED, "),
+        )
+    }
+
+    @Test fun failure_summary_line_reports_bonding_state() {
+        val f = MeshtasticBleClient.BleFailure(
+            timestampMs = 1_000L,
+            phase = MeshtasticBleClient.BleFailure.Phase.SERVICE_DISCOVERY,
+            nordicReason = 0,
+            gattStatus = null,
+            bondState = BluetoothDevice.BOND_BONDING,
+            consecutiveFailures = 1,
+            message = "required GATT service not found",
+        )
+        assertTrue(f.summaryLine(nowMs = 1_000L).contains("bond=BONDING"))
     }
 
     // endregion

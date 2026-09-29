@@ -34,6 +34,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -426,6 +427,8 @@ private fun BlePane(
     nodeCount: Int,
     onOpenChat: (String) -> Unit = {},
 ) {
+    val app = LocalContext.current.applicationContext as OmniTAKApp
+
     // Make sure the BLE client exists so we can observe its state.
     LaunchedEffect(Unit) { mesh.ensureBleReady() }
 
@@ -433,13 +436,35 @@ private fun BlePane(
     val bleStateFlow = mesh.bleState()
     val bleBytesFlow = mesh.bleBytesReceived()
     val rssiFlow = mesh.bleRssi()
+    val lastFailureFlow = mesh.bleLastFailure()
 
     val bleState = bleStateFlow?.collectAsState()?.value ?: ConnectionState.Disconnected
     val bleBytes = bleBytesFlow?.collectAsState()?.value ?: 0L
     val bleRssi = rssiFlow?.collectAsState()?.value ?: 0
+    val lastFailure = lastFailureFlow?.collectAsState()?.value
+    val reconnectPending by mesh.autoReconnectPending.collectAsState()
+    val reconnectAttempt by mesh.reconnectAttempt.collectAsState()
+    val userPrefs by app.userPrefsStore.prefs.collectAsState(
+        initial = soy.engindearing.omnitak.mobile.data.UserPrefs(),
+    )
+
+    // #203 — keep the BLE client's verbose-logging flag in sync with the
+    // persisted toggle (immediate-apply, same pattern as the CoT bridges'
+    // `enabled` mirroring in OmniTAKApp).
+    LaunchedEffect(userPrefs.verboseBleLogging) {
+        mesh.setVerboseBleLogging(userPrefs.verboseBleLogging)
+    }
 
     var isScanning by remember { mutableStateOf(false) }
     val results = remember { mutableStateListOf<MeshtasticBleClient.BleScanResult>() }
+    var diagnosticsCopyResult by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(diagnosticsCopyResult) {
+        if (diagnosticsCopyResult != null) {
+            kotlinx.coroutines.delay(1800)
+            diagnosticsCopyResult = null
+        }
+    }
 
     DisposableEffect(Unit) {
         onDispose { mesh.stopBleScan() }
@@ -512,6 +537,58 @@ private fun BlePane(
         KeyValueRow(label = "Bytes RX", value = "$bleBytes")
         KeyValueRow(label = "RSSI", value = if (bleRssi == 0) "—" else "$bleRssi dBm")
         KeyValueRow(label = "Nodes", value = "$nodeCount")
+        // #203 — surface the auto-reconnect loop so a stuck link isn't a
+        // silent retry: the operator can see it's actually trying.
+        if (reconnectPending) {
+            KeyValueRow(label = "Reconnecting", value = "attempt $reconnectAttempt")
+        }
+        // #203 — BLE failure diagnostics. The field report ("drops after
+        // about an hour, reconnect never recovers, only force-stop + clear
+        // cache + forget + re-pair fixes it") had nothing in the app to
+        // explain *why* a connect/reconnect failed — this is that record.
+        lastFailure?.let { failure ->
+            Text(
+                failure.summaryLine(),
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+            )
+            Text(
+                failure.message,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "Verbose BLE logging",
+                modifier = Modifier.weight(1f),
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Switch(
+                checked = userPrefs.verboseBleLogging,
+                onCheckedChange = { next ->
+                    coScope.launch { app.userPrefsStore.setVerboseBleLogging(next) }
+                },
+            )
+        }
+        OutlinedButton(
+            onClick = {
+                val copied = soy.engindearing.omnitak.mobile.data.CoordClipboard.copy(
+                    app,
+                    mesh.bleDiagnosticsSnapshot(),
+                )
+                diagnosticsCopyResult = if (copied) "Diagnostics copied" else "Copy failed"
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Copy diagnostics") }
+        diagnosticsCopyResult?.let {
+            Text(it, color = TacticalAccent, style = MaterialTheme.typography.labelSmall)
+        }
 
         HorizontalDivider(color = TacticalSurface)
 

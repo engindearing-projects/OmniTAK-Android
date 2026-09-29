@@ -32,6 +32,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import no.nordicsemi.android.ble.BleManager
 import no.nordicsemi.android.ble.WriteRequest
+import no.nordicsemi.android.ble.callback.FailCallback
 import no.nordicsemi.android.ble.data.Data
 import no.nordicsemi.android.ble.observer.ConnectionObserver
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
@@ -81,6 +82,18 @@ class MeshtasticBleClient(context: Context) : BleManager(context) {
     private val _scanResults = MutableSharedFlow<BleScanResult>(extraBufferCapacity = 64)
     val scanResults: SharedFlow<BleScanResult> = _scanResults.asSharedFlow()
 
+    // #203 — BLE failure diagnostics. Reset to null in onDeviceReady;
+    // populated by the connect / disconnect / service-discovery / read
+    // paths below via recordFailure().
+    private val _lastFailure = MutableStateFlow<BleFailure?>(null)
+    val lastFailure: StateFlow<BleFailure?> = _lastFailure.asStateFlow()
+
+    /** #203 — when true, Nordic DEBUG/VERBOSE log lines also print to
+     *  Logcat. Every line lands in [logRingBufferSnapshot] regardless of
+     *  this flag. Off by default; wired from the BLE pane's toggle via
+     *  [soy.engindearing.omnitak.mobile.domain.MeshtasticManager.setVerboseBleLogging]. */
+    @Volatile var verboseLoggingEnabled: Boolean = false
+
     // endregion
 
     // region Internal ----------------------------------------------------
@@ -129,9 +142,28 @@ class MeshtasticBleClient(context: Context) : BleManager(context) {
                 // Wait for service discovery before flipping to Connected.
             }
             override fun onDeviceFailedToConnect(device: BluetoothDevice, reason: Int) {
-                _state.value = ConnectionState.Failed("connect failed: $reason")
+                // #203 — REASON_NOT_SUPPORTED means isRequiredServiceSupported()
+                // already recorded a richer SERVICE_DISCOVERY failure (with the
+                // discovered service list) just before Nordic tore the link back
+                // down to call us here; don't clobber it with a generic CONNECT
+                // entry for the same underlying event.
+                if (reason != ConnectionObserver.REASON_NOT_SUPPORTED) {
+                    recordFailure(
+                        phase = BleFailure.Phase.CONNECT,
+                        reason = reason,
+                        status = null,
+                        bondState = device.bondState,
+                        message = "connect failed: reason=$reason",
+                    )
+                }
+                // #203 — carry the just-recorded (reason-bearing) failure message
+                // forward instead of a bare "connect failed: $reason" here, since
+                // connectToAddress's own resolveFailedConnectState() reads
+                // _lastFailure to build the Failed state it settles on.
+                _state.value = ConnectionState.Failed(_lastFailure.value?.message ?: "connect failed: $reason")
             }
             override fun onDeviceReady(device: BluetoothDevice) {
+                _lastFailure.value = null
                 _state.value = ConnectionState.Connected(device.address, useTLS = false)
             }
             override fun onDeviceDisconnecting(device: BluetoothDevice) {
@@ -139,6 +171,20 @@ class MeshtasticBleClient(context: Context) : BleManager(context) {
             }
             override fun onDeviceDisconnected(device: BluetoothDevice, reason: Int) {
                 stopBackgroundJobs()
+                // #203 — a local, user-initiated disconnect (disconnectClean())
+                // reports REASON_TERMINATE_LOCAL_HOST; that's expected and not a
+                // failure worth surfacing. Anything else — link loss, the peer
+                // hanging up, a timeout — is exactly the "drops after about an
+                // hour" field report and gets recorded.
+                if (reason != ConnectionObserver.REASON_TERMINATE_LOCAL_HOST) {
+                    recordFailure(
+                        phase = BleFailure.Phase.LINK_LOSS,
+                        reason = reason,
+                        status = null,
+                        bondState = device.bondState,
+                        message = "link lost: reason=$reason",
+                    )
+                }
                 if (_state.value !is ConnectionState.Failed) {
                     _state.value = ConnectionState.Disconnected
                 }
@@ -237,7 +283,10 @@ class MeshtasticBleClient(context: Context) : BleManager(context) {
             // the resolved retryable state.
             runCatching { close() }
             stopBackgroundJobs()
-            _state.value = resolveFailedConnectState(address, ok)
+            // #203 — pass the failure the ConnectionObserver just recorded (if
+            // any) so a hard failure surfaces its real reason instead of the
+            // generic "connect failed for $addr" placeholder.
+            _state.value = resolveFailedConnectState(address, ok, _lastFailure.value)
         }
         // On success the ConnectionObserver (onDeviceReady) already flipped us to
         // Connected; don't second-guess it here.
@@ -317,7 +366,17 @@ class MeshtasticBleClient(context: Context) : BleManager(context) {
     override fun getMinLogPriority(): Int = Log.VERBOSE
 
     override fun log(priority: Int, message: String) {
-        if (priority >= Log.INFO) Log.println(priority, TAG, message)
+        // #203 — buffer every line (VERBOSE and up, per getMinLogPriority)
+        // regardless of the toggle below, so "Copy diagnostics" has recent
+        // BLE chatter even when verbose forwarding to Logcat was off when
+        // the failure happened.
+        appendLogLine(priority, message)
+        if (priority >= Log.INFO) {
+            Log.println(priority, TAG, message)
+        } else if (verboseLoggingEnabled) {
+            // Only DEBUG/VERBOSE land here (INFO+ is handled above).
+            Log.d(TAG, message)
+        }
     }
 
     // Modern BleManager 2.6+ API: override these directly on the
@@ -325,7 +384,23 @@ class MeshtasticBleClient(context: Context) : BleManager(context) {
     // inner class.
 
     override fun isRequiredServiceSupported(gatt: BluetoothGatt): Boolean {
-        val service: BluetoothGattService = gatt.getService(SERVICE_UUID) ?: return false
+        val service: BluetoothGattService = gatt.getService(SERVICE_UUID) ?: run {
+            // #203 — the field-report symptom (link drops after ~an hour,
+            // reconnect never recovers) smells like the radio's GATT cache
+            // going stale, so record exactly what WAS discovered — that's
+            // the detail that tells the difference between "wrong radio",
+            // "stale cache" (unrelated services present) and "nothing came
+            // back at all".
+            recordFailure(
+                phase = BleFailure.Phase.SERVICE_DISCOVERY,
+                reason = ConnectionObserver.REASON_NOT_SUPPORTED,
+                status = null,
+                bondState = gatt.device.bondState,
+                message = "required GATT service not found: $SERVICE_UUID",
+                services = gatt.services.map { it.uuid.toString() },
+            )
+            return false
+        }
         toRadioChar = service.getCharacteristic(TO_RADIO_UUID)
         fromRadioChar = service.getCharacteristic(FROM_RADIO_UUID)
         fromNumChar = service.getCharacteristic(FROM_NUM_UUID)
@@ -350,7 +425,16 @@ class MeshtasticBleClient(context: Context) : BleManager(context) {
                 triggerDrain()
             }
             enableNotifications(ch)
-                .fail { _, status -> Log.w(TAG, "fromNum notify enable failed: $status") }
+                .fail { device, status ->
+                    Log.w(TAG, "fromNum notify enable failed: $status")
+                    recordFailure(
+                        phase = BleFailure.Phase.INIT,
+                        reason = status,
+                        status = null,
+                        bondState = device.bondState,
+                        message = "fromNum notification enable failed: status=$status",
+                    )
+                }
                 .enqueue()
         }
 
@@ -394,17 +478,53 @@ class MeshtasticBleClient(context: Context) : BleManager(context) {
         }
     }
 
+    /**
+     * #203 — a bare `readCharacteristic()` request can't carry its own
+     * timeout: [no.nordicsemi.android.ble.ReadRequest] extends
+     * `SimpleValueRequest`, not `TimeoutableRequest` (verified against the
+     * ble 2.8.0 jar — `ReadRequest.timeout()` doesn't exist). Previously this
+     * relied solely on the outer `withTimeoutOrNull` to abandon the
+     * *coroutine*, but Nordic's own internal request handler processes one
+     * request at a time — a read that never gets a GATT callback (a stalled
+     * link) stays "in flight" there forever and wedges every request queued
+     * behind it (the poll loop's next read, the next write, …), which is
+     * exactly the "only force-stop + re-pair recovers it" field report.
+     *
+     * Wrapping the read in an atomic request queue upgrades it to a
+     * `TimeoutableRequest` (`RequestQueue extends TimeoutableRequest`), so
+     * `.timeout()` is real: it fires `.fail()` with
+     * [FailCallback.REASON_TIMEOUT] AND tells Nordic's internal handler to
+     * move on, unblocking whatever is queued next.
+     */
     private suspend fun readOnce(ch: BluetoothGattCharacteristic): Data? =
-        withTimeoutOrNull(READ_TIMEOUT_MS) {
-            suspendCancellableCoroutine<Data?> { cont ->
-                readCharacteristic(ch)
-                    .with { _, data -> if (cont.isActive) cont.resume(data) }
-                    .fail { _, status ->
-                        Log.w(TAG, "fromRadio read failed: $status")
-                        if (cont.isActive) cont.resume(null)
+        suspendCancellableCoroutine { cont ->
+            val queue = beginAtomicRequestQueue()
+                .add(
+                    readCharacteristic(ch).with { _, data ->
+                        if (cont.isActive) cont.resume(data)
+                    },
+                )
+                .timeout(READ_TIMEOUT_MS)
+                .fail { device, status ->
+                    if (status == FailCallback.REASON_TIMEOUT) {
+                        recordFailure(
+                            phase = BleFailure.Phase.READ_TIMEOUT,
+                            reason = status,
+                            status = null,
+                            bondState = device.bondState,
+                            message = "fromRadio read timed out after ${READ_TIMEOUT_MS}ms",
+                        )
                     }
-                    .enqueue()
-            }
+                    Log.w(TAG, "fromRadio read failed: $status")
+                    if (cont.isActive) cont.resume(null)
+                }
+            // Belt-and-suspenders: if OUR coroutine gets cancelled from
+            // outside (e.g. stopBackgroundJobs() cancelling drainJob) before
+            // Nordic's own .timeout() fires, proactively cancel the Nordic
+            // side too instead of leaving it to complete into a continuation
+            // nobody is waiting on.
+            cont.invokeOnCancellation { runCatching { queue.cancel() } }
+            queue.enqueue()
         }
 
     private fun startPollLoop() {
@@ -431,6 +551,83 @@ class MeshtasticBleClient(context: Context) : BleManager(context) {
 
     // endregion
 
+    // region Failure diagnostics (#203) -----------------------------------
+
+    /** Builds the next [BleFailure] (bumping [BleFailure.consecutiveFailures]
+     *  when it matches the previous one's phase+reason+status) and publishes
+     *  it on [lastFailure]. */
+    private fun recordFailure(
+        phase: BleFailure.Phase,
+        reason: Int,
+        status: Int?,
+        bondState: Int,
+        message: String,
+        services: List<String> = emptyList(),
+    ) {
+        _lastFailure.value = BleFailure.next(
+            previous = _lastFailure.value,
+            phase = phase,
+            reason = reason,
+            status = status,
+            bondState = bondState,
+            nowMs = System.currentTimeMillis(),
+            message = message,
+            services = services,
+        )
+    }
+
+    private val logRingBufferLock = Any()
+    private val logRingBuffer = ArrayDeque<String>()
+
+    private fun appendLogLine(priority: Int, message: String) {
+        val line = "${System.currentTimeMillis()} ${logPriorityTag(priority)} $message"
+        synchronized(logRingBufferLock) {
+            logRingBuffer.addLast(line)
+            while (logRingBuffer.size > LOG_RING_BUFFER_SIZE) logRingBuffer.removeFirst()
+        }
+    }
+
+    private fun logPriorityTag(priority: Int): String = when (priority) {
+        Log.VERBOSE -> "V"
+        Log.DEBUG -> "D"
+        Log.INFO -> "I"
+        Log.WARN -> "W"
+        Log.ERROR -> "E"
+        else -> "?"
+    }
+
+    /** Snapshot of the last [LOG_RING_BUFFER_SIZE] Nordic BLE log lines
+     *  (timestamped, epoch ms), oldest first. Populated regardless of
+     *  [verboseLoggingEnabled] — see [log]. */
+    fun logRingBufferSnapshot(): List<String> = synchronized(logRingBufferLock) { logRingBuffer.toList() }
+
+    /** Text block for the BLE pane's "Copy diagnostics" action: the last
+     *  recorded failure (if any) plus the log ring buffer. */
+    fun diagnosticsSnapshot(nowMs: Long = System.currentTimeMillis()): String {
+        val failure = _lastFailure.value
+        val header = if (failure != null) {
+            buildString {
+                append(failure.summaryLine(nowMs))
+                append('\n')
+                append(failure.message)
+                if (failure.discoveredServices.isNotEmpty()) {
+                    append('\n')
+                    append("Discovered services: ${failure.discoveredServices.joinToString()}")
+                }
+            }
+        } else {
+            "No BLE failures recorded"
+        }
+        val lines = logRingBufferSnapshot()
+        return buildString {
+            append(header)
+            append("\n\n--- BLE log (last ${lines.size}) ---\n")
+            append(lines.joinToString("\n"))
+        }
+    }
+
+    // endregion
+
     // region Scan result ------------------------------------------------
 
     data class BleScanResult(
@@ -438,6 +635,94 @@ class MeshtasticBleClient(context: Context) : BleManager(context) {
         val address: String,
         val rssi: Int,
     )
+
+    // endregion
+
+    // region Failure model (#203) -----------------------------------------
+
+    /**
+     * A single recorded BLE failure — connect, service-discovery, init,
+     * link-loss, or read-timeout. [consecutiveFailures] tracks repeats of the
+     * *same* phase+reason+status so the UI can show "this has happened N
+     * times in a row" instead of just the latest one (the field report is a
+     * repeating failure, not a one-off).
+     */
+    data class BleFailure(
+        val timestampMs: Long,
+        val phase: Phase,
+        val nordicReason: Int,
+        val gattStatus: Int?,
+        val bondState: Int,
+        val consecutiveFailures: Int,
+        val message: String,
+        val discoveredServices: List<String> = emptyList(),
+    ) {
+        enum class Phase { CONNECT, SERVICE_DISCOVERY, INIT, LINK_LOSS, READ_TIMEOUT }
+
+        /** "Last failure: <phase> reason=<n> status=<n or ->, bond=<NONE/BONDING/BONDED>, <relative time>" */
+        fun summaryLine(nowMs: Long = System.currentTimeMillis()): String {
+            val statusStr = gattStatus?.toString() ?: "-"
+            val bond = when (bondState) {
+                BluetoothDevice.BOND_BONDED -> "BONDED"
+                BluetoothDevice.BOND_BONDING -> "BONDING"
+                else -> "NONE"
+            }
+            return "Last failure: $phase reason=$nordicReason status=$statusStr, bond=$bond, " +
+                relativeTime(timestampMs, nowMs)
+        }
+
+        companion object {
+            /**
+             * Pure builder — lives here (rather than inline at each call
+             * site) so the consecutive-failure counting is unit-testable
+             * without a live BLE stack. [previous] is the client's current
+             * [lastFailure] value; a new failure with the same
+             * phase+reason+status signature increments
+             * [BleFailure.consecutiveFailures], anything else restarts it at 1.
+             */
+            fun next(
+                previous: BleFailure?,
+                phase: Phase,
+                reason: Int,
+                status: Int?,
+                bondState: Int,
+                nowMs: Long,
+                message: String,
+                services: List<String> = emptyList(),
+            ): BleFailure {
+                val sameSignature = previous != null &&
+                    previous.phase == phase &&
+                    previous.nordicReason == reason &&
+                    previous.gattStatus == status
+                return BleFailure(
+                    timestampMs = nowMs,
+                    phase = phase,
+                    nordicReason = reason,
+                    gattStatus = status,
+                    bondState = bondState,
+                    consecutiveFailures = if (sameSignature) previous!!.consecutiveFailures + 1 else 1,
+                    message = message,
+                    discoveredServices = services,
+                )
+            }
+
+            /** "3s ago" / "4m ago" / "2h ago" / "1d ago"; mirrors
+             *  `ui.screens.relativeTime` but works in epoch-ms since
+             *  [BleFailure.timestampMs] is ms, not seconds, and this (data
+             *  layer) class shouldn't depend on the ui.screens package. */
+            fun relativeTime(timestampMs: Long, nowMs: Long = System.currentTimeMillis()): String {
+                if (timestampMs <= 0) return "—"
+                val seconds = (nowMs - timestampMs) / 1_000
+                return when {
+                    seconds < 0 -> "just now"
+                    seconds < 60 -> "${seconds}s ago"
+                    seconds < 3_600 -> "${seconds / 60}m ago"
+                    seconds < 86_400 -> "${seconds / 3_600}h ago"
+                    else -> "${seconds / 86_400}d ago"
+                }
+            }
+        }
+    }
 
     // endregion
 
@@ -457,13 +742,20 @@ class MeshtasticBleClient(context: Context) : BleManager(context) {
          *   the reason but is still recoverable (the next connect closes the
          *   session first). Crucially neither path is a sticky state that would
          *   leave the user pinned in "Connecting" forever.
+         * @param failure #203 — the client's [lastFailure] value at the moment
+         *   the attempt resolved. When present (the ConnectionObserver already
+         *   recorded a reason-bearing failure for this same attempt), its
+         *   message wins over the generic placeholder below so the operator —
+         *   and the "Last failure" row on the BLE pane — see the real reason
+         *   instead of a bare "connect failed for $address".
          */
         internal fun resolveFailedConnectState(
             address: String,
             attemptResult: Boolean?,
+            failure: BleFailure? = null,
         ): ConnectionState = when (attemptResult) {
             null -> ConnectionState.Disconnected
-            false -> ConnectionState.Failed("connect failed for $address")
+            false -> ConnectionState.Failed(failure?.message ?: "connect failed for $address")
             true -> ConnectionState.Disconnected // not used on the failure path
         }
 
@@ -485,9 +777,15 @@ class MeshtasticBleClient(context: Context) : BleManager(context) {
         // own timeout so the library gets first chance to report a clean failure.
         internal const val WATCHDOG_TIMEOUT_MS: Long = 20_000
 
-        private const val READ_TIMEOUT_MS: Long = 5_000
+        // #203 — was 5_000 as a coroutine-only (non-Nordic) timeout; now a
+        // real Nordic RequestQueue timeout (see readOnce), widened to 10s to
+        // give a slow/congested link room before we call it a READ_TIMEOUT.
+        private const val READ_TIMEOUT_MS: Long = 10_000
         private const val POLL_INTERVAL_MS: Long = 1_000
         private const val MAX_DRAIN_PER_BATCH: Int = 32
+
+        /** #203 — how many recent BLE log lines [logRingBufferSnapshot] keeps. */
+        private const val LOG_RING_BUFFER_SIZE: Int = 200
 
         /**
          * Pure helper — splits a ToRadio payload into BLE-write-sized

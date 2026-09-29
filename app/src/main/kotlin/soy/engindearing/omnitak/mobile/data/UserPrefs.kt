@@ -112,6 +112,11 @@ data class UserPrefs(
     /** How often (seconds) PPLI is sent over the mesh. Coerced to 30..60
      *  so LoRa bandwidth is respected. */
     val meshBroadcastIntervalSecs: Int = 30,
+    /** #203 — forward Nordic BLE DEBUG/VERBOSE log lines to Logcat (they're
+     *  always captured in the client's in-memory ring buffer regardless of
+     *  this toggle). Off by default — opt-in for field debugging since
+     *  verbose BLE logging is noisy. */
+    val verboseBleLogging: Boolean = false,
     /** Which mesh framework the connected radio speaks. Defaults to
      *  Meshtastic for backwards compatibility — every existing install
      *  runs Meshtastic. Selecting MeshCore switches the mesh screen, CoT
@@ -201,6 +206,7 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_GYB_LAST_DEVICE = stringPreferencesKey("gyb_last_device_address")
     private val KEY_BROADCAST_OVER_MESH = booleanPreferencesKey("broadcast_over_mesh")
     private val KEY_MESH_BROADCAST_INTERVAL = intPreferencesKey("mesh_broadcast_interval_secs")
+    private val KEY_VERBOSE_BLE_LOGGING = booleanPreferencesKey("verbose_ble_logging")
     private val KEY_MESH_FRAMEWORK = stringPreferencesKey("selected_mesh_framework")
     private val KEY_MAP_3D = booleanPreferencesKey("map_3d_enabled")
     private val KEY_CESIUM_GLOBE = booleanPreferencesKey("cesium_globe_enabled")
@@ -251,6 +257,7 @@ class UserPrefsStore(private val context: Context) {
             p[KEY_GYB_LAST_DEVICE] = next.gybLastDeviceAddress
             p[KEY_BROADCAST_OVER_MESH] = next.broadcastOverMesh
             p[KEY_MESH_BROADCAST_INTERVAL] = next.meshBroadcastIntervalSecs.coerceIn(30, 60)
+            p[KEY_VERBOSE_BLE_LOGGING] = next.verboseBleLogging
             p[KEY_MESH_FRAMEWORK] = next.selectedMeshFramework.name
             p[KEY_MAP_3D] = next.map3dEnabled
             p[KEY_CESIUM_GLOBE] = next.cesiumGlobeEnabled
@@ -323,6 +330,11 @@ class UserPrefsStore(private val context: Context) {
         update { it.copy(meshBroadcastIntervalSecs = value.coerceIn(30, 60)) }
     }
 
+    /** #203 — persist the BLE pane's verbose-logging toggle. */
+    suspend fun setVerboseBleLogging(value: Boolean) {
+        update { it.copy(verboseBleLogging = value) }
+    }
+
     /** Persist the operator's chosen mesh framework (Meshtastic | MeshCore). */
     suspend fun setSelectedMeshFramework(value: MeshFramework) {
         update { it.copy(selectedMeshFramework = value) }
@@ -382,6 +394,7 @@ class UserPrefsStore(private val context: Context) {
         gybLastDeviceAddress = p[KEY_GYB_LAST_DEVICE] ?: "",
         broadcastOverMesh = p[KEY_BROADCAST_OVER_MESH] ?: true,
         meshBroadcastIntervalSecs = p[KEY_MESH_BROADCAST_INTERVAL]?.coerceIn(30, 60) ?: 30,
+        verboseBleLogging = p[KEY_VERBOSE_BLE_LOGGING] ?: false,
         selectedMeshFramework = p[KEY_MESH_FRAMEWORK]
             ?.let { runCatching { MeshFramework.valueOf(it) }.getOrNull() }
             ?: MeshFramework.MESHTASTIC,
