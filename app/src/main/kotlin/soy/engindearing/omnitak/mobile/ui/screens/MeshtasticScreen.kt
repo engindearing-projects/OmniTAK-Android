@@ -437,6 +437,10 @@ private fun BlePane(
     val bleBytesFlow = mesh.bleBytesReceived()
     val rssiFlow = mesh.bleRssi()
     val lastFailureFlow = mesh.bleLastFailure()
+    // #208 — needed (alongside mesh.myNodeNum) to resolve the Link state's
+    // display name; collecting it here means the label recomposes live as
+    // NodeInfo streams in the node's real long name.
+    val nodes by mesh.nodes.collectAsState()
 
     val bleState = bleStateFlow?.collectAsState()?.value ?: ConnectionState.Disconnected
     val bleBytes = bleBytesFlow?.collectAsState()?.value ?: 0L
@@ -470,10 +474,13 @@ private fun BlePane(
         onDispose { mesh.stopBleScan() }
     }
 
+    // #208 — was a bare MAC ("Connecting to AA:BB:CC:DD:EE:FF…"); resolves to
+    // the node's long name once known, else the name advertised at scan
+    // time, else the MAC.
     val stateLabel = when (val s = bleState) {
         ConnectionState.Disconnected -> "Disconnected"
-        is ConnectionState.Connecting -> "Connecting to ${s.serverName}…"
-        is ConnectionState.Connected -> "Connected to ${s.serverName}"
+        is ConnectionState.Connecting -> "Connecting to ${mesh.bleDisplayName(s.serverName, nodes)}…"
+        is ConnectionState.Connected -> "Connected to ${mesh.bleDisplayName(s.serverName, nodes)}"
         is ConnectionState.Failed -> "Failed: ${s.reason}"
     }
     val connected = bleState is ConnectionState.Connected
@@ -519,6 +526,11 @@ private fun BlePane(
             onConnect = { addr ->
                 isScanning = false
                 mesh.stopBleScan()
+                // #208 — remember the advertised name from the scan result
+                // the operator just tapped, so the Link state (and a later
+                // automatic reconnect to this same address) can show it
+                // instead of the bare MAC.
+                mesh.rememberBleAdvertisedName(addr, results.find { it.address == addr }?.name)
                 coScope.launch { mesh.connectBle(addr) }
             },
         )

@@ -100,6 +100,40 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
         set(value) { _reconnectTargetAddress.value = value }
     private var reconnectLoopStarted = false
 
+    /** #208 — BLE advertised name (scan result / `BluetoothDevice` name),
+     *  keyed by address, captured when the operator picks a radio from the
+     *  scan list. Lives next to [reconnectTargetAddress] so the automatic
+     *  reconnect loop's re-connects still have a name to show — it keeps
+     *  reusing the same remembered address, so the lookup below keeps
+     *  resolving. Outlives a single connection (cleared only by picking a
+     *  different address), matching the "auto-reconnect has it" ask; not
+     *  persisted across an app restart. */
+    private val advertisedNameByAddress = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /** #208 — remember the BLE-advertised name for [address] (e.g. from the
+     *  scan result the operator tapped). Call before/alongside [connectBle]
+     *  so [bleDisplayName] has it. Blank/null names are ignored — see
+     *  [MeshtasticBleClient.resolveDisplayName]. */
+    fun rememberBleAdvertisedName(address: String, name: String?) {
+        if (!name.isNullOrBlank()) advertisedNameByAddress[address] = name
+    }
+
+    /** #208 — human-readable name for the BLE link at [address]: the node's
+     *  real long name (once NodeInfo for [myNodeNum] has arrived in [nodes])
+     *  beats the name remembered via [rememberBleAdvertisedName], which
+     *  beats the bare MAC. [nodes] defaults to the current snapshot, but
+     *  callers that want this to update live as NodeInfo streams in should
+     *  pass their own collected `nodes` state (e.g. Compose's
+     *  `nodes.collectAsState()`) so recomposition picks up the change. */
+    fun bleDisplayName(address: String, nodes: Map<Long, MeshNode> = _nodes.value): String {
+        val longName = _myNodeNum?.let { nodes[it.toLong() and 0xFFFFFFFFL]?.longName }
+        return MeshtasticBleClient.resolveDisplayName(
+            advertisedName = advertisedNameByAddress[address],
+            longName = longName,
+            address = address,
+        )
+    }
+
     /** True whenever the BLE auto-reconnect loop has a radio it's trying
      *  to reach. OmniTAKApp keeps the foreground service alive on this
      *  signal alone — not just "Connected" — so Android's Doze mode

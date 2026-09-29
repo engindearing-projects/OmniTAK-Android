@@ -759,6 +759,31 @@ class MeshtasticBleClient(context: Context) : BleManager(context) {
             true -> ConnectionState.Disconnected // not used on the failure path
         }
 
+        /**
+         * #208 — resolves the human-readable name to show for a Meshtastic
+         * BLE link, preferring the most authoritative source available:
+         *
+         *  1. [longName] — the node's real display name, broadcast in
+         *     NodeInfo for our own node once it arrives. Not known until a
+         *     moment after connect.
+         *  2. [advertisedName] — the BLE advertisement / `BluetoothDevice`
+         *     name captured when the operator picked the radio from the
+         *     scan list. Known immediately, but sometimes just a firmware
+         *     default (e.g. "Meshtastic_ab12") that never reflects the
+         *     operator's actual configured name.
+         *  3. [address] — the bare MAC, only when neither of the above is
+         *     known yet (e.g. right at the start of a fresh connect before
+         *     any scan result was captured).
+         *
+         * Blank strings (empty or all-whitespace) are treated as absent, not
+         * as a valid name to show.
+         */
+        fun resolveDisplayName(advertisedName: String?, longName: String?, address: String): String {
+            if (!longName.isNullOrBlank()) return longName
+            if (!advertisedName.isNullOrBlank()) return advertisedName
+            return address
+        }
+
         // Meshtastic GATT service & characteristic UUIDs. Matches the
         // canonical service the Meshtastic firmware advertises.
         val SERVICE_UUID: UUID = UUID.fromString("6ba1b218-15a8-461f-9fa8-5dcae273eafd")
