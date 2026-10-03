@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.OmniTAKApp
 import soy.engindearing.omnitak.mobile.data.MeshChannelPreset
+import soy.engindearing.omnitak.mobile.data.MeshConnectionType
 import soy.engindearing.omnitak.mobile.data.MeshDeviceConfig
 import soy.engindearing.omnitak.mobile.data.MeshRole
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
@@ -87,6 +88,11 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
     // Transport-aware — TCP or BLE, whichever is the active link.
     // Was `mesh.state` (TCP-only) which left BLE radios stranded (#36).
     val connection by mesh.activeConnectionState.collectAsState()
+    // #208 — needed to resolve a BLE link's display name below; TCP's
+    // serverName is already a real host, so it's only used when BLE is the
+    // active transport.
+    val activeTransport by mesh.activeTransport.collectAsState()
+    val nodes by mesh.nodes.collectAsState()
     val scope = rememberCoroutineScope()
 
     // Local draft buffer — text fields edit this, "Save draft" commits
@@ -114,10 +120,16 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
         if (deviceConnected) mesh.requestDeviceConfig()
     }
 
+    // #208 — s.serverName is a bare MAC for a BLE link (TCP's is already a
+    // real host, left alone); resolve it to the node's long name / the
+    // scan-advertised name the same way the Mesh screen's BLE pane does.
+    fun linkName(serverName: String): String =
+        if (activeTransport == MeshConnectionType.BLUETOOTH) mesh.bleDisplayName(serverName, nodes) else serverName
+
     val connectionLabel = when (val s = connection) {
         ConnectionState.Disconnected -> "No device connected"
-        is ConnectionState.Connecting -> "Connecting to ${s.serverName}…"
-        is ConnectionState.Connected -> "Connected to ${s.serverName}"
+        is ConnectionState.Connecting -> "Connecting to ${linkName(s.serverName)}…"
+        is ConnectionState.Connected -> "Connected to ${linkName(s.serverName)}"
         is ConnectionState.Failed -> "Connection failed: ${s.reason}"
     }
 

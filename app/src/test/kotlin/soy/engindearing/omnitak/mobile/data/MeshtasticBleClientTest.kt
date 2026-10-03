@@ -101,6 +101,59 @@ class MeshtasticBleClientTest {
 
     // endregion
 
+    // region #208 — BLE link display name -------------------------------
+    // resolveDisplayName() picks what the Link state shows for a Meshtastic
+    // BLE radio: the node's real long name (once NodeInfo for our own node
+    // arrives) beats the name advertised at scan time, which beats a bare
+    // MAC shown only when nothing else is known yet.
+
+    @Test fun display_name_advertised_name_wins_over_mac() {
+        val name = MeshtasticBleClient.resolveDisplayName(
+            advertisedName = "Meshtastic_ab12",
+            longName = null,
+            address = "AA:BB:CC:DD:EE:FF",
+        )
+        assertEquals("Meshtastic_ab12", name)
+    }
+
+    @Test fun display_name_long_name_wins_over_advertised_name() {
+        val name = MeshtasticBleClient.resolveDisplayName(
+            advertisedName = "Meshtastic_ab12",
+            longName = "Basecamp Radio",
+            address = "AA:BB:CC:DD:EE:FF",
+        )
+        assertEquals("Basecamp Radio", name)
+    }
+
+    @Test fun display_name_falls_back_to_mac_when_nothing_known() {
+        val name = MeshtasticBleClient.resolveDisplayName(
+            advertisedName = null,
+            longName = null,
+            address = "AA:BB:CC:DD:EE:FF",
+        )
+        assertEquals("AA:BB:CC:DD:EE:FF", name)
+    }
+
+    @Test fun display_name_ignores_blank_long_name_and_falls_back_to_advertised() {
+        val name = MeshtasticBleClient.resolveDisplayName(
+            advertisedName = "Meshtastic_ab12",
+            longName = "   ",
+            address = "AA:BB:CC:DD:EE:FF",
+        )
+        assertEquals("Meshtastic_ab12", name)
+    }
+
+    @Test fun display_name_ignores_blank_advertised_name_and_falls_back_to_mac() {
+        val name = MeshtasticBleClient.resolveDisplayName(
+            advertisedName = "",
+            longName = null,
+            address = "AA:BB:CC:DD:EE:FF",
+        )
+        assertEquals("AA:BB:CC:DD:EE:FF", name)
+    }
+
+    // endregion
+
     // region fromRadio frame stitching ------------------------------------
     // Conceptually a fromRadio read returns a complete FromRadio
     // protobuf payload — but in practice the underlying GATT layer can
