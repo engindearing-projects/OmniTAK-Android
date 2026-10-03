@@ -12,9 +12,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -109,10 +111,14 @@ fun OnvifCameraScreen(onDone: () -> Unit) {
             )
         },
     ) { inner: PaddingValues ->
+        // #207 — the full-width 16:9 video box plus the PTZ pad is taller
+        // than a landscape phone viewport; scroll keeps the PTZ controls and
+        // the Connect / Disconnect buttons reachable instead of clipped.
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(inner)
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {

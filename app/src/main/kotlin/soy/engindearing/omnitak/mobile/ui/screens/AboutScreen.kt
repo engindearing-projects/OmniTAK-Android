@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -16,9 +18,14 @@ import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
 
 @Composable
 fun AboutScreen() {
+    // #207 — landscape on a short-height phone can put this below the fold
+    // (large font scale, a narrow landscape height, etc.); scroll keeps it
+    // reachable instead of clipped. Arrangement.Center still centers the
+    // content when it already fits.
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(24.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
