@@ -109,6 +109,13 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
         _reconnectTargetAddress.map { it != null }
             .stateIn(scope, SharingStarted.Eagerly, false)
 
+    /** #203 — increments each time [ensureReconnectLoopStarted]'s loop fires an
+     *  automatic retry; resets to 0 on a successful [connectBle] (manual or
+     *  automatic) and on a user-initiated [disconnect]. Lets the BLE pane show
+     *  "Reconnecting, attempt n" instead of a silent retry loop. */
+    private val _reconnectAttempt = MutableStateFlow(0)
+    val reconnectAttempt: StateFlow<Int> = _reconnectAttempt.asStateFlow()
+
     private fun ensureReconnectLoopStarted() {
         if (reconnectLoopStarted) return
         reconnectLoopStarted = true
@@ -119,7 +126,8 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
                 if (_activeTransport.value != MeshConnectionType.BLUETOOTH) continue
                 val current = activeConnectionState.value
                 if (current is ConnectionState.Connected || current is ConnectionState.Connecting) continue
-                Log.i(TAG, "BLE auto-reconnect: retrying $target")
+                _reconnectAttempt.value += 1
+                Log.i(TAG, "BLE auto-reconnect: retrying $target (attempt ${_reconnectAttempt.value})")
                 connectBle(target)
             }
         }
@@ -227,6 +235,9 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
         }
         val ok = client.connectToAddress(deviceAddress)
         if (ok) {
+            // #203 — a successful connect (manual tap or automatic retry)
+            // means whatever streak of failures preceded it is over.
+            _reconnectAttempt.value = 0
             // Critical Meshtastic handshake: ask the radio to dump its
             // config + node database. Without this the radio doesn't
             // push any state and the node list stays empty.
@@ -281,6 +292,21 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
     /** RSSI of the active BLE link, or null if BLE not initialized. */
     fun bleRssi(): StateFlow<Int>? = bleClient?.rssi
 
+    /** #203 — the BLE client's most recent connect/link failure, or null if
+     *  BLE not initialized. */
+    fun bleLastFailure(): StateFlow<MeshtasticBleClient.BleFailure?>? = bleClient?.lastFailure
+
+    /** #203 — text block for the BLE pane's "Copy diagnostics" action (last
+     *  failure + BLE log ring buffer). */
+    fun bleDiagnosticsSnapshot(): String = bleClient?.diagnosticsSnapshot() ?: "BLE not initialized"
+
+    /** #203 — push the operator's verbose-BLE-logging preference down to the
+     *  BLE client, constructing it (like [ensureBleReady]) if a [Context] is
+     *  available; a no-op only when the manager was built without one. */
+    fun setVerboseBleLogging(enabled: Boolean) {
+        bleClientOrNull()?.verboseLoggingEnabled = enabled
+    }
+
     override fun disconnect() {
         when (_activeTransport.value) {
             MeshConnectionType.TCP -> tcpClient.disconnect()
@@ -290,6 +316,9 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
                 // (radio power-off / out of range) never calls this, so
                 // reconnectTargetAddress stays set for that case.
                 reconnectTargetAddress = null
+                // #203 — a user-initiated disconnect isn't a failure streak;
+                // don't carry a stale attempt count into the next session.
+                _reconnectAttempt.value = 0
                 // Fire-and-forget — the BLE client's own scope handles
                 // the suspending teardown, and the connection observer
                 // flips state to Disconnected.
