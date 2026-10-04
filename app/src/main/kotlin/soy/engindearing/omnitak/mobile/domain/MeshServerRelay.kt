@@ -4,22 +4,27 @@ import android.util.Log
 import java.util.concurrent.ConcurrentHashMap
 import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.CoTSource
+import soy.engindearing.omnitak.mobile.data.MeshFramework
+import soy.engindearing.omnitak.mobile.data.UserPrefs
 
 /**
  * #179 — CoT relay between the LoRa mesh and the TAK server (ATAK
  * Meshtastic-gateway parity).
  *
  * When the device is connected to BOTH a TAK server AND a mesh, and the
- * operator has turned the gateway on, this coordinator bridges CoT both ways:
- * mesh-only nodes get pushed up to the server (so the wider TAK network sees
- * them), and server contacts get pushed down to the mesh (so off-grid radios
- * see the server picture).
+ * operator has turned a relay direction on, this coordinator bridges CoT that
+ * way: mesh-only nodes get pushed up to the server (so the wider TAK network
+ * sees them), and server contacts get pushed down to the mesh (so off-grid
+ * radios see the server picture). Each direction has its own switch (#212).
  *
  * This is powerful but dangerous if naive — a busy TAK server can flood the
  * LoRa channel and blow the radio's duty cycle. So the relay is built defensively:
  *
- *  - **Off by default.** Only relays when [RelayInputs.enabled] AND both
- *    transports are connected.
+ *  - **Off by default, one switch per direction.** mesh→server and
+ *    server→mesh are separate operator switches ([RelayInputs.toServerEnabled],
+ *    [RelayInputs.toMeshEnabled], #212). A direction only relays when its own
+ *    switch is on AND both transports are connected. server→mesh is forced
+ *    off while MeshCore is the active mesh ([RelayDirections.effective]).
  *  - **Loop-proof.** The decision is driven entirely by the #180 [CoTSource]
  *    tag: a CoT that arrived from the mesh only ever goes UP to the server, a
  *    CoT that arrived from the server only ever goes DOWN to the mesh, and
@@ -51,8 +56,10 @@ class MeshServerRelay(
     private val serverConnected: () -> Boolean,
     /** Snapshots whether the active mesh transport is connected. */
     private val meshConnected: () -> Boolean,
-    /** Snapshots the operator's relay/gateway toggle (default OFF). */
-    private val relayEnabled: () -> Boolean,
+    /** Snapshots which relay directions are in force right now: the operator's
+     *  two switches (both default OFF), already narrowed by the active mesh
+     *  framework. Wired to `RelayDirections.from(prefs)`. */
+    private val relayDirections: () -> RelayDirections,
     /** Injectable clock for deterministic dedup/throttle tests. */
     private val clock: () -> Long = { System.currentTimeMillis() },
 ) {
@@ -69,13 +76,15 @@ class MeshServerRelay(
      * actual send; the decision + gate are non-blocking.
      */
     suspend fun onInbound(event: CoTEvent, source: CoTSource?) {
+        val directions = relayDirections()
         val target = relayTarget(
             RelayInputs(
                 event = event,
                 source = source,
                 serverConnected = serverConnected(),
                 meshConnected = meshConnected(),
-                enabled = relayEnabled(),
+                toServerEnabled = directions.toServer,
+                toMeshEnabled = directions.toMesh,
             ),
         )
         when (target) {
@@ -130,14 +139,84 @@ class MeshServerRelay(
     fun reset() = lastForwardMs.clear()
 
     /** Inputs to the pure [relayTarget] decision. Grouped so the function
-     *  signature stays readable and the test can build cases declaratively. */
+     *  signature stays readable and the test can build cases declaratively.
+     *  [toServerEnabled] / [toMeshEnabled] are the two direction switches
+     *  (#212): mesh→server and server→mesh. */
     data class RelayInputs(
         val event: CoTEvent,
         val source: CoTSource?,
         val serverConnected: Boolean,
         val meshConnected: Boolean,
-        val enabled: Boolean,
+        val toServerEnabled: Boolean,
+        val toMeshEnabled: Boolean,
     )
+
+    /**
+     * #212: which relay directions are in force right now. [toServer] relays
+     * what the mesh hears up to the TAK server(s); [toMesh] relays server
+     * contacts down onto the mesh radio.
+     */
+    data class RelayDirections(val toServer: Boolean, val toMesh: Boolean) {
+        val anyActive: Boolean get() = toServer || toMesh
+
+        /** The active directions in words, for the Meshtastic screen. */
+        fun label(): String = when {
+            toServer && toMesh -> "mesh → server and server → mesh"
+            toServer -> "mesh → server"
+            toMesh -> "server → mesh"
+            else -> "off"
+        }
+
+        /**
+         * One status line for the Meshtastic screen: what is switched on and,
+         * when a direction is on but a transport is missing, what it is waiting
+         * for (the relay does nothing until both ends are connected).
+         */
+        fun statusText(serverConnected: Boolean, meshConnected: Boolean): String = when {
+            !anyActive -> "Relay is off."
+            serverConnected && meshConnected -> "Relaying ${label()}."
+            else -> {
+                val missing = when {
+                    !serverConnected && !meshConnected -> "a TAK server and a mesh radio"
+                    !serverConnected -> "a TAK server"
+                    else -> "a mesh radio"
+                }
+                "Set to relay ${label()}. Waiting for $missing to connect."
+            }
+        }
+
+        companion object {
+            val OFF = RelayDirections(toServer = false, toMesh = false)
+
+            /**
+             * Can the active mesh framework take server contacts down onto the
+             * air? MeshCore cannot: [MeshCoreManager.sendCoTOverMesh] treats every
+             * non-chat event as the operator's OWN position and writes it into the
+             * radio's advert location (SET_ADVERT_LATLON + SEND_SELF_ADVERT), so a
+             * relayed server contact would move the operator's advertised position
+             * onto that contact.
+             */
+            fun meshAcceptsServerContacts(framework: MeshFramework): Boolean =
+                framework != MeshFramework.MESHCORE
+
+            /** The operator's two switches, narrowed by what [framework] can carry. */
+            fun effective(
+                toServerEnabled: Boolean,
+                toMeshEnabled: Boolean,
+                framework: MeshFramework,
+            ): RelayDirections = RelayDirections(
+                toServer = toServerEnabled,
+                toMesh = toMeshEnabled && meshAcceptsServerContacts(framework),
+            )
+
+            /** [effective] read straight off the persisted prefs. */
+            fun from(prefs: UserPrefs): RelayDirections = effective(
+                toServerEnabled = prefs.relayToServerEnabled,
+                toMeshEnabled = prefs.relayToMeshEnabled,
+                framework = prefs.selectedMeshFramework,
+            )
+        }
+    }
 
     /** Where (if anywhere) an inbound CoT should be relayed. */
     enum class RelayTarget { NONE, TO_SERVER, TO_MESH }
@@ -157,29 +236,37 @@ class MeshServerRelay(
 
         /**
          * The PURE relay forwarding decision. No I/O, no state — given only the
-         * event, its source transport, the two connection booleans and the
-         * enable flag, returns which way (if any) to relay.
+         * event, its source transport, the two connection booleans and the two
+         * direction switches, returns which way (if any) to relay.
          *
          * Rules (in order):
-         *  1. Gateway off → [RelayTarget.NONE].
-         *  2. Either transport down → [RelayTarget.NONE] (a gateway needs both
+         *  1. Either transport down → [RelayTarget.NONE] (a gateway needs both
          *     ends; relaying with one side down is pointless and risks queueing).
-         *  3. Arrived from the mesh → [RelayTarget.TO_SERVER] (never back to mesh).
-         *  4. Arrived from the server → [RelayTarget.TO_MESH], but ONLY for the
-         *     meaningful CoT types ([isRelayableToMesh]) — never back to server.
-         *  5. Anything else (LOCAL / OTHER / untagged) → [RelayTarget.NONE].
+         *  2. Arrived from the mesh → [RelayTarget.TO_SERVER] (never back to
+         *     mesh), but only if [RelayInputs.toServerEnabled] is on.
+         *  3. Arrived from the server → [RelayTarget.TO_MESH] (never back to
+         *     server), but only if [RelayInputs.toMeshEnabled] is on AND only for
+         *     the meaningful CoT types ([isRelayableToMesh]).
+         *  4. Anything else (LOCAL / OTHER / untagged) → [RelayTarget.NONE].
          *     Local self-markers are already broadcast by the dedicated
          *     [SelfPositionBroadcaster]; untagged events have no safe origin to
          *     reason about, so we refuse to relay them (loop-safe default).
+         *
+         * Each direction is gated only by its own switch (#212). With both off
+         * nothing relays, which is the default.
          */
         fun relayTarget(inputs: RelayInputs): RelayTarget {
-            if (!inputs.enabled) return RelayTarget.NONE
             if (!inputs.serverConnected || !inputs.meshConnected) return RelayTarget.NONE
             return when (inputs.source?.transport) {
-                CoTSource.Transport.MESH -> RelayTarget.TO_SERVER
-                CoTSource.Transport.TAK_SERVER ->
-                    if (isRelayableToMesh(inputs.event.type)) RelayTarget.TO_MESH
+                CoTSource.Transport.MESH ->
+                    if (inputs.toServerEnabled) RelayTarget.TO_SERVER
                     else RelayTarget.NONE
+                CoTSource.Transport.TAK_SERVER ->
+                    if (inputs.toMeshEnabled && isRelayableToMesh(inputs.event.type)) {
+                        RelayTarget.TO_MESH
+                    } else {
+                        RelayTarget.NONE
+                    }
                 else -> RelayTarget.NONE
             }
         }

@@ -66,6 +66,8 @@ import soy.engindearing.omnitak.mobile.data.MeshNode
 import soy.engindearing.omnitak.mobile.data.MeshtasticBleClient
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
 import soy.engindearing.omnitak.mobile.domain.MeshCoreManager
+import soy.engindearing.omnitak.mobile.domain.MeshFrameworkManager
+import soy.engindearing.omnitak.mobile.domain.MeshServerRelay
 import soy.engindearing.omnitak.mobile.domain.MeshtasticManager
 import soy.engindearing.omnitak.mobile.ui.components.BleScanList
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
@@ -200,34 +202,9 @@ fun MeshtasticScreen(
                                 menuOpen = false
                             },
                         )
-                        // #179 — gateway: relay CoT both ways between the mesh
-                        // and the TAK server. Off by default; only acts when
-                        // both transports are connected. Hard-throttled
-                        // server→mesh to protect LoRa airtime.
-                        DropdownMenuItem(
-                            text = {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        "Relay mesh ↔ server (gateway)",
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                    if (userPrefs.relayGatewayEnabled) {
-                                        Icon(
-                                            Icons.Filled.Check,
-                                            contentDescription = "Enabled",
-                                            tint = TacticalAccent,
-                                        )
-                                    }
-                                }
-                            },
-                            onClick = {
-                                val next = !userPrefs.relayGatewayEnabled
-                                coScope.launch {
-                                    app.userPrefsStore.setRelayGatewayEnabled(next)
-                                }
-                                menuOpen = false
-                            },
-                        )
+                        // #179 / #212: the mesh ↔ server relay (gateway) switches, one
+                        // per direction, live in the "Relay (gateway)" section of each
+                        // pane below (see RelaySection).
                         DropdownMenuItem(
                             text = { Text("Disconnect") },
                             enabled = anyConnected,
@@ -403,6 +380,10 @@ private fun TcpPane(
         KeyValueRow(label = "State", value = stateLabel)
         KeyValueRow(label = "Bytes RX", value = "$bytes")
         KeyValueRow(label = "Nodes", value = "$nodeCount")
+
+        HorizontalDivider(color = TacticalSurface)
+
+        RelaySection()
 
         HorizontalDivider(color = TacticalSurface)
 
@@ -604,6 +585,10 @@ private fun BlePane(
 
         HorizontalDivider(color = TacticalSurface)
 
+        RelaySection()
+
+        HorizontalDivider(color = TacticalSurface)
+
         SectionHeader("Nodes")
         if (sortedNodes.isEmpty()) {
             Text(
@@ -718,6 +703,10 @@ private fun MeshCorePane(
 
         HorizontalDivider(color = TacticalSurface)
 
+        RelaySection()
+
+        HorizontalDivider(color = TacticalSurface)
+
         SectionHeader("Contacts")
         if (sortedNodes.isEmpty()) {
             Text(
@@ -794,6 +783,121 @@ private fun KeyValueRow(label: String, value: String) {
             color = MaterialTheme.colorScheme.onBackground,
             fontFamily = FontFamily.Monospace,
             style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+}
+
+/**
+ * #179 / #212: the mesh ↔ server relay (gateway) controls: one switch per
+ * direction so a gateway phone can be tuned per event, and one line saying
+ * what is actually in force. Shown in every pane (Meshtastic TCP, Meshtastic
+ * BLE, MeshCore) because the relay bridges whichever mesh framework is active.
+ */
+@Composable
+private fun RelaySection() {
+    val app = LocalContext.current.applicationContext as OmniTAKApp
+    val coScope = rememberCoroutineScope()
+    val userPrefs by app.userPrefsStore.prefs.collectAsState(
+        initial = soy.engindearing.omnitak.mobile.data.UserPrefs(),
+    )
+    val framework = userPrefs.selectedMeshFramework
+    // What the relay really does with those switches: MeshCore forces
+    // server → mesh off (see RelayDirections.effective).
+    val inForce = MeshServerRelay.RelayDirections.from(userPrefs)
+    val toMeshAvailable = MeshServerRelay.RelayDirections.meshAcceptsServerContacts(framework)
+
+    // The same two "is it connected" checks OmniTAKApp.meshServerRelay makes
+    // before it relays anything.
+    val serverState by app.serverManager.connectionState.collectAsState()
+    val activeMesh: MeshFrameworkManager =
+        if (framework == MeshFramework.MESHCORE) app.meshcore else app.meshtastic
+    val meshState by activeMesh.activeConnectionState.collectAsState()
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        SectionHeader("Relay (gateway)")
+        Text(
+            "Bridge CoT between the mesh and your TAK server. It only acts while a " +
+                "TAK server and a mesh radio are both connected, and it is off by default.",
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+            style = MaterialTheme.typography.bodySmall,
+        )
+        RelaySwitchRow(
+            title = "Mesh → server",
+            description = "Nodes heard on the mesh are also sent up to your TAK server, " +
+                "so the wider TAK network sees them.",
+            checked = userPrefs.relayToServerEnabled,
+            enabled = true,
+            onCheckedChange = { next ->
+                coScope.launch { app.userPrefsStore.setRelayToServerEnabled(next) }
+            },
+        )
+        RelaySwitchRow(
+            title = "Server → mesh",
+            description = "Server positions, markers, chat and waypoints are also sent " +
+                "down to the mesh radio, each contact at most once every " +
+                "${MeshServerRelay.serverToMeshThrottleMs / 1000} seconds to protect LoRa airtime.",
+            checked = userPrefs.relayToMeshEnabled && toMeshAvailable,
+            enabled = toMeshAvailable,
+            onCheckedChange = { next ->
+                coScope.launch { app.userPrefsStore.setRelayToMeshEnabled(next) }
+            },
+        )
+        if (!toMeshAvailable) {
+            Text(
+                "Not available with MeshCore: a MeshCore radio treats everything sent " +
+                    "to it as your own position, so a server contact would overwrite " +
+                    "your advertised location. Switch to Meshtastic to use it; your " +
+                    "setting is kept.",
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        Text(
+            inForce.statusText(
+                serverConnected = serverState is ConnectionState.Connected,
+                meshConnected = meshState is ConnectionState.Connected,
+            ),
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = FontFamily.Monospace,
+        )
+    }
+}
+
+@Composable
+private fun RelaySwitchRow(
+    title: String,
+    description: String,
+    checked: Boolean,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(
+                title,
+                color = MaterialTheme.colorScheme.onBackground
+                    .copy(alpha = if (enabled) 0.9f else 0.5f),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                description,
+                color = MaterialTheme.colorScheme.onBackground
+                    .copy(alpha = if (enabled) 0.6f else 0.4f),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            enabled = enabled,
         )
     }
 }
