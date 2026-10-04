@@ -277,6 +277,29 @@ fun SettingsScreen(
             }
 
             SectionHeader(Loc.t("settings.section.selfPosition"))
+            // #211 - master switch for reporting my position (server + mesh PPLI).
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        Loc.t("settings.reportPosition"),
+                        color = MaterialTheme.colorScheme.onBackground,
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Text(
+                        Loc.t("settings.reportPosition.desc"),
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Switch(
+                    checked = prefs.positionReportingEnabled,
+                    onCheckedChange = { v -> mutate { it.copy(positionReportingEnabled = v) } },
+                )
+            }
+            Spacer(Modifier.height(8.dp))
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth(),

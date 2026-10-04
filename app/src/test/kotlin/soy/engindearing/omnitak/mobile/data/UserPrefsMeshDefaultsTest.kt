@@ -19,6 +19,25 @@ class UserPrefsMeshDefaultsTest {
     }
 
     @Test
+    fun `positionReportingEnabled defaults to true`() {
+        // #211 - reporting stays on unless the operator switches it off, so
+        // existing installs behave exactly as before the switch existed.
+        assertTrue(
+            "positionReportingEnabled must default to true",
+            UserPrefs().positionReportingEnabled,
+        )
+    }
+
+    @Test
+    fun `positionReportingEnabled is independent of broadcastOverMesh`() {
+        // Two separate switches: the master one (server + mesh) and the mesh-only one.
+        val off = UserPrefs().copy(positionReportingEnabled = false)
+        assertTrue("turning reporting off must not touch the mesh toggle", off.broadcastOverMesh)
+        val meshOff = UserPrefs().copy(broadcastOverMesh = false)
+        assertTrue("turning the mesh toggle off must not touch reporting", meshOff.positionReportingEnabled)
+    }
+
+    @Test
     fun `meshBroadcastIntervalSecs defaults to 30`() {
         assertEquals(
             "meshBroadcastIntervalSecs must default to 30 (minimum LoRa-safe interval)",

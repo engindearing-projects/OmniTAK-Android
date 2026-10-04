@@ -22,6 +22,7 @@ import soy.engindearing.omnitak.mobile.data.UserPrefs
  *  - throttle suppresses second send within the window
  *  - resumes after window elapses
  *  - server PPLI (sendCoT) always fires regardless of mesh state
+ *  - #211: the master "Report my position" switch gates BOTH sends
  */
 class SelfPositionBroadcasterMeshTest {
 
@@ -41,6 +42,7 @@ class SelfPositionBroadcasterMeshTest {
         meshConnected: () -> Boolean = { true },
         meshBroadcastEnabled: () -> Boolean = { true },
         meshThrottleMs: Long = 10_000L,
+        positionReportingEnabled: () -> Boolean = { true },
         capturedMeshEvents: MutableList<CoTEvent> = mutableListOf(),
     ): SelfPositionBroadcaster {
         val fixFlow = MutableStateFlow<SelfFix?>(testLocation)
@@ -61,6 +63,7 @@ class SelfPositionBroadcasterMeshTest {
             meshConnected = meshConnected,
             meshBroadcastEnabled = meshBroadcastEnabled,
             meshThrottleMs = { meshThrottleMs },
+            positionReportingEnabled = positionReportingEnabled,
         )
     }
 
@@ -153,5 +156,36 @@ class SelfPositionBroadcasterMeshTest {
         b.broadcastOnce(testPrefs)
         assertEquals("server send fires even with mesh disconnected", 1, serverSends.size)
         assertTrue("XML is a CoT event", serverSends[0].contains("<event"))
+    }
+
+    @Test
+    fun no_send_when_position_reporting_disabled() = runTest {
+        // #211 - one switch, both paths: with "Report my position" off neither
+        // the server PPLI nor the mesh PPLI goes out, even with a fix, a
+        // connected radio, the mesh toggle on and no throttle in the way.
+        val serverSends = mutableListOf<String>()
+        val meshEvents = mutableListOf<CoTEvent>()
+        var reporting = false
+        val b = makeBroadcaster(
+            scope = this,
+            sendCoT = { xml -> serverSends.add(xml); true },
+            meshConnected = { true },
+            meshBroadcastEnabled = { true },
+            meshThrottleMs = 0L,
+            positionReportingEnabled = { reporting },
+            capturedMeshEvents = meshEvents,
+        )
+
+        b.broadcastOnce(testPrefs)
+        b.broadcastOnce(testPrefs)
+        assertEquals("no server PPLI while reporting is off", 0, serverSends.size)
+        assertEquals("no mesh PPLI while reporting is off", 0, meshEvents.size)
+
+        // Switched back on: the running broadcaster picks it up on its next
+        // tick, no restart, and both paths fire again.
+        reporting = true
+        b.broadcastOnce(testPrefs)
+        assertEquals("server PPLI resumes when reporting is switched back on", 1, serverSends.size)
+        assertEquals("mesh PPLI resumes when reporting is switched back on", 1, meshEvents.size)
     }
 }

@@ -109,6 +109,12 @@ data class UserPrefs(
      *  Meshtastic radio (portnum-72 TAKMessage). Allows two OmniTAK
      *  operators with radios to see each other and chat with NO server. */
     val broadcastOverMesh: Boolean = true,
+    /** #211 - master "Report my position" switch. When false the app sends no
+     *  PPLI at all: not to TAK servers, not over the mesh. The map still shows
+     *  where I am. Default on, which is how every install behaved before the
+     *  switch existed. Deliberately not part of ConfigProfile: a shared team
+     *  profile must not be able to switch an operator's reporting back on. */
+    val positionReportingEnabled: Boolean = true,
     /** How often (seconds) PPLI is sent over the mesh. Coerced to 30..60
      *  so LoRa bandwidth is respected. */
     val meshBroadcastIntervalSecs: Int = 30,
@@ -205,6 +211,7 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_GYB_DETECTOR = booleanPreferencesKey("gyb_detector_enabled")
     private val KEY_GYB_LAST_DEVICE = stringPreferencesKey("gyb_last_device_address")
     private val KEY_BROADCAST_OVER_MESH = booleanPreferencesKey("broadcast_over_mesh")
+    private val KEY_POSITION_REPORTING = booleanPreferencesKey("position_reporting_enabled")
     private val KEY_MESH_BROADCAST_INTERVAL = intPreferencesKey("mesh_broadcast_interval_secs")
     private val KEY_VERBOSE_BLE_LOGGING = booleanPreferencesKey("verbose_ble_logging")
     private val KEY_MESH_FRAMEWORK = stringPreferencesKey("selected_mesh_framework")
@@ -256,6 +263,7 @@ class UserPrefsStore(private val context: Context) {
             p[KEY_GYB_DETECTOR] = next.gybDetectorEnabled
             p[KEY_GYB_LAST_DEVICE] = next.gybLastDeviceAddress
             p[KEY_BROADCAST_OVER_MESH] = next.broadcastOverMesh
+            p[KEY_POSITION_REPORTING] = next.positionReportingEnabled
             p[KEY_MESH_BROADCAST_INTERVAL] = next.meshBroadcastIntervalSecs.coerceIn(30, 60)
             p[KEY_VERBOSE_BLE_LOGGING] = next.verboseBleLogging
             p[KEY_MESH_FRAMEWORK] = next.selectedMeshFramework.name
@@ -323,6 +331,11 @@ class UserPrefsStore(private val context: Context) {
     /** Persist the off-grid mesh broadcast toggle. */
     suspend fun setBroadcastOverMesh(value: Boolean) {
         update { it.copy(broadcastOverMesh = value) }
+    }
+
+    /** #211 - persist the master "Report my position" switch. */
+    suspend fun setPositionReportingEnabled(value: Boolean) {
+        update { it.copy(positionReportingEnabled = value) }
     }
 
     /** Persist the mesh PPLI broadcast interval (coerced to 30..60 seconds). */
@@ -393,6 +406,7 @@ class UserPrefsStore(private val context: Context) {
         gybDetectorEnabled = p[KEY_GYB_DETECTOR] ?: false,
         gybLastDeviceAddress = p[KEY_GYB_LAST_DEVICE] ?: "",
         broadcastOverMesh = p[KEY_BROADCAST_OVER_MESH] ?: true,
+        positionReportingEnabled = p[KEY_POSITION_REPORTING] ?: true,
         meshBroadcastIntervalSecs = p[KEY_MESH_BROADCAST_INTERVAL]?.coerceIn(30, 60) ?: 30,
         verboseBleLogging = p[KEY_VERBOSE_BLE_LOGGING] ?: false,
         selectedMeshFramework = p[KEY_MESH_FRAMEWORK]
