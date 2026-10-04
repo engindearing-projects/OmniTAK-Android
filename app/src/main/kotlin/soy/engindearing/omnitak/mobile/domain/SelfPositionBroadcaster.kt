@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.CotXml
 import soy.engindearing.omnitak.mobile.data.SelfFix
@@ -30,6 +31,15 @@ import java.util.UUID
  * Self-UID is generated once and persisted via [UserPrefsStore] so the
  * server treats this device as a stable contact across restarts. The
  * `ANDROID-` prefix triggers the correct ATAK icon set.
+ *
+ * #205 — a position restored from the previous session ([SelfFix.restored])
+ * is never broadcast: the wire stamps time=now, so it would read as a fresh
+ * position and then jump when GPS catches up. While the only fix is a
+ * restored one (or there is none yet) the tick is skipped, and the loop
+ * wakes the moment a live fix lands so the server replaces whatever it has
+ * instead of waiting out the rest of the interval. A manual position
+ * ([manualFixProvider]) is the operator's deliberate choice and is always
+ * broadcast.
  */
 class SelfPositionBroadcaster internal constructor(
     private val scope: CoroutineScope,
@@ -41,7 +51,7 @@ class SelfPositionBroadcaster internal constructor(
     // this coordinate instead of the live GPS fix so teammates / the TAK
     // server see the operator where they manually placed themselves (the
     // self-marker reposition flow). Returns null in normal GPS mode, which
-    // falls through to the existing live-fix → persisted-fix selection.
+    // falls through to the live fix.
     // A lambda (like meshBroadcastEnabled) so toggling manual mode on a
     // running broadcaster takes effect on the next tick without a restart.
     private val manualFixProvider: () -> SelfFix? = { null },
@@ -74,6 +84,14 @@ class SelfPositionBroadcaster internal constructor(
     },
 ) {
     @Volatile private var lastMeshSendMs: Long = 0L
+    // #205 - set when the last tick had nothing trustworthy to send (no fix
+    // yet, or only the one restored from the last session). While set, the
+    // loop waits for a live fix instead of sleeping the whole interval, so
+    // the first real position goes out at once.
+    @Volatile private var heldForLiveFix: Boolean = false
+    // #205 - log "restored fix held back" once per held episode, not on every
+    // 30 s tick while GPS is still acquiring.
+    @Volatile private var loggedRestoredHold: Boolean = false
     constructor(
         scope: CoroutineScope,
         prefsStore: UserPrefsStore,
@@ -115,12 +133,37 @@ class SelfPositionBroadcaster internal constructor(
             Log.i(TAG, "Starting PPLI broadcast — uid=${prefs.selfUid} callsign=${prefs.callsign}")
             broadcastOnce(prefs)
             while (isActive) {
-                delay(intervalMs)
+                awaitNextTick()
                 if (!isActive) break
                 val latest = currentPrefs()
                 broadcastOnce(latest)
             }
         }
+    }
+
+    /**
+     * Wait for the next scheduled send. Normally a plain [intervalMs] delay.
+     * #205 - when the last tick was held (no live fix yet) also wake as soon
+     * as one lands, so the server replaces its old position at once instead
+     * of up to a full interval later. Still bounded by [intervalMs] so a
+     * manual position or a changed pref is picked up on the normal cadence.
+     *
+     * The wait is on the flow's current value, so a live fix that landed
+     * between the held tick and this call wakes it immediately (no lost
+     * wake-up). The early wake is consumed here: [heldForLiveFix] is cleared
+     * on the way out and only a tick that holds again sets it, so if the tick
+     * after a wake does not send for any other reason (reporting switched
+     * off, say) the next wait is a plain interval, never a busy loop.
+     */
+    private suspend fun awaitNextTick() {
+        if (!heldForLiveFix) {
+            delay(intervalMs)
+            return
+        }
+        withTimeoutOrNull(intervalMs) {
+            locationFix.first { it != null && !it.restored }
+        }
+        heldForLiveFix = false
     }
 
     fun stop() {
@@ -141,34 +184,35 @@ class SelfPositionBroadcaster internal constructor(
         // reports where the operator placed themselves. It carries no real
         // accuracy (Float.NaN → unknown CE), so peers don't read a manual
         // drop as a precise GPS lock.
-        val fix = manualFixProvider() ?: locationFix.value
-        val lat: Double
-        val lon: Double
-        val hae: Double
-        val speedKmh: Double
-        val ce: Double
-        if (fix != null) {
-            lat = fix.lat
-            lon = fix.lon
-            hae = fix.altitudeM
-            speedKmh = fix.speedKmh
-            ce = if (fix.accuracyM.isNaN()) 9999999.0 else fix.accuracyM.toDouble()
-        } else if (prefs.selfLat.isNaN() || prefs.selfLon.isNaN()) {
-            // Issue #10 — never broadcast PPLI without a real fix; the
-            // San Francisco fallback was misleading operators in Germany.
-            Log.d(TAG, "PPLI suppressed — no GPS fix yet")
+        val manual = manualFixProvider()
+        val fix = manual ?: locationFix.value
+        // #205 - only a position we actually know goes out. No fix at all
+        // (issue #10: the San Francisco fallback) or only the one restored
+        // from the last session means hold: the wire stamps time=now, so a
+        // restored position would read as fresh and then jump when GPS
+        // catches up (other operators see two markers). Persisted prefs are
+        // not a second source: they only feed the map's restored seed. A
+        // manual drop is the operator's deliberate choice and is never held.
+        if (fix == null) {
+            heldForLiveFix = true
+            Log.d(TAG, "PPLI suppressed - no GPS fix yet")
             return
-        } else {
-            // Issue #75 — selfLat/selfLon (+ selfHae) are now actually
-            // written: OmniTAKApp persists every real fix (throttled), so
-            // this fallback broadcasts the last known position with an
-            // honest "unknown" circular error instead of going silent.
-            lat = prefs.selfLat
-            lon = prefs.selfLon
-            hae = if (prefs.selfHae.isNaN()) 0.0 else prefs.selfHae
-            speedKmh = 0.0
-            ce = 9999999.0
         }
+        if (manual == null && fix.restored) {
+            heldForLiveFix = true
+            if (!loggedRestoredHold) {
+                loggedRestoredHold = true
+                Log.i(TAG, "PPLI held - only a position restored from the last session; waiting for a live fix")
+            }
+            return
+        }
+        heldForLiveFix = false
+        loggedRestoredHold = false
+        val lat = fix.lat
+        val lon = fix.lon
+        val hae = fix.altitudeM
+        val speedKmh = fix.speedKmh
+        val ce = if (fix.accuracyM.isNaN()) 9999999.0 else fix.accuracyM.toDouble()
         val xml = buildSelfCoT(
             uid = prefs.selfUid.ifBlank { "ANDROID-fallback" },
             callsign = prefs.callsign,
