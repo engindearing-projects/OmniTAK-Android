@@ -54,6 +54,9 @@ fun CesiumMapView(
     // #83 — device compass heading (deg CW from north) driving the triangle's
     // rotation; null leaves it pointing north.
     selfHeadingDeg: Float? = null,
+    // #210 - draw the self entity. False hides it on the globe (UI only); the
+    // raw selfLat/selfLon still feed "Center on me" below.
+    selfMarkerVisible: Boolean = true,
     // Issue #79 — operator drawings (line / polygon / circle) rendered on the
     // globe via the cesium_scene.html setDrawings bridge, so a shape made on
     // the 2D engine doesn't vanish when the operator switches to 3D.
@@ -106,6 +109,7 @@ fun CesiumMapView(
     val onSelfMarkerTapState = rememberUpdatedState(onSelfMarkerTap)
     val selfTriangleState = rememberUpdatedState(selfMarkerTriangle)
     val selfHeadingState = rememberUpdatedState(selfHeadingDeg)
+    val selfMarkerVisibleState = rememberUpdatedState(selfMarkerVisible)
     val onCameraState = rememberUpdatedState(onCameraChanged)
     // #95 — read the latest lock state inside the JS bridge callbacks so a
     // globe that opens while north-up is already on gets the lock applied on
@@ -121,6 +125,7 @@ fun CesiumMapView(
             context = appContext,
             selfTriangle = selfTriangleState.value,
             selfHeadingDeg = selfHeadingState.value,
+            selfVisible = selfMarkerVisibleState.value,
         )
         wv.evaluateJavascript("window.OmniBridge.setEntities($json);", null)
     }

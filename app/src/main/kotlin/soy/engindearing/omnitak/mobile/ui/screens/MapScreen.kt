@@ -150,6 +150,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     val aircraftVisible = userPrefs.aircraftVisible
     val contactsVisible = userPrefs.contactsVisible
     val callsignCardVisible = userPrefs.callsignCardVisible
+    // #210 - my own marker on the map (UI only; reporting is separate).
+    val selfMarkerVisible = userPrefs.selfMarkerVisible
     val followMeActive = userPrefs.followMeActive
     val map3dEnabled = userPrefs.map3dEnabled
     val prefScope = rememberCoroutineScope()
@@ -631,6 +633,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             // #83 — triangle self-marker style + heading parity on the globe.
             selfMarkerTriangle = userPrefs.selfMarkerTriangle,
             selfHeadingDeg = deviceHeading,
+            // #210 - hide my entity on the globe; Center on me still uses selfLat/selfLon.
+            selfMarkerVisible = selfMarkerVisible,
             onCameraChanged = handleCameraChanged,
             // Issue #79 — render saved drawings on the globe too (parity with
             // the 2D engine). The in-progress draft lives only during 2D
@@ -819,7 +823,12 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             // forced foreground-resume fix lands without waiting on the
             // LocationComponent's internal engine.
             selfFix = effectiveSelfFix,
-            onSelfMarkerTap = { selfMarkerEditOpen = true },
+            // #210 - hide the puck (UI only). Follow-me and Center on me keep
+            // working from selfFix while it is hidden.
+            selfMarkerVisible = selfMarkerVisible,
+            // No marker on screen, nothing to tap: the invisible hit area must
+            // not open the reposition sheet.
+            onSelfMarkerTap = if (selfMarkerVisible) ({ selfMarkerEditOpen = true }) else null,
             onStyleReady = { _, style ->
                 soy.engindearing.omnitak.mobile.ui.components.KmlOverlayRenderer
                     .apply(style, kmlOverlays, app.kmlOverlayStore)
@@ -2202,6 +2211,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 aircraftVisible = aircraftVisible,
                 contactsVisible = contactsVisible,
                 callsignCardVisible = callsignCardVisible,
+                selfMarkerVisible = selfMarkerVisible,
                 meshNodesVisible = meshNodesVisible,
                 meshPairedVisible = meshPairedVisible,
                 map3dEnabled = map3dEnabled,
@@ -2210,6 +2220,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 onToggleAircraft = { v -> mutatePref { it.copy(aircraftVisible = v) } },
                 onToggleContacts = { v -> mutatePref { it.copy(contactsVisible = v) } },
                 onToggleCallsignCard = { v -> mutatePref { it.copy(callsignCardVisible = v) } },
+                onToggleSelfMarker = { v -> mutatePref { it.copy(selfMarkerVisible = v) } },
                 onToggleMeshPaired = { v ->
                     mutatePref { it.copy(meshPairedNodesVisible = v) }
                 },

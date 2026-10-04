@@ -41,9 +41,14 @@ internal fun buildCesiumEntitiesJson(
     // #83 — device compass heading (deg CW from north) for the triangle.
     // null → unknown, the triangle points north (parity with a no-fix puck).
     selfHeadingDeg: Float? = null,
+    // #210 - false leaves the self entity out (the operator hid their own
+    // marker). The scene's setEntities diff then removes `__self__` from the
+    // globe. The raw self coordinates still go to "Center on me" separately,
+    // so recenter keeps working while the entity is hidden.
+    selfVisible: Boolean = true,
 ): String {
     val arr = JSONArray()
-    if (selfLat != null && selfLon != null && !selfLat.isNaN() && !selfLon.isNaN()) {
+    if (selfVisible && selfLat != null && selfLon != null && !selfLat.isNaN() && !selfLon.isNaN()) {
         arr.put(
             JSONObject().apply {
                 put("uid", "__self__")
