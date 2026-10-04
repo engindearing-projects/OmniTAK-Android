@@ -55,10 +55,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import soy.engindearing.omnitak.mobile.OmniTAKApp
 import soy.engindearing.omnitak.mobile.data.TAKServer
-import soy.engindearing.omnitak.mobile.domain.ConnectionState
+import soy.engindearing.omnitak.mobile.domain.ServerHealth
+import soy.engindearing.omnitak.mobile.domain.ServerHealthProjection
 import soy.engindearing.omnitak.mobile.i18n.Loc
+import soy.engindearing.omnitak.mobile.ui.components.dotColor
 import soy.engindearing.omnitak.mobile.ui.theme.HostileRed
-import soy.engindearing.omnitak.mobile.ui.theme.NeutralYellow
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalBackground
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalSurface
@@ -148,19 +149,21 @@ fun ServersScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 items(items = servers, key = { it.id }) { server ->
-                    val thisState = serverStates[server.id] ?: ConnectionState.Disconnected
-                    val connectedToThis = thisState is ConnectionState.Connected ||
-                        thisState is ConnectionState.Connecting
+                    // #209: the same projection the map's top bar uses.
+                    val health = ServerHealthProjection.project(
+                        enabled = server.enabled,
+                        state = serverStates[server.id],
+                    )
                     ServerCard(
                         server = server,
                         isActive = active?.id == server.id,
-                        connState = thisState,
+                        health = health,
                         onTap = { manager.setActive(server.id) },
                         onToggle = { manager.toggleEnabled(server.id) },
                         onDelete = { pendingDelete = server },
                         onConnectToggle = {
                             // Connect/disconnect just this server — others stay up.
-                            if (connectedToThis) manager.disconnect(server.id)
+                            if (health.isLive) manager.disconnect(server.id)
                             else manager.connect(server)
                         },
                     )
@@ -230,7 +233,7 @@ private fun EmptyServers(modifier: Modifier = Modifier) {
 private fun ServerCard(
     server: TAKServer,
     isActive: Boolean,
-    connState: ConnectionState,
+    health: ServerHealth,
     onTap: () -> Unit,
     onToggle: () -> Unit,
     onDelete: () -> Unit,
@@ -254,21 +257,13 @@ private fun ServerCard(
         )
         Spacer(Modifier.width(12.dp))
 
-        // Connection dot — reflects live connection state when this card is active
+        // Connection dot: the shared health projection (#209), same colours as
+        // the map's top bar. The active server is marked by the stripe on the left.
         Box(
             modifier = Modifier
                 .size(10.dp)
                 .clip(CircleShape)
-                .background(
-                    when {
-                        !server.enabled -> Color.Gray.copy(alpha = 0.5f)
-                        connState is ConnectionState.Connected -> TacticalAccent
-                        connState is ConnectionState.Connecting -> NeutralYellow
-                        connState is ConnectionState.Failed -> HostileRed
-                        isActive -> TacticalAccent.copy(alpha = 0.5f)
-                        else -> Color.Gray
-                    }
-                ),
+                .background(health.dotColor()),
         )
         Spacer(Modifier.width(12.dp))
 
@@ -297,7 +292,7 @@ private fun ServerCard(
             )
         }
 
-        val isLive = connState is ConnectionState.Connected || connState is ConnectionState.Connecting
+        val isLive = health.isLive
         IconButton(
             onClick = onConnectToggle,
             enabled = server.enabled,
@@ -305,7 +300,14 @@ private fun ServerCard(
             Icon(
                 if (isLive) Icons.Filled.Stop else Icons.Filled.PlayArrow,
                 contentDescription = if (isLive) "Disconnect" else "Connect",
-                tint = if (isLive) HostileRed else TacticalAccent,
+                // #209: Stop is an action, not a status. A red Stop on a healthy
+                // green row read as "this server is down", so it stays neutral and
+                // the dot alone carries the state.
+                tint = if (isLive) {
+                    MaterialTheme.colorScheme.onBackground.copy(alpha = 0.75f)
+                } else {
+                    TacticalAccent
+                },
             )
         }
 

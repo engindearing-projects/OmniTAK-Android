@@ -71,6 +71,7 @@ import soy.engindearing.omnitak.mobile.data.Drawing
 import soy.engindearing.omnitak.mobile.data.DrawingKind
 import soy.engindearing.omnitak.mobile.data.GeoMath
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
+import soy.engindearing.omnitak.mobile.domain.ServerHealthProjection
 import soy.engindearing.omnitak.mobile.i18n.Loc
 import soy.engindearing.omnitak.mobile.ui.components.ATAKStatusBar
 import soy.engindearing.omnitak.mobile.ui.components.CompassOverlay
@@ -122,6 +123,12 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     val connState by app.serverManager.connectionState.collectAsState()
     val allServers by app.serverManager.servers.collectAsState()
     val connectedIds by app.serverManager.connectedServerIds.collectAsState()
+    // #209: the same per-server states the Servers screen reads, folded
+    // through the one health projection so the bar and the rows can't disagree.
+    val serverStates by app.serverManager.serverStates.collectAsState()
+    val serverHealth = remember(allServers, serverStates) {
+        ServerHealthProjection.summarize(allServers, serverStates)
+    }
     val msgReceived by app.serverManager.messagesReceived.collectAsState()
     val msgSent by app.serverManager.messagesSent.collectAsState()
     val contacts by app.contactStore.contacts.collectAsState()
@@ -1439,9 +1446,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         ) {
             ATAKStatusBar(
                 serverName = headerLabel,
-                // #145 — green when ANY server is connected, matching the
-                // header text + multi-server badge (all keyed off connectedIds).
-                isConnected = connState is ConnectionState.Connected || connectedIds.isNotEmpty(),
+                // #209: one projection (ServerHealthProjection) shared with the
+                // Servers screen: green when every enabled server is up, amber when
+                // only some are, red when none are. Replaces the #145 rule that
+                // turned the bar green as soon as ANY server was connected.
+                health = serverHealth,
                 messagesReceived = msgReceived,
                 messagesSent = msgSent,
                 // Pass null (not 0) with no fix so the status bar hides the
@@ -1455,10 +1464,6 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 onServerTap = { onOpenTab("servers") },
                 onMenuTap = { onOpenTab("settings") },
                 showDetails = userPrefs.topInfoBarVisible,
-                // One flag per enabled server → "N/M ●●●" multi-server badge.
-                serverConnectedFlags = allServers
-                    .filter { it.enabled }
-                    .map { connectedIds.contains(it.id) },
             )
         }
 
