@@ -40,8 +40,11 @@ class TAKConnectionLivenessTest {
         closeables.forEach { runCatching { it.close() } }
     }
 
+    /** How the stand-in server reacts to a ping. */
+    private enum class Answer { PONG, ECHO, NONE }
+
     /** Speaks just enough CoT: counts pings, answers them if asked to, records everything else. */
-    private class FakeTakServer(private val answerPings: Boolean) : AutoCloseable {
+    private class FakeTakServer(private val answer: Answer) : AutoCloseable {
         private val listener = ServerSocket(0, 50, InetAddress.getLoopbackAddress())
         private val clients = CopyOnWriteArrayList<Socket>()
         val port: Int get() = listener.localPort
@@ -81,7 +84,11 @@ class TAKConnectionLivenessTest {
                     if (silent) continue
                     if (TAKConnection.eventType(xml) == TAKConnection.PING_TYPE) {
                         pings.incrementAndGet()
-                        if (answerPings) send(s, PONG)
+                        when (answer) {
+                            Answer.PONG -> send(s, PONG)
+                            Answer.ECHO -> send(s, xml) // what OpenTAKServer does
+                            Answer.NONE -> Unit
+                        }
                     } else {
                         frames += xml
                     }
@@ -135,7 +142,10 @@ class TAKConnectionLivenessTest {
         }
     }
 
-    private fun fakeServer(answerPings: Boolean) = FakeTakServer(answerPings).also { closeables += it }
+    private fun fakeServer(answerPings: Boolean) =
+        fakeServer(if (answerPings) Answer.PONG else Answer.NONE)
+
+    private fun fakeServer(answer: Answer) = FakeTakServer(answer).also { closeables += it }
 
     private fun connection(port: Int, timing: TAKConnection.Timing, tls: Boolean = false): TAKConnection {
         val server = TAKServer(
@@ -201,6 +211,42 @@ class TAKConnectionLivenessTest {
         val failed = awaitState(conn, what = "Failed") { it is ConnectionState.Failed } as ConnectionState.Failed
         assertEquals("No response from server", failed.reason)
         assertNull("no session socket after a failure", conn.sessionSocket)
+    }
+
+    @Test
+    fun aServerThatSendsThePingBackCountsAsAnsweringAndIsDroppedWhenItStops() {
+        val server = fakeServer(Answer.ECHO)
+        val conn = connection(server.port, TAKConnection.Timing(3_000, pingIdleMs = 100, deadIdleMs = 500, tickMs = 25))
+        val delivered = CopyOnWriteArrayList<String>()
+        val subscribed = AtomicBoolean(false)
+        scope.launch {
+            conn.received.onSubscription { subscribed.set(true) }.collect { delivered += it }
+        }
+        awaitTrue(what = "a subscriber on received") { subscribed.get() }
+
+        conn.connect()
+        awaitState(conn, what = "Connected") { it is ConnectionState.Connected }
+        awaitTrue(what = "the echo to be taken as an answer") { conn.answersPings }
+        assertTrue("an echoed ping is not CoT for the app: $delivered", delivered.isEmpty())
+
+        server.silent = true
+        val failed = awaitState(conn, what = "Failed") { it is ConnectionState.Failed } as ConnectionState.Failed
+        assertEquals("No response from server", failed.reason)
+    }
+
+    @Test
+    fun anotherClientsPingRelayedByTheServerIsNotAnAnswer() {
+        val server = fakeServer(Answer.NONE)
+        val conn = connection(server.port, TAKConnection.Timing(3_000, pingIdleMs = 80, deadIdleMs = 250, tickMs = 20))
+        conn.connect()
+        awaitState(conn, what = "Connected") { it is ConnectionState.Connected }
+        awaitTrue(what = "a ping at the server") { server.pings.get() >= 1 }
+
+        server.sendToAll(PING_FROM_ANOTHER_CLIENT)
+        Thread.sleep(1_000) // four drop windows
+
+        assertFalse(conn.answersPings)
+        assertTrue("still connected, state is ${conn.state.value}", conn.state.value is ConnectionState.Connected)
     }
 
     @Test
@@ -366,6 +412,12 @@ class TAKConnectionLivenessTest {
         )
         assertNull(TAKConnection.eventType("<event uid=\"x\"><detail><link type=\"t-x-c-t-r\"/></detail></event>"))
         assertNull(TAKConnection.eventType("not xml"))
+        // TAK Server writes its pong with single quotes.
+        val takServerPong = "<event version='2.0' uid='takPong' type='t-x-c-t-r' how='h-g-i-g-o' time='t' start='t' stale='t'/>"
+        assertEquals(TAKConnection.PONG_TYPE, TAKConnection.eventType(takServerPong))
+        assertEquals("takPong", TAKConnection.eventUid(takServerPong))
+        assertEquals("TEST-1", TAKConnection.eventUid(CONTACT))
+        assertNull(TAKConnection.eventUid("<event type=\"a-f-G\"><detail><link uid=\"x\"/></detail></event>"))
     }
 
     @Test

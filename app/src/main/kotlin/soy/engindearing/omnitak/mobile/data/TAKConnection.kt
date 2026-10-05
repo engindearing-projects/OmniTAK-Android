@@ -44,7 +44,8 @@ import kotlin.coroutines.coroutineContext
  * LTE swap, NAT timeout, server host gone) looks connected to the OS for many
  * minutes: reads block and small writes are accepted into the send buffer. So
  * while connected this class sends the ping every TAK client uses (a CoT of
- * type `t-x-c-t`, which servers answer with `t-x-c-t-r`) whenever nothing has
+ * type `t-x-c-t`, which servers answer with `t-x-c-t-r`; OpenTAKServer sends
+ * the ping itself back, which counts as an answer too) whenever nothing has
  * arrived for [Timing.pingIdleMs], and reports the connection [ConnectionState.Failed]
  * when a server that answers pings has sent nothing at all for [Timing.deadIdleMs].
  * A server that has never answered a ping is not dropped for being quiet: a
@@ -109,6 +110,8 @@ class TAKConnection(
 
     @Volatile private var lastRxNanos = 0L
     @Volatile private var lastPingNanos = 0L
+    /** The UID of the last ping sent, to recognise a server that answers by sending it back. */
+    @Volatile private var sentPingUid: String? = null
 
     /**
      * True once this server has answered a ping. Kept across reconnects: it is
@@ -330,7 +333,12 @@ class TAKConnection(
     private fun deliver(xml: String) {
         when (eventType(xml)) {
             PONG_TYPE -> answersPings = true
-            PING_TYPE -> Unit // a server that relays other clients' pings instead of answering them
+            PING_TYPE -> {
+                // Our own ping coming back is an answer (OpenTAKServer does this).
+                // Another client's ping, relayed by a server that answers none, proves nothing.
+                val ours = sentPingUid
+                if (ours != null && eventUid(xml) == CotXml.escape(ours)) answersPings = true
+            }
             else -> _received.tryEmit(xml)
         }
     }
@@ -368,6 +376,7 @@ class TAKConnection(
         } catch (_: Exception) {
             DEFAULT_PING_UID
         }
+        sentPingUid = uid
         return write(current, pingXml(uid, System.currentTimeMillis()))
     }
 
@@ -453,9 +462,13 @@ class TAKConnection(
         const val DEFAULT_PING_UID = "OmniTAK-ping"
 
         private val EVENT_TYPE = Regex("""<event\b[^>]*?\btype\s*=\s*["']([^"']*)["']""")
+        private val EVENT_UID = Regex("""<event\b[^>]*?\buid\s*=\s*["']([^"']*)["']""")
 
         /** The `type` attribute of a frame's `<event>` start tag, or null. */
         internal fun eventType(xml: String): String? = EVENT_TYPE.find(xml)?.groupValues?.get(1)
+
+        /** The `uid` attribute of a frame's `<event>` start tag, as written (still escaped), or null. */
+        internal fun eventUid(xml: String): String? = EVENT_UID.find(xml)?.groupValues?.get(1)
 
         /** The ping every TAK client sends: type `t-x-c-t`, answered with `t-x-c-t-r`. */
         internal fun pingXml(uid: String, nowMs: Long): String {
