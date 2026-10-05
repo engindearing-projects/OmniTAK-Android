@@ -184,13 +184,14 @@ class OmniTAKApp : Application() {
 
         // Issue #75 — self-marker persistence across screen-off + process
         // death. Seed the in-memory fix from the persisted one so every
-        // consumer (2D puck, Cesium self entity, HUD card, PPLI
-        // prefs-fallback) renders immediately on cold start — stale-marked
-        // downstream via SelfFix.timeMs — then persist real fixes
-        // (throttled) so the NEXT cold start has them. Seed-then-collect
-        // in one coroutine: the collector starts only after the seed is
-        // applied, and the seeded fix never re-persists itself because
-        // shouldPersist requires a strictly newer timestamp.
+        // display consumer (2D puck, Cesium self entity, HUD card) renders
+        // immediately on cold start — stale-marked downstream via
+        // SelfFix.timeMs — then persist real fixes (throttled) so the NEXT
+        // cold start has them. The seed is flagged SelfFix.restored and PPLI
+        // never sends it: it holds until a live fix replaces it (#205).
+        // Seed-then-collect in one coroutine: the collector starts only
+        // after the seed is applied, and the seeded fix never re-persists
+        // itself because shouldPersist requires a strictly newer timestamp.
         appScope.launch {
             val saved = userPrefsStore.prefs.first()
             SelfFixPersistence.restoredFixOrNull(saved)?.let {

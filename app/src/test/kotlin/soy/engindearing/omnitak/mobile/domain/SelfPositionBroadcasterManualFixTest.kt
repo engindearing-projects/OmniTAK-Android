@@ -98,6 +98,33 @@ class SelfPositionBroadcasterManualFixTest {
         assertTrue("back to live GPS lon, was: $resumed", resumed.contains("lon=\"13.4\""))
     }
 
+    @Test fun manual_position_still_broadcasts_while_gps_fix_is_only_restored() = runTest {
+        // #205 holds PPLI while the only GPS fix is the one restored from the
+        // last session. A manual drop is the operator's deliberate choice and
+        // must keep going out, with the manual coordinate and never the seed.
+        val restored = berlin.copy(restored = true)
+        val fixFlow = MutableStateFlow<SelfFix?>(restored)
+        val manual = SelfFix(
+            lat = 52.55, lon = 13.45, altitudeM = 80.0,
+            speedKmh = 0.0, accuracyM = Float.NaN, timeMs = 1_700_000_500_000L,
+        )
+        val manualFlow = MutableStateFlow<SelfFix?>(manual)
+        val sent = mutableListOf<String>()
+        val prefs = UserPrefs(selfUid = "ANDROID-test")
+        val b = broadcaster(fixFlow, manualFlow, sent, prefs)
+
+        b.broadcastOnce(prefs)
+        assertTrue("manual drop must be broadcast, sent: $sent", sent.size == 1)
+        assertTrue("manual lat, was: ${sent.last()}", sent.last().contains("lat=\"52.55\""))
+        assertFalse("restored lat must not leak, was: ${sent.last()}", sent.last().contains("lat=\"52.5\""))
+
+        // "Resume GPS" while the GPS fix is still only the seed: back to
+        // holding, nothing more goes out.
+        manualFlow.value = null
+        b.broadcastOnce(prefs)
+        assertTrue("held again once manual is cleared, sent: $sent", sent.size == 1)
+    }
+
     @Test fun null_override_is_pure_passthrough_to_live_fix() = runTest {
         // Sanity: with no manual override, behaviour is identical to the
         // pre-#82 live-fix path (regression guard for the default lambda).
