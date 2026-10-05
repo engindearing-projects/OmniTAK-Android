@@ -118,25 +118,6 @@ class OmniTAKApp : Application() {
         // location FGS type keeps background GPS flowing for both.
         appScope.launch {
             var pendingStart: Job? = null
-            fun currentLinkLabel(): String? {
-                val server = serverManager.connectionState.value as? ConnectionState.Connected
-                val meshUp = meshtastic.activeConnectionState.value is ConnectionState.Connected ||
-                    meshcore.activeConnectionState.value is ConnectionState.Connected
-                return when {
-                    server != null && meshUp -> "${server.serverName} + mesh"
-                    server != null -> server.serverName
-                    meshUp -> "mesh radio"
-                    // Field feedback (2026-08) — link dropped (radio power-off /
-                    // out of range) but the BLE auto-reconnect loop is still
-                    // trying every 20s. Keeping a label here is what keeps the
-                    // FGS alive below, which in turn is what keeps that retry
-                    // loop running once the screen locks — without it Doze
-                    // stalls the delay()/BLE calls and reconnect silently stops
-                    // working the moment the app leaves the foreground.
-                    meshtastic.autoReconnectPending.value -> "reconnecting to mesh radio…"
-                    else -> null
-                }
-            }
             combine(
                 serverManager.connectionState,
                 meshtastic.activeConnectionState,
@@ -297,6 +278,41 @@ class OmniTAKApp : Application() {
     // the CSR network call on a scope that survives the scanner sheet leaving
     // composition (the bug: rememberCoroutineScope cancels mid-enrollment when
     // the scanner pops, throwing "The coroutine left the composition").
+    /**
+     * What the connection service is holding open right now, or null when
+     * nothing needs it. Names the link in the persistent notification.
+     */
+    private fun currentLinkLabel(): String? {
+        val server = serverManager.connectionState.value as? ConnectionState.Connected
+        val meshUp = meshtastic.activeConnectionState.value is ConnectionState.Connected ||
+            meshcore.activeConnectionState.value is ConnectionState.Connected
+        return when {
+            server != null && meshUp -> "${server.serverName} + mesh"
+            server != null -> server.serverName
+            meshUp -> "mesh radio"
+            // Field feedback (2026-08) — link dropped (radio power-off /
+            // out of range) but the BLE auto-reconnect loop is still
+            // trying every 20s. Keeping a label here is what keeps the
+            // FGS alive below, which in turn is what keeps that retry
+            // loop running once the screen locks — without it Doze
+            // stalls the delay()/BLE calls and reconnect silently stops
+            // working the moment the app leaves the foreground.
+            meshtastic.autoReconnectPending.value -> "reconnecting to mesh radio…"
+            else -> null
+        }
+    }
+
+    /**
+     * Start the connection service again if a link is up. Called when the
+     * activity comes to the foreground, the one moment a foreground start is
+     * always allowed: it brings the service back after Android ended it at a
+     * time limit or refused to start it from the background (#223), and lets
+     * it move to the location type right after that permission is granted.
+     */
+    fun refreshConnectionService() {
+        currentLinkLabel()?.let { label -> TAKConnectionService.start(this, label) }
+    }
+
     internal val appScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     // Eagerly-cached prefs snapshot for non-suspending sinks (cotSink,
