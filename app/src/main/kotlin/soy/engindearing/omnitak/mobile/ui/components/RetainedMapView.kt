@@ -58,6 +58,12 @@ internal object RetainedMapView {
         var onSelfMarkerTap: (() -> Unit)? = null
         var northUpLocked: Boolean = false
         var selfFix: SelfFix? = null
+        // #210 - whether the puck (LocationComponent) may run right now: location
+        // available AND the operator has not hidden their marker. Read by the
+        // one-time style-load closures, which must not capture a composition-
+        // scoped holder (stale after a Settings detour: a hidden marker would
+        // come back on the next style reload).
+        var puckActive: Boolean = false
         var contacts: Collection<CoTEvent> = emptyList()
     }
 

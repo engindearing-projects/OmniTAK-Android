@@ -73,6 +73,48 @@ class CesiumEntityJsonTest {
     }
 
     @Test
+    fun `self entity is omitted when the marker is hidden but contacts stay`() {
+        // #210 - hiding my own marker leaves the self entity out of the push, so
+        // the scene's setEntities diff removes `__self__`. Everyone else on the
+        // globe is untouched.
+        val troop = CoTEvent(
+            uid = "TROOP-1",
+            type = "a-f-G-U-C-I",
+            lat = 47.65,
+            lon = -117.42,
+            callsign = "ALPHA-1",
+        )
+        val json = parse(buildCesiumEntitiesJson(
+            contacts = listOf(troop),
+            selfLat = 47.65, selfLon = -117.42, selfCallsign = "OMNI-1",
+            selfVisible = false,
+        ))
+        assertEquals(1, json.length())
+        assertEquals("TROOP-1", json.getJSONObject(0).getString("uid"))
+        for (i in 0 until json.length()) {
+            assertFalse("no __self__ entity while hidden", json.getJSONObject(i).getString("uid") == "__self__")
+        }
+    }
+
+    @Test
+    fun `self entity is present by default and when the marker is visible`() {
+        // #210 regression guard: the default keeps every existing caller's output.
+        val explicit = parse(buildCesiumEntitiesJson(
+            contacts = emptyList(),
+            selfLat = 47.65, selfLon = -117.42, selfCallsign = "OMNI-1",
+            selfVisible = true,
+        ))
+        assertEquals(1, explicit.length())
+        assertEquals("__self__", explicit.getJSONObject(0).getString("uid"))
+        val byDefault = parse(buildCesiumEntitiesJson(
+            contacts = emptyList(),
+            selfLat = 47.65, selfLon = -117.42, selfCallsign = "OMNI-1",
+        ))
+        assertEquals(1, byDefault.length())
+        assertEquals("__self__", byDefault.getJSONObject(0).getString("uid"))
+    }
+
+    @Test
     fun `RID multirotor contact gets SUAPMHQ multirotor SIDC`() {
         // RemoteIdToCoTConverter emits a-u-A-M-H-Q for multirotor drones.
         // The catalogue maps it to SUAPMHQ---- which milsymbol can render

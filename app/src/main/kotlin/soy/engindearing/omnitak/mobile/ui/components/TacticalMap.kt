@@ -6,6 +6,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
@@ -45,6 +46,11 @@ import soy.engindearing.omnitak.mobile.data.TakTeamColor
  * a blue dot for the user's position and a compass arrow for heading.
  * The caller is responsible for ensuring runtime location permission
  * is granted before flipping this to true.
+ *
+ * #210 - [selfMarkerVisible] = false keeps the component off even when
+ * location is available (the operator hid their own marker; UI only,
+ * reporting is unaffected). Follow-me and "Center on me" then move the camera
+ * straight from [selfFix] instead of through the component's tracking modes.
  */
 @Composable
 fun TacticalMap(
@@ -102,6 +108,10 @@ fun TacticalMap(
      *  the forced foreground-resume fix without waiting on the
      *  component's internal engine interval. */
     selfFix: SelfFix? = null,
+    /** #210 - draw the operator's own marker (the LocationComponent puck).
+     *  False hides it and keeps the component off, UI only. Sourced from
+     *  [soy.engindearing.omnitak.mobile.data.UserPrefs.selfMarkerVisible]. */
+    selfMarkerVisible: Boolean = true,
     /** Camera idle: target, zoom, bearing (degrees clockwise from north).
      *  Bearing feeds the #78 engine-switch viewport handoff. */
     onCameraIdle: ((LatLng, Double, Double) -> Unit)? = null,
@@ -139,7 +149,14 @@ fun TacticalMap(
     // holders, so the retained MapView always fires the current composition's
     // callbacks. The current* holders that remain are the ones still consumed by
     // keyed DisposableEffects / AndroidView.update further down.
-    val currentLocationEnabled by rememberUpdatedState(locationEnabled)
+    //
+    // #210 - the puck (LocationComponent) runs only when location is available
+    // AND the operator has not hidden their marker. While it is hidden the
+    // component is never activated, so follow-me / "Center on me" move the
+    // camera from the raw fix instead (see the effects below).
+    val puckActive = SelfMarkerVisibility.puckActive(locationEnabled, selfMarkerVisible)
+    val cameraFollowsFix = SelfMarkerVisibility.cameraFollowsFixDirectly(locationEnabled, selfMarkerVisible)
+    val currentPuckActive by rememberUpdatedState(puckActive)
     val currentContacts by rememberUpdatedState(contacts)
     val currentMeasurementPoints by rememberUpdatedState(measurementPoints)
     val currentDrawings by rememberUpdatedState(drawings)
@@ -157,6 +174,9 @@ fun TacticalMap(
     // restored fix). Plain holder, not MutableState: nothing recomposes
     // off it; the effects below read/write it imperatively.
     val puckAppearance = remember { PuckAppearance() }
+    // #210 - the recenter trigger's value at first composition, so the hidden-
+    // marker "Center on me" fallback only reacts to real taps.
+    val initialRecenterTrigger = remember { recenterTrigger }
 
     // #177 — keep the live callbacks/state the retained MapView's one-time
     // listeners read in sync with the current composition. SideEffect runs on
@@ -174,6 +194,7 @@ fun TacticalMap(
         bindings.onSelfMarkerTap = onSelfMarkerTap
         bindings.northUpLocked = northUpLocked
         bindings.selfFix = selfFix
+        bindings.puckActive = puckActive
         bindings.contacts = contacts
     }
 
@@ -220,7 +241,7 @@ fun TacticalMap(
                     // ADS-B aircraft are fed by the ADS-B plugin's overlay via
                     // the live map handle — not from here. The `aircraft-src`
                     // source stays empty until the plugin pushes into it.
-                    if (currentLocationEnabled) {
+                    if (bindings.puckActive) {
                         activateLocation(
                             map, style, context, currentUseMilStd, currentTeamColor,
                             seedFix = bindings.selfFix, puck = puckAppearance,
@@ -385,7 +406,7 @@ fun TacticalMap(
                             // bailed out earlier because the style wasn't ready
                             // yet (map.style == null at the time). Re-applying
                             // when nothing was skipped is a harmless no-op.
-                            if (currentLocationEnabled && map.locationComponent.isLocationComponentActivated) {
+                            if (bindings.puckActive && map.locationComponent.isLocationComponentActivated) {
                                 val spec = selfPuckSpecFor(
                                     selfMarkerStyleFor(currentUseMilStd, currentSelfMarkerTriangle),
                                 )
@@ -401,8 +422,8 @@ fun TacticalMap(
 
     // Flip the location layer on when permission is granted after the
     // map is already alive.
-    DisposableEffect(mapView, locationEnabled) {
-        if (locationEnabled) {
+    DisposableEffect(mapView, puckActive) {
+        if (puckActive) {
             mapView.getMapAsync { map ->
                 val style = map.style
                 if (style != null && !map.locationComponent.isLocationComponentActivated) {
@@ -418,6 +439,11 @@ fun TacticalMap(
                     applyLocationRenderMode(map, spec, CameraMode.NONE)
                 }
             }
+        } else {
+            // #210 - marker hidden (or no location): make sure the component is
+            // off. A no-op when it was never activated; when the operator hides
+            // the marker while it is running this is what takes the puck away.
+            mapView.getMapAsync { map -> stopLocationComponent(map) }
         }
         onDispose { }
     }
@@ -429,9 +455,9 @@ fun TacticalMap(
     // guarantees this flow never regresses the position. Also keeps the
     // dimmed/stale appearance in sync: dim when all we have is an old
     // restored fix, restore full opacity once a fresh fix lands.
-    DisposableEffect(mapView, selfFix) {
+    DisposableEffect(mapView, selfFix, puckActive) {
         val fix = selfFix
-        if (fix != null && locationEnabled) {
+        if (fix != null && puckActive) {
             mapView.getMapAsync { map ->
                 val style = map.style
                 if (style != null && map.locationComponent.isLocationComponentActivated) {
@@ -459,7 +485,7 @@ fun TacticalMap(
     // amplifier appears/updates live (Settings → Map), without waiting on a
     // style reload or re-activation.
     DisposableEffect(mapView, selfEchelon) {
-        if (locationEnabled) {
+        if (puckActive) {
             mapView.getMapAsync { map ->
                 val style = map.style
                 if (style != null && map.locationComponent.isLocationComponentActivated) {
@@ -481,11 +507,24 @@ fun TacticalMap(
     // TRACKING to pan to the user, then restore NONE so the user can
     // still pan freely.
     DisposableEffect(mapView, recenterTrigger) {
-        if (recenterTrigger != null && locationEnabled) {
+        if (recenterTrigger != null && puckActive) {
             mapView.getMapAsync { map ->
                 if (map.locationComponent.isLocationComponentActivated) {
                     map.locationComponent.cameraMode = CameraMode.TRACKING
                     map.locationComponent.zoomWhileTracking(15.0)
+                }
+            }
+        } else if (recenterTrigger != null && recenterTrigger != initialRecenterTrigger) {
+            // #210 - marker hidden, so there is no LocationComponent to track
+            // with: pan and zoom straight to the raw fix. (The initial value
+            // is skipped so composing the map never moves the camera.)
+            val fix = selfFix
+            if (cameraFollowsFix && fix != null) {
+                mapView.getMapAsync { map ->
+                    map.animateCamera(
+                        CameraUpdateFactory.newLatLngZoom(LatLng(fix.lat, fix.lon), 15.0),
+                        600,
+                    )
                 }
             }
         }
@@ -600,7 +639,7 @@ fun TacticalMap(
                     // so a basemap swap wipes them. Re-register + re-apply so
                     // the puck survives style reloads with its current
                     // (dimmed or live) appearance.
-                    if (currentLocationEnabled && map.locationComponent.isLocationComponentActivated) {
+                    if (currentPuckActive && map.locationComponent.isLocationComponentActivated) {
                         map.locationComponent.applyStyle(
                             buildPuckOptions(
                                 context, style, currentUseMilStd, currentTeamColor,
@@ -675,8 +714,8 @@ fun TacticalMap(
 
     // "Follow me" toggle — pins the camera to the user's location and
     // rotates with compass heading. Flipping off returns to free-pan.
-    DisposableEffect(mapView, followMeActive, locationEnabled) {
-        if (locationEnabled) {
+    DisposableEffect(mapView, followMeActive, puckActive) {
+        if (puckActive) {
             mapView.getMapAsync { map ->
                 if (map.locationComponent.isLocationComponentActivated) {
                     map.locationComponent.cameraMode = if (followMeActive) {
@@ -685,6 +724,38 @@ fun TacticalMap(
                         CameraMode.NONE
                     }
                 }
+            }
+        }
+        onDispose { }
+    }
+
+    // #210 - follow-me while the marker is hidden. There is no LocationComponent
+    // to track with, so pan to each new fix ourselves. Like MapLibre's own
+    // tracking mode, a drag on the map ends the follow until follow-me is
+    // switched off and on again; unlike TRACKING_COMPASS it does not rotate
+    // the map with the compass.
+    val followBroken = remember { mutableStateOf(false) }
+    DisposableEffect(mapView, followMeActive, cameraFollowsFix) {
+        followBroken.value = false
+        var attachedMap: org.maplibre.android.maps.MapLibreMap? = null
+        val listener = org.maplibre.android.maps.MapLibreMap.OnCameraMoveStartedListener { reason ->
+            if (reason == org.maplibre.android.maps.MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) {
+                followBroken.value = true
+            }
+        }
+        if (cameraFollowsFix && followMeActive) {
+            mapView.getMapAsync { map ->
+                attachedMap = map
+                map.addOnCameraMoveStartedListener(listener)
+            }
+        }
+        onDispose { attachedMap?.removeOnCameraMoveStartedListener(listener) }
+    }
+    DisposableEffect(mapView, cameraFollowsFix, followMeActive, selfFix?.lat, selfFix?.lon, followBroken.value) {
+        val fix = selfFix
+        if (cameraFollowsFix && followMeActive && fix != null && !followBroken.value) {
+            mapView.getMapAsync { map ->
+                map.animateCamera(CameraUpdateFactory.newLatLng(LatLng(fix.lat, fix.lon)), 500)
             }
         }
         onDispose { }
@@ -702,7 +773,7 @@ fun TacticalMap(
                     // self-marker stayed hidden until the composable was
                     // rebuilt. Re-enable on every resume, restoring the
                     // camera mode follow-me expects.
-                    if (currentLocationEnabled) {
+                    if (currentPuckActive) {
                         runCatching {
                             mapView.getMapAsync { map ->
                                 if (map.locationComponent.isLocationComponentActivated) {
@@ -820,6 +891,21 @@ private const val TAG = "TacticalMap"
  *  the selfFix forwarding effect, and the style-reload re-apply. */
 internal class PuckAppearance {
     @Volatile var dimmed: Boolean = false
+}
+
+/**
+ * #210 - take the puck fully off: stop camera tracking first so nothing keeps
+ * animating, then disable the component (hides every layer and stops its
+ * engine). A no-op when the component was never activated. Guarded like the
+ * pause path: disabling touches the style, which can be mid-swap.
+ */
+private fun stopLocationComponent(map: org.maplibre.android.maps.MapLibreMap) {
+    runCatching {
+        if (map.locationComponent.isLocationComponentActivated) {
+            map.locationComponent.cameraMode = CameraMode.NONE
+            map.locationComponent.isLocationComponentEnabled = false
+        }
+    }.onFailure { Log.w(TAG, "stopLocationComponent: skipped (style not ready)", it) }
 }
 
 @SuppressLint("MissingPermission")

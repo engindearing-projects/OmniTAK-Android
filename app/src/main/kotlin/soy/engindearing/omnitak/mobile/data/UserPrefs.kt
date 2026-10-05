@@ -88,6 +88,10 @@ data class UserPrefs(
     val drawingsVisible: Boolean = true,
     val aircraftVisible: Boolean = true,
     val contactsVisible: Boolean = true,
+    /** #210 - draw my own marker on the map. UI only: off hides the 2D puck /
+     *  the 3D self entity and nothing else. Whether I report my position is
+     *  the separate [positionReportingEnabled] switch. */
+    val selfMarkerVisible: Boolean = true,
     val followMeActive: Boolean = false,
     /** Render self-position as a MIL-STD-2525 friendly-combat frame.
      *  When false, falls back to the legacy `ic_self_marker` tinted disc.
@@ -231,6 +235,7 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
     private val KEY_DRAWINGS_VIS = booleanPreferencesKey("drawings_visible")
     private val KEY_AIRCRAFT_VIS = booleanPreferencesKey("aircraft_visible")
     private val KEY_CONTACTS_VIS = booleanPreferencesKey("contacts_visible")
+    private val KEY_SELF_MARKER_VIS = booleanPreferencesKey("self_marker_visible")
     private val KEY_FOLLOW_ME = booleanPreferencesKey("follow_me_active")
     private val KEY_MIL_STD_SELF = booleanPreferencesKey("use_milstd_self_symbol")
     private val KEY_REMOTE_ID_SCAN = booleanPreferencesKey("remote_id_scan_enabled")
@@ -287,6 +292,7 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
             p[KEY_DRAWINGS_VIS] = next.drawingsVisible
             p[KEY_AIRCRAFT_VIS] = next.aircraftVisible
             p[KEY_CONTACTS_VIS] = next.contactsVisible
+            p[KEY_SELF_MARKER_VIS] = next.selfMarkerVisible
             p[KEY_FOLLOW_ME] = next.followMeActive
             p[KEY_MIL_STD_SELF] = next.useMilStdSelfSymbol
             p[KEY_REMOTE_ID_SCAN] = next.remoteIdScanEnabled
@@ -451,6 +457,7 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
         drawingsVisible = p[KEY_DRAWINGS_VIS] ?: true,
         aircraftVisible = p[KEY_AIRCRAFT_VIS] ?: true,
         contactsVisible = p[KEY_CONTACTS_VIS] ?: true,
+        selfMarkerVisible = p[KEY_SELF_MARKER_VIS] ?: true,
         followMeActive = p[KEY_FOLLOW_ME] ?: false,
         useMilStdSelfSymbol = p[KEY_MIL_STD_SELF] ?: true,
         remoteIdScanEnabled = p[KEY_REMOTE_ID_SCAN] ?: false,

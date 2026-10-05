@@ -35,6 +35,7 @@ fun LayersDialog(
     aircraftVisible: Boolean,
     contactsVisible: Boolean,
     callsignCardVisible: Boolean,
+    selfMarkerVisible: Boolean = true,
     meshNodesVisible: Boolean = true,
     meshPairedVisible: Boolean = false,
     map3dEnabled: Boolean = false,
@@ -43,6 +44,7 @@ fun LayersDialog(
     onToggleAircraft: (Boolean) -> Unit,
     onToggleContacts: (Boolean) -> Unit,
     onToggleCallsignCard: (Boolean) -> Unit,
+    onToggleSelfMarker: (Boolean) -> Unit = {},
     onToggleMeshNodes: (Boolean) -> Unit = {},
     onToggleMeshPaired: (Boolean) -> Unit = {},
     onToggle3d: (Boolean) -> Unit = {},
@@ -79,6 +81,14 @@ fun LayersDialog(
                 LayerRow("Aircraft (ADSB)", aircraftVisible, onToggleAircraft)
                 LayerRow("Lat/Lon grid", gridEnabled, onToggleGrid)
                 LayerRow("Callsign card", callsignCardVisible, onToggleCallsignCard)
+                // #210 - UI only: hides my marker on this map. Reporting is the
+                // separate "Report my position" switch in Settings.
+                LayerRow(
+                    "My marker",
+                    selfMarkerVisible,
+                    onToggleSelfMarker,
+                    hint = "Hides your marker on this map only. Does not change whether you report your position.",
+                )
                 if (onOpenOfflineMaps != null) {
                     TextButton(
                         onClick = onOpenOfflineMaps,
@@ -104,18 +114,36 @@ fun LayersDialog(
 }
 
 @Composable
-private fun LayerRow(label: String, checked: Boolean, onToggle: (Boolean) -> Unit) {
+private fun LayerRow(
+    label: String,
+    checked: Boolean,
+    onToggle: (Boolean) -> Unit,
+    // Optional second line under the label (small, dimmed). Rows without one
+    // render exactly as before.
+    hint: String? = null,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            label,
-            color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.weight(1f),
-        )
+        if (hint == null) {
+            Text(
+                label,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.weight(1f),
+            )
+        } else {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(label, color = MaterialTheme.colorScheme.onBackground)
+                Text(
+                    hint,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
         Switch(
             checked = checked,
             onCheckedChange = onToggle,
