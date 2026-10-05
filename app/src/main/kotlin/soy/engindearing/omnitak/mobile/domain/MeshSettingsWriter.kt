@@ -3,6 +3,8 @@ package soy.engindearing.omnitak.mobile.domain
 import android.util.Log
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import soy.engindearing.omnitak.mobile.data.AdminMessageParser
 import soy.engindearing.omnitak.mobile.data.AdminMessageSerializer
@@ -41,6 +43,10 @@ import soy.engindearing.omnitak.mobile.data.RefusalReason
  * batch of seven lost its position config write: those changes never took
  * effect, and no error was reported anywhere. The same batches with 100 ms
  * between frames applied every write.
+ *
+ * One write at a time: a write reads the cache, sends, and stores what it sent,
+ * so two running together could both start from the same message and the
+ * second would undo the first. Each public write waits its turn.
  */
 class MeshSettingsWriter(
     private val cache: RadioSettingsCache,
@@ -48,6 +54,7 @@ class MeshSettingsWriter(
     private val send: suspend (ByteArray) -> Boolean,
     private val frameSpacingMs: Long = ADMIN_FRAME_SPACING_MS,
 ) {
+    private val turn = Mutex()
 
     /** `set_config { device { rebroadcast_mode } }`: the radio's other device settings are carried over. */
     suspend fun applyRebroadcastMode(mode: RebroadcastMode): AdminWriteResult =
@@ -85,13 +92,13 @@ class MeshSettingsWriter(
      * #172: put an imported channel in slot [index]. A full replacement by
      * design (new name, new key), so it needs nothing from the radio first.
      */
-    suspend fun applyChannel(channel: MeshChannel, index: Int = 0): AdminWriteResult {
-        val dest = destination() ?: return refuse("channel import", RefusalReason.NO_RADIO)
+    suspend fun applyChannel(channel: MeshChannel, index: Int = 0): AdminWriteResult = turn.withLock {
+        val dest = destination() ?: return@withLock refuse("channel import", RefusalReason.NO_RADIO)
         val write = AdminMessageSerializer.buildSetChannelWrite(dest, channel, index)
-        if (!send(write.frame)) return AdminWriteResult.LinkFailed(sent = 0, total = 1)
+        if (!send(write.frame)) return@withLock AdminWriteResult.LinkFailed(sent = 0, total = 1)
         // The slot now holds exactly what was sent: a rename right after the import must not start from the old key.
         cache.put(Key.Channel(index.coerceIn(0, RadioSettingsCache.MAX_CHANNELS - 1)), write.message)
-        return AdminWriteResult.Sent(1)
+        AdminWriteResult.Sent(1)
     }
 
     /**
@@ -106,8 +113,8 @@ class MeshSettingsWriter(
      * every time. If any setting that has to change cannot be written (the
      * radio's settings are missing or unreadable) nothing at all is sent.
      */
-    suspend fun pushDeviceConfig(draft: MeshDeviceConfig): AdminWriteResult {
-        val dest = destination() ?: return refuse("push", RefusalReason.NO_RADIO)
+    suspend fun pushDeviceConfig(draft: MeshDeviceConfig): AdminWriteResult = turn.withLock {
+        val dest = destination() ?: return@withLock refuse("push", RefusalReason.NO_RADIO)
 
         val steps = listOf(
             planOwner(dest, draft),
@@ -116,16 +123,16 @@ class MeshSettingsWriter(
             planChannelName(dest, draft),
             planPreset(dest, draft),
         )
-        steps.filterIsInstance<Step.Stop>().firstOrNull()?.let { return refuse("push", it.reason) }
+        steps.filterIsInstance<Step.Stop>().firstOrNull()?.let { return@withLock refuse("push", it.reason) }
         val plans = steps.filterIsInstance<Step.Write>().map { it.plan }
         if (plans.isEmpty()) {
             Log.i(TAG, "push: the radio already has every setting in the draft, nothing sent")
-            return AdminWriteResult.NothingToChange
+            return@withLock AdminWriteResult.NothingToChange
         }
 
         // Once begin is out the batch runs to its commit even if the caller goes away (a screen that is left
         // mid-push): a transaction left open would swallow the next edit from any client.
-        return withContext(NonCancellable) {
+        withContext(NonCancellable) {
             if (!send(AdminMessageSerializer.buildBeginEditSettings(dest))) {
                 return@withContext AdminWriteResult.LinkFailed(sent = 0, total = plans.size)
             }
@@ -160,13 +167,13 @@ class MeshSettingsWriter(
         setting: String,
         key: Key,
         build: (dest: UInt, current: ByteArray) -> AdminWrite?,
-    ): AdminWriteResult {
-        val dest = destination() ?: return refuse(setting, RefusalReason.NO_RADIO)
-        val current = cache.get(key) ?: return refuse(setting, RefusalReason.NOT_LOADED)
-        val write = build(dest, current) ?: return refuse(setting, RefusalReason.UNREADABLE)
-        if (!send(write.frame)) return AdminWriteResult.LinkFailed(sent = 0, total = 1)
+    ): AdminWriteResult = turn.withLock {
+        val dest = destination() ?: return@withLock refuse(setting, RefusalReason.NO_RADIO)
+        val current = cache.get(key) ?: return@withLock refuse(setting, RefusalReason.NOT_LOADED)
+        val write = build(dest, current) ?: return@withLock refuse(setting, RefusalReason.UNREADABLE)
+        if (!send(write.frame)) return@withLock AdminWriteResult.LinkFailed(sent = 0, total = 1)
         cache.put(key, write.message)
-        return AdminWriteResult.Sent(1)
+        AdminWriteResult.Sent(1)
     }
 
     private fun refuse(setting: String, reason: RefusalReason): AdminWriteResult {

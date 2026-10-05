@@ -1,6 +1,8 @@
 package soy.engindearing.omnitak.mobile.domain
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.currentTime
@@ -434,6 +436,27 @@ class MeshSettingsWriterTest {
         val w = MeshSettingsWriter(loadedCache(), { node }, { times += currentTime; true }, frameSpacingMs = 100)
         w.applyLoRaConfig(MeshRegion.UNSET, MeshChannelPreset.MEDIUM_FAST)
         assertEquals(listOf(0L), times)
+    }
+
+    @Test fun `two writes started together run one after the other, so the second builds on the first`() = runTest {
+        // Each write reads the cache, sends, then stores what it sent. Run side by side, both would start from
+        // the same message and the second would undo the first.
+        val frames = mutableListOf<ByteArray>()
+        val w = MeshSettingsWriter(
+            loadedCache(lora = loraConfig(preset = 6, region = 1)), { node },
+            { frames += it; delay(50); true },
+            frameSpacingMs = 0,
+        )
+
+        val first = async { w.applyLoRaConfig(MeshRegion.EU_868, MeshChannelPreset.SHORT_FAST) }
+        val second = async { w.applyLoRaConfig(MeshRegion.UNSET, MeshChannelPreset.MEDIUM_FAST) }
+
+        assertEquals(AdminWriteResult.Sent(1), first.await())
+        assertEquals(AdminWriteResult.Sent(1), second.await())
+        assertTrue(
+            "the second write still carries the region the first one set",
+            loraConfig(preset = 4, region = 3).contentEquals(decode(frames[1]).setConfig().second),
+        )
     }
 
     @Test fun `a push that has begun reaches its commit even when the caller goes away`() = runTest {
