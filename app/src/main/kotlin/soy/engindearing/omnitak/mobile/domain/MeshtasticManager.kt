@@ -245,6 +245,20 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
         _settingsNotice.value = null
     }
 
+    private val _lastPushResult = MutableStateFlow<String?>(null)
+
+    /**
+     * What the last Device settings push said ("Sent to the radio: position interval. ..."). A push ends with the
+     * radio restarting to save it, which takes the link down, so the result is kept here, not on the screen: it
+     * stays while the link is down, after it comes back and after the screen is left, until the operator edits
+     * again or pushes again ([clearLastPushResult]).
+     */
+    val lastPushResult: StateFlow<String?> = _lastPushResult.asStateFlow()
+
+    fun clearLastPushResult() {
+        _lastPushResult.value = null
+    }
+
     private val settingsWriter = MeshSettingsWriter(
         cache = radioSettings,
         destination = { if (adminLinkUp()) adminDestination() else null },
@@ -845,9 +859,12 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
      * `FromRadio.routing` frames and would need protobuf decode we haven't
      * built yet (filed under GAP-109b). The radio's next report says what it
      * kept, and [settingsNotice] says when that differs from what was sent.
+     * What the push said is kept in [lastPushResult], even if the screen that
+     * started it is left before it finishes (the writer runs a started
+     * sequence to its commit, and its result still comes back).
      */
     suspend fun pushDeviceConfig(edits: DeviceEdits): AdminWriteResult =
-        settingsWriter.pushDeviceConfig(edits)
+        settingsWriter.pushDeviceConfig(edits).also { _lastPushResult.value = it.describe() }
 
     /**
      * #172: import a [MeshChannel] (from a scanned/pasted

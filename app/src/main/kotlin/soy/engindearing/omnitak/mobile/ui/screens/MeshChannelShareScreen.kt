@@ -4,6 +4,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -395,6 +397,7 @@ fun MeshChannelShareScreen(onBack: () -> Unit = {}) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ChannelRow(
     name: String,
@@ -404,18 +407,24 @@ private fun ChannelRow(
     onReplacePrimary: (() -> Unit)? = null,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
-        Row(
+        Column(
             Modifier.fillMaxWidth().padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Column(Modifier.weight(1f)) {
+            // The text has the card's whole width. The buttons sit on their own row beneath it, and wrap onto a
+            // second line on a narrow screen instead of squeezing the text into a sliver beside them.
+            Column {
                 Text(name, style = MaterialTheme.typography.titleSmall)
                 Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
             }
-            OutlinedButton(onClick = onShare) { Text("Share") }
-            if (onReplacePrimary != null) OutlinedButton(onClick = onReplacePrimary) { Text("Replace primary") }
-            Button(onClick = onApply) { Text("Apply") }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                OutlinedButton(onClick = onShare) { Text("Share") }
+                if (onReplacePrimary != null) OutlinedButton(onClick = onReplacePrimary) { Text("Replace primary") }
+                Button(onClick = onApply) { Text("Apply") }
+            }
         }
     }
 }

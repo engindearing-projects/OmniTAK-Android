@@ -115,13 +115,26 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
     // What a push would send right now: the settings that differ from what the radio reported.
     val edits = state.edits(draft)
     val notice by mesh.settingsNotice.collectAsState()
+    // What the last push said. The manager keeps it, because a push ends with the radio restarting and the link
+    // dropping, and the result has to stay readable through that and after it, until the next edit or push.
+    val lastPush by mesh.lastPushResult.collectAsState()
     var savedToast by remember { mutableStateOf<String?>(null) }
 
+    // A change the operator makes to the draft. What the last push said, and the note that the radio did not take a
+    // value, are about the settings as they were before it, so they go with the first change. Reports from the radio
+    // also move the draft (the LaunchedEffect above); they are not edits and leave the result alone.
+    fun edited(change: (MeshDeviceConfig) -> MeshDeviceConfig) {
+        val next = change(draft)
+        if (next == draft) return
+        draft = next
+        mesh.clearLastPushResult()
+        mesh.clearSettingsNotice()
+    }
+
+    // Short confirmations only ("Saved draft locally"). What a push said is kept in lastPush and does not time out.
     LaunchedEffect(savedToast) {
-        val toast = savedToast
-        if (toast != null) {
-            // A refusal ("The radio did not answer, so nothing was changed...") needs longer to read than "Saved".
-            kotlinx.coroutines.delay(if (toast.length > 40) 5000 else 1800)
+        if (savedToast != null) {
+            kotlinx.coroutines.delay(1800)
             savedToast = null
         }
     }
@@ -185,7 +198,7 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
             OutlinedTextField(
                 value = draft.longName,
                 onValueChange = { v ->
-                    draft = draft.copy(longName = v.take(40))
+                    edited { it.copy(longName = v.take(40)) }
                 },
                 label = { Text("Long name") },
                 singleLine = true,
@@ -197,7 +210,7 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
                 onValueChange = { v ->
                     // Meshtastic short_name caps at 4 visible chars on the
                     // tiny OLEDs; uppercase ASCII is the convention.
-                    draft = draft.copy(shortName = v.uppercase().take(4))
+                    edited { it.copy(shortName = v.uppercase().take(4)) }
                 },
                 label = { Text("Short name (max 4)") },
                 singleLine = true,
@@ -212,7 +225,7 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
                 labelOf = { it.label },
                 descriptionOf = { it.description },
                 onSelect = { v ->
-                    draft = draft.copy(role = v)
+                    edited { it.copy(role = v) }
                 },
             )
 
@@ -229,7 +242,7 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
                 onValueChange = { v ->
                     val cleaned = v.filter { c -> c.isDigit() }.take(5)
                     val parsed = cleaned.toIntOrNull() ?: 0
-                    draft = draft.copy(positionBroadcastSecs = parsed.coerceIn(0, 24 * 60 * 60))
+                    edited { it.copy(positionBroadcastSecs = parsed.coerceIn(0, 24 * 60 * 60)) }
                 },
                 label = { Text("Interval (seconds, 0 disables)") },
                 singleLine = true,
@@ -242,7 +255,7 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
                 selected = draft.positionBroadcastSecs,
                 labelOf = { secs -> if (secs >= 60) "${secs / 60}m" else "${secs}s" },
                 onSelect = { v ->
-                    draft = draft.copy(positionBroadcastSecs = v)
+                    edited { it.copy(positionBroadcastSecs = v) }
                 },
             )
 
@@ -250,7 +263,7 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
             OutlinedTextField(
                 value = draft.channelName,
                 onValueChange = { v ->
-                    draft = draft.copy(channelName = v.take(11))
+                    edited { it.copy(channelName = v.take(11)) }
                 },
                 label = { Text("Channel name (max 11)") },
                 singleLine = true,
@@ -263,7 +276,7 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
                 labelOf = { it.label },
                 descriptionOf = { it.blurb },
                 onSelect = { v ->
-                    draft = draft.copy(channelPreset = v)
+                    edited { it.copy(channelPreset = v) }
                 },
             )
 
@@ -307,8 +320,9 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
                         // the radio drops mid-write.
                         store.update { toPush }
                         mesh.clearSettingsNotice()
+                        mesh.clearLastPushResult()
+                        // The manager records what the push said (lastPushResult), shown below.
                         val result = mesh.pushDeviceConfig(toSend)
-                        savedToast = result.describe()
                         // After push, read back so the screen reflects what the
                         // radio actually accepted (some fields may be rejected).
                         if (result.reachedRadio) {
@@ -328,6 +342,17 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
             )
 
             savedToast?.let { msg ->
+                Text(
+                    msg,
+                    color = TacticalAccent,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+
+            // What the last push said. It stays through the link drop that follows a push (the radio restarts to
+            // save it, and the push panel above is replaced by the connect card) until the next edit or push.
+            lastPush?.let { msg ->
                 Text(
                     msg,
                     color = TacticalAccent,

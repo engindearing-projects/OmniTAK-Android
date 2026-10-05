@@ -1,5 +1,7 @@
 package soy.engindearing.omnitak.mobile.domain
 
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.net.InetAddress
 import java.net.ServerSocket
@@ -363,6 +365,70 @@ class MeshtasticManagerRadioSettingsTest {
         mgr.dispatchFrame(myInfoFrame(me))
         mgr.dispatchFrame(configFrame(1, original))
         assertEquals("The radio did not take: role. It may be managed.", mgr.settingsNotice.value)
+    }
+
+    // endregion
+
+    // region what a push said is kept ------------------------------------------------
+
+    @Test fun `what a push said is kept until the screen clears it for the next edit or push`() = runBlocking {
+        val (mgr, _) = connected()
+        assertNull(mgr.lastPushResult.value)
+
+        mgr.pushDeviceConfig(DeviceEdits(positionBroadcastSecs = 300))
+        assertEquals("Sent to the radio: position interval. The radio restarts to save them.", mgr.lastPushResult.value)
+
+        mgr.clearLastPushResult() // the operator edited a field
+        assertNull(mgr.lastPushResult.value)
+
+        mgr.pushDeviceConfig(DeviceEdits(channelName = "ops"))
+        assertEquals("Sent to the radio: channel name. The radio restarts to save them.", mgr.lastPushResult.value)
+    }
+
+    @Test fun `the result of a push and the note that the radio did not take it stay through the link drop that follows a push`() = runBlocking {
+        val (mgr, link) = connected()
+        val original = link.radio.config.getValue(1).copyOf()
+        link.radio.onSetConfig = { variant, radio -> if (variant == 1) radio.config[1] = original } // the radio keeps its role
+        val sent = "Sent to the radio: role. The radio restarts to save them."
+        val note = "The radio did not take: role. It may be managed."
+
+        mgr.pushDeviceConfig(DeviceEdits(role = MeshRole.TAK))
+        assertEquals(sent, mgr.lastPushResult.value)
+
+        // The re-read right after the push says the radio kept its role.
+        mgr.dispatchFrame(adminResponseFrame(from = me, to = me, adminField = 6, message = ProtoMsg().bytes(1, original).build()))
+        assertEquals(note, mgr.settingsNotice.value)
+
+        // Then the radio restarts to save the push, and over TCP the link drops with it.
+        mgr.onLinkState(ConnectionState.Connected("radio", useTLS = false), wasConnected = false)
+        mgr.onLinkState(ConnectionState.Disconnected, wasConnected = true)
+        assertEquals("the result is still there with the link down", sent, mgr.lastPushResult.value)
+        assertEquals("and so is the note", note, mgr.settingsNotice.value)
+
+        // The link comes back and the radio downloads its settings again.
+        mgr.dispatchFrame(myInfoFrame(me))
+        mgr.dispatchFrame(configFrame(1, original))
+        assertEquals("and after the download", sent, mgr.lastPushResult.value)
+        assertEquals(note, mgr.settingsNotice.value)
+    }
+
+    @Test fun `a refused push is kept too, so the operator can read why nothing was sent`() = runBlocking {
+        val (mgr, _) = connected()
+        mgr.onLinkState(ConnectionState.Connected("radio", useTLS = false), wasConnected = false)
+        mgr.onLinkState(ConnectionState.Disconnected, wasConnected = true)
+
+        assertEquals(AdminWriteResult.Refused(RefusalReason.NO_RADIO), mgr.pushDeviceConfig(DeviceEdits(role = MeshRole.ROUTER)))
+        assertEquals(RefusalReason.NO_RADIO.message, mgr.lastPushResult.value)
+    }
+
+    @Test fun `a push still records what it said when the screen that started it is left`() = runBlocking {
+        val (mgr, _) = connected()
+        val push = launch { mgr.pushDeviceConfig(DeviceEdits(positionBroadcastSecs = 300)) }
+        delay(50) // inside the push: its frames go out a gap apart, so it is still running
+        push.cancel()
+        push.join()
+
+        assertEquals("Sent to the radio: position interval. The radio restarts to save them.", mgr.lastPushResult.value)
     }
 
     // endregion
