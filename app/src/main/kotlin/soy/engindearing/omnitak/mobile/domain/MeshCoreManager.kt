@@ -314,26 +314,27 @@ class MeshCoreManager(private val context: Context? = null) : MeshFrameworkManag
      * Bridge a CoT event onto MeshCore.
      *  - GeoChat (`b-t-f`): forwarded as a native DM when a target pubkey is
      *    known; otherwise dropped (no broadcast text in v1).
-     *  - PLI / self-position (everything else): store the lat/lon in the
+     *  - The operator's own position ([ownPosition]): store the lat/lon in the
      *    node's advert (SET_ADVERT_LATLON) and broadcast it (SEND_SELF_ADVERT)
      *    so MeshCore peers plot this operator.
+     *  - Anything else (a dropped marker, a report, a relayed contact): not
+     *    sent. The advert is the only place MeshCore has for a position, and it
+     *    is this radio's own (#234).
      */
-    override suspend fun sendCoTOverMesh(event: CoTEvent, channelIndex: UInt): Boolean {
+    override suspend fun sendCoTOverMesh(event: CoTEvent, channelIndex: UInt, ownPosition: Boolean): Boolean {
         if (!connected) return false
-        if (event.type == "b-t-f") {
-            // GeoChat — only DM is in scope; need a resolvable recipient.
-            // CoT chat carries no MeshCore pubkey, so v1 cannot fan a server
-            // GeoChat out to MeshCore peers. Skip rather than misroute.
-            Log.v(TAG, "sendCoTOverMesh: MeshCore GeoChat fan-out not in v1 scope — skipping")
+        val frames = outboundFrames(event, ownPosition)
+        if (frames.isEmpty()) {
+            Log.v(TAG, "sendCoTOverMesh: nothing to send over MeshCore for type ${event.type} (own position: $ownPosition)")
             return false
         }
-        // Self/PLI position broadcast.
-        val latLon = MeshCoreFrameCodec.buildSetAdvertLatLon(event.lat, event.lon, event.hae)
-            ?: return false
         val c = client ?: return false
-        val a = c.send(latLon)
-        val b = c.send(MeshCoreFrameCodec.buildSendSelfAdvert())
-        return a && b
+        // Every frame is sent even when an earlier one fails, as before.
+        var allSent = true
+        for (frame in frames) {
+            if (!c.send(frame)) allSent = false
+        }
+        return allSent
     }
 
     /**
@@ -368,5 +369,26 @@ class MeshCoreManager(private val context: Context? = null) : MeshFrameworkManag
     companion object {
         private const val TAG = "MeshCoreManager"
         private const val POLL_INTERVAL_MS = 2_500L
+
+        /**
+         * The companion-protocol frames that carry [event] to the radio, in
+         * the order they are sent. Empty when MeshCore has no way to carry it.
+         *
+         * Only the operator's own position has one: SET_ADVERT_LATLON puts it
+         * in this radio's advert and SEND_SELF_ADVERT broadcasts the advert.
+         * Any other position event would do the same to this radio's advert,
+         * so a dropped marker would show the operator standing on the marker
+         * to every MeshCore peer (#234). Those are not sent.
+         *
+         * GeoChat is not a frame here either: a CoT chat carries no MeshCore
+         * pubkey, so it cannot be fanned out to MeshCore peers.
+         */
+        internal fun outboundFrames(event: CoTEvent, ownPosition: Boolean): List<ByteArray> {
+            if (event.type == "b-t-f") return emptyList()
+            if (!ownPosition) return emptyList()
+            val latLon = MeshCoreFrameCodec.buildSetAdvertLatLon(event.lat, event.lon, event.hae)
+                ?: return emptyList()
+            return listOf(latLon, MeshCoreFrameCodec.buildSendSelfAdvert())
+        }
     }
 }

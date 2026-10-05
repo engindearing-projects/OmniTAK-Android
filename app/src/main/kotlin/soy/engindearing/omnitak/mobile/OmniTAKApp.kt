@@ -670,7 +670,9 @@ class OmniTAKApp : Application() {
             // from what's on screen.
             manualFixProvider = { locationProvider.manualFix.value },
             batteryProvider = ::readDeviceBatteryPercent,
-            sendToMesh = { event -> activeMeshManager.sendCoTOverMesh(event) },
+            // The one caller that sends the operator's own position. MeshCore
+            // puts it in the radio's advert and sends nothing else there (#234).
+            sendToMesh = { event -> activeMeshManager.sendCoTOverMesh(event, ownPosition = true) },
             meshConnected = { activeMeshManager.activeConnectionState.value is ConnectionState.Connected },
             meshBroadcastEnabled = { broadcastOverMeshFlow.value },
             // Lambda, not a snapshot — the operator's interval pref now

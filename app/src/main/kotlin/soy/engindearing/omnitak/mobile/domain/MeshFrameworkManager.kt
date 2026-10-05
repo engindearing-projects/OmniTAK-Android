@@ -45,9 +45,22 @@ interface MeshFrameworkManager {
     /** Send a plain-text chat message over the active mesh transport. */
     suspend fun sendMeshChat(text: String, channelIndex: Int = 0, toNodeId: UInt? = null): Boolean
 
-    /** Send a CoT event (self-PLI or GeoChat) over the active mesh
-     *  transport. Returns true on wire-layer dispatch. */
-    suspend fun sendCoTOverMesh(event: CoTEvent, channelIndex: UInt = 0u): Boolean
+    /**
+     * Send a CoT event over the active mesh transport. Returns true on
+     * wire-layer dispatch.
+     *
+     * [ownPosition] is true only when [event] is the operator's own position
+     * report. Meshtastic carries any event and ignores it. MeshCore can carry
+     * a position in one way only, the radio's own advert, so it sends a
+     * position event only when this is set (#234): a marker sent that way
+     * would move the operator's advertised position onto the marker. A caller
+     * that leaves it out sends nothing over MeshCore.
+     */
+    suspend fun sendCoTOverMesh(
+        event: CoTEvent,
+        channelIndex: UInt = 0u,
+        ownPosition: Boolean = false,
+    ): Boolean
 
     /** Start a BLE scan, returning a flow of framework-neutral hits.
      *  Null when BLE is unavailable (e.g. no Context / radio off). */
