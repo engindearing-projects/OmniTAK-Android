@@ -53,8 +53,7 @@ object MeshtasticProtoParser {
                 3 -> { // MyNodeInfo (canonical field 3)
                     if (wire != 2) { idx = skipField(bytes, idx, wire); continue }
                     val sub = readLengthDelimited(bytes, idx) ?: return null
-                    val nodeNum = parseMyNodeInfo(sub.first)
-                    return FromRadioFrame.MyInfo(nodeNum)
+                    return parseMyNodeInfo(sub.first)
                 }
                 4 -> { // NodeInfo (canonical field 4)
                     if (wire != 2) { idx = skipField(bytes, idx, wire); continue }
@@ -135,10 +134,12 @@ object MeshtasticProtoParser {
 
     // region Submessage parsers -------------------------------------------
 
-    private fun parseMyNodeInfo(bytes: ByteArray): UInt {
-        // Only field we need today: 1 my_node_num (varint, uint32).
+    private fun parseMyNodeInfo(bytes: ByteArray): FromRadioFrame.MyInfo {
+        // 1 my_node_num (varint, uint32) and 8 reboot_count (varint, uint32). The firmware keeps the reboot count
+        // on ESP32 only (NodeDB.cpp loads it under ARCH_ESP32): any other radio leaves it off the wire, as 0.
         var idx = 0
         var nodeNum: UInt = 0u
+        var rebootCount: UInt = 0u
         while (idx < bytes.size) {
             val (tag, afterTag) = readVarint(bytes, idx) ?: break
             val field = (tag shr 3).toInt()
@@ -151,10 +152,16 @@ object MeshtasticProtoParser {
                     nodeNum = v.toUInt()
                     idx = after
                 }
+                8 -> {
+                    if (wire != 0) { idx = skipField(bytes, idx, wire); continue }
+                    val (v, after) = readVarint(bytes, idx) ?: break
+                    rebootCount = v.toUInt()
+                    idx = after
+                }
                 else -> idx = skipField(bytes, idx, wire)
             }
         }
-        return nodeNum
+        return FromRadioFrame.MyInfo(nodeNum, rebootCount)
     }
 
     /**
@@ -551,7 +558,11 @@ object MeshtasticProtoParser {
 /** Top-level FromRadio variant we recognised. */
 sealed interface FromRadioFrame {
     data class Packet(val packet: MeshPacketDecoded) : FromRadioFrame
-    data class MyInfo(val nodeNum: UInt) : FromRadioFrame
+    /**
+     * [rebootCount] is `my_info.reboot_count`: how many times the radio has started, on a radio that counts them (ESP32
+     * firmware) and 0 on every other one, which cannot tell a restart from none.
+     */
+    data class MyInfo(val nodeNum: UInt, val rebootCount: UInt = 0u) : FromRadioFrame
 
     /** [userRaw] is the exact bytes of the NodeInfo's `user` field, null when it had none. */
     class NodeInfoFrame(val node: MeshNode, val userRaw: ByteArray? = null) : FromRadioFrame {

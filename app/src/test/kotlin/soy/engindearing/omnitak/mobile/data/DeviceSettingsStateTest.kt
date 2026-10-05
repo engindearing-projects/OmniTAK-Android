@@ -405,4 +405,15 @@ class DeviceSettingsStateTest {
     }
 
     // endregion
+
+    // region the rebroadcast mode ---------------------------------------------------------------------------------
+
+    @Test fun `the radio's rebroadcast mode is kept, so a write of it can be compared with what the radio reports`() {
+        val state = freshInstall.report(AdminResponse.DeviceConfig(role = MeshRole.CLIENT, rebroadcastMode = RebroadcastMode.KNOWN_ONLY))
+        assertEquals(RebroadcastMode.KNOWN_ONLY, state.radio!!.rebroadcastMode)
+        assertEquals("a mode with no name here is not a mode", null, state.report(AdminResponse.DeviceConfig(MeshRole.CLIENT, null)).radio!!.rebroadcastMode)
+        assertTrue("and it is not something the screen edits", state.edits().isEmpty)
+    }
+
+    // endregion
 }

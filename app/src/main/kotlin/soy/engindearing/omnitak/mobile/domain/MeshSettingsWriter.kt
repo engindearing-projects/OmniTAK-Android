@@ -1,6 +1,7 @@
 package soy.engindearing.omnitak.mobile.domain
 
 import android.util.Log
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
@@ -13,6 +14,7 @@ import soy.engindearing.omnitak.mobile.data.AdminReads
 import soy.engindearing.omnitak.mobile.data.AdminSetting
 import soy.engindearing.omnitak.mobile.data.AdminWriteResult
 import soy.engindearing.omnitak.mobile.data.DeviceEdits
+import soy.engindearing.omnitak.mobile.data.InterruptedWrite
 import soy.engindearing.omnitak.mobile.data.MeshChannel
 import soy.engindearing.omnitak.mobile.data.MeshChannelPreset
 import soy.engindearing.omnitak.mobile.data.MeshConnectionType
@@ -23,6 +25,7 @@ import soy.engindearing.omnitak.mobile.data.RadioSettingsCache.Key
 import soy.engindearing.omnitak.mobile.data.RebroadcastMode
 import soy.engindearing.omnitak.mobile.data.RefusalReason
 import soy.engindearing.omnitak.mobile.data.SentLedger
+import soy.engindearing.omnitak.mobile.data.settingValuesOf
 import soy.engindearing.omnitak.mobile.data.SentSettings
 
 /**
@@ -83,8 +86,40 @@ class MeshSettingsWriter(
     /** How long a read waits for its answer, asked at each read: it depends on the link ([readTimeoutFor]). */
     private val readTimeoutMs: () -> Long = { READ_TIMEOUT_MS },
     private val reads: AdminReads = AdminReads(),
+    /**
+     * Told when a sequence that opened an edit transaction ends: the radio's node number, whether the sequence
+     * left the transaction open (its commit did not go out, [InterruptedWrite]), everything it had written and the
+     * values among them that can be compared with what the radio reports.
+     */
+    private val onTransactionEnd: (
+        node: UInt, leftOpen: Boolean, settings: List<AdminSetting>, values: Map<AdminSetting, InterruptedWrite.WrittenValue>,
+    ) -> Unit = { _, _, _, _ -> },
 ) {
     private val turn = Mutex()
+
+    /**
+     * While this is set, no sequence and no read starts. The manager sets it from the first frame of a link-up that
+     * may have to close an interrupted transaction until that is decided, so that the commit is the first admin
+     * frame the app sends to the radio and nothing else is in flight while it is decided. It is always completed.
+     */
+    @Volatile private var hold: CompletableDeferred<Unit>? = null
+
+    fun holdUntil(gate: CompletableDeferred<Unit>) {
+        hold = gate
+    }
+
+    private suspend fun awaitHold() {
+        hold?.await()
+    }
+
+    /**
+     * One `commit_edit_settings` to the attached radio, to close a transaction a lost link left open. Takes its turn
+     * like a sequence, but not the hold: it is what the hold is for. True when the frame went out.
+     */
+    suspend fun commitLeftOpen(): Boolean = turn.withLock {
+        val dest = destination() ?: return@withLock false
+        send(AdminMessageSerializer.buildCommitEditSettings(dest))
+    }
 
     /**
      * The settings the operator edited, role first. Only these are written, each patched onto a fresh read.
@@ -194,7 +229,12 @@ class MeshSettingsWriter(
      * in [cache] and as reports. Takes its turn like a write and spaces the requests the same way: twelve sent
      * back to back got four answers from a simulated radio. Returns how many requests went out.
      */
-    suspend fun readAll(): Int = turn.withLock {
+    suspend fun readAll(): Int {
+        awaitHold()
+        return readAllNow()
+    }
+
+    private suspend fun readAllNow(): Int = turn.withLock {
         val dest = destination() ?: return@withLock 0
         val keys = listOf(Key.Owner, Key.Config(RadioSettingsCache.CONFIG_DEVICE), Key.Config(RadioSettingsCache.CONFIG_POSITION),
             Key.Config(RadioSettingsCache.CONFIG_LORA)) + (0 until RadioSettingsCache.MAX_CHANNELS).map { Key.Channel(it) }
@@ -226,6 +266,15 @@ class MeshSettingsWriter(
         all: List<AdminSetting>,
         onSent: ((SentSettings) -> Unit)? = null,
         body: suspend Run.() -> Unit,
+    ): AdminWriteResult {
+        awaitHold()
+        return runSequenceNow(all, onSent, body)
+    }
+
+    private suspend fun runSequenceNow(
+        all: List<AdminSetting>,
+        onSent: ((SentSettings) -> Unit)?,
+        body: suspend Run.() -> Unit,
     ): AdminWriteResult = turn.withLock {
         // Once the sequence starts it runs to its commit even if the caller goes away (a screen that is left
         // mid-push): a transaction left open would swallow the next edit from any client.
@@ -241,6 +290,7 @@ class MeshSettingsWriter(
             if (onSent != null && result.reachedRadio && run.sentValues.isNotEmpty()) {
                 onSent(SentSettings(dest, run.sentValues.toMap()))
             }
+            if (run.begun) onTransactionEnd(dest, !run.committed, run.writtenSettings(), run.writtenValues.toMap())
             result
         }
     }
@@ -249,13 +299,22 @@ class MeshSettingsWriter(
 
     private inner class Run(val dest: UInt, private val all: List<AdminSetting>) {
         private var framesSent = 0
-        private var begun = false
+        var begun = false
+            private set
+        var committed = false
+            private set
         private var stop: Stop? = null
         private val written = ArrayList<AdminSetting>()
         private val alreadySet = ArrayList<AdminSetting>()
 
         /** The values of the written settings, as they went out (what the ledger expects the radio to report). */
         val sentValues = LinkedHashMap<AdminSetting, Any>()
+
+        /** The same, each with the value the radio held just before it was written: what an interrupted sequence is judged by. */
+        val writtenValues = LinkedHashMap<AdminSetting, InterruptedWrite.WrittenValue>()
+
+        /** Everything written so far, the settings that have no value to compare included (an imported channel). */
+        fun writtenSettings(): List<AdminSetting> = written.toList()
 
         /** Read [key] from the radio, patch it with [build], and write the result unless the radio already holds it. False when the sequence must stop. */
         suspend fun patch(
@@ -265,6 +324,7 @@ class MeshSettingsWriter(
             build: (dest: UInt, current: ByteArray) -> AdminWrite?,
         ): Boolean {
             val current = read(key) ?: return false
+            val before = settingValuesOf(key, current)
             val write = build(dest, current)
             if (write == null) {
                 stop = Stop.UNREADABLE
@@ -275,7 +335,7 @@ class MeshSettingsWriter(
                 alreadySet += settings
                 return true
             }
-            return emit(write, key, settings, expected)
+            return emit(write, key, settings, expected, before)
         }
 
         suspend fun patchOwner(longName: String, shortName: String, isLicensed: Boolean?): Boolean {
@@ -290,7 +350,10 @@ class MeshSettingsWriter(
         }
 
         /** Send one write inside the transaction (opened now if it is not open yet). */
-        suspend fun emit(write: AdminWrite, key: Key, settings: List<AdminSetting>, expected: Map<AdminSetting, Any>): Boolean {
+        suspend fun emit(
+            write: AdminWrite, key: Key, settings: List<AdminSetting>, expected: Map<AdminSetting, Any>,
+            before: Map<AdminSetting, Any> = emptyMap(),
+        ): Boolean {
             if (!begun) {
                 if (!frame(AdminMessageSerializer.buildBeginEditSettings(dest))) {
                     stop = Stop.LINK
@@ -308,6 +371,7 @@ class MeshSettingsWriter(
             expected.forEach { (setting, value) ->
                 ledger.expect(dest, setting, value)
                 sentValues[setting] = value
+                writtenValues[setting] = InterruptedWrite.WrittenValue(before[setting], value)
             }
             return true
         }
@@ -365,7 +429,7 @@ class MeshSettingsWriter(
 
         suspend fun finish(): AdminWriteResult {
             // Once the radio was told to expect changes, tell it to save them, whatever happened since.
-            val committed = begun && frame(AdminMessageSerializer.buildCommitEditSettings(dest))
+            committed = begun && frame(AdminMessageSerializer.buildCommitEditSettings(dest))
             val notWritten = all.filter { it !in written && it !in alreadySet }
             val reason = stop
             Log.i(TAG, "sequence: written=$written alreadySet=$alreadySet notWritten=$notWritten stop=$reason committed=$committed")

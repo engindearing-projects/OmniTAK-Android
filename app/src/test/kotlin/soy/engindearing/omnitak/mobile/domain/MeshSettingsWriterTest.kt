@@ -27,6 +27,7 @@ import soy.engindearing.omnitak.mobile.data.AdminWriteResult.Incomplete.Cause
 import soy.engindearing.omnitak.mobile.data.DeviceEdits
 import soy.engindearing.omnitak.mobile.data.DeviceSettingsState
 import soy.engindearing.omnitak.mobile.data.FakeRadio
+import soy.engindearing.omnitak.mobile.data.InterruptedWrite
 import soy.engindearing.omnitak.mobile.data.MeshChannel
 import soy.engindearing.omnitak.mobile.data.MeshChannelPreset
 import soy.engindearing.omnitak.mobile.data.MeshConnectionType
@@ -69,6 +70,8 @@ class MeshSettingsWriterTest {
         val ledger: SentLedger = SentLedger(),
         /** 1-based numbers of the frames the link refuses. */
         val failAt: MutableSet<Int> = mutableSetOf(),
+        /** What the writer tells about a sequence that opened a transaction, as the manager is told. */
+        val onTransactionEnd: (UInt, Boolean, List<AdminSetting>, Map<AdminSetting, InterruptedWrite.WrittenValue>) -> Unit = { _, _, _, _ -> },
     ) {
         val cache = RadioSettingsCache()
         val frameTimes = mutableListOf<Long>()
@@ -83,6 +86,7 @@ class MeshSettingsWriterTest {
         val writer = MeshSettingsWriter(
             cache, { destination }, { frame -> send(frame) },
             ledger = ledger, frameSpacingMs = frameSpacingMs, readTimeoutMs = { readTimeoutMs }, reads = reads,
+            onTransactionEnd = onTransactionEnd,
         )
 
         private suspend fun send(frame: ByteArray): Boolean {
@@ -712,6 +716,116 @@ class MeshSettingsWriterTest {
 
         assertTrue(result.toString(), result is AdminWriteResult.Incomplete)
         assertEquals(setOf(AdminSetting.ROLE), seen!!.values.keys)
+    }
+
+    // endregion
+
+    // region a transaction that was left open -------------------------------------------------------------------------------
+
+    private class Ended(val node: UInt, val leftOpen: Boolean, val settings: List<AdminSetting>, val values: Map<AdminSetting, InterruptedWrite.WrittenValue>)
+
+    @Test fun `a sequence that committed tells onTransactionEnd that nothing was left open`() = runTest {
+        val ended = mutableListOf<Ended>()
+        val rig = Rig(this, onTransactionEnd = { n, open, settings, values -> ended += Ended(n, open, settings, values) })
+
+        rig.writer.pushDeviceConfig(DeviceEdits(positionBroadcastSecs = 300))
+
+        assertEquals(1, ended.size)
+        assertEquals(node, ended[0].node)
+        assertFalse(ended[0].leftOpen)
+        assertEquals(listOf(AdminSetting.POSITION_INTERVAL), ended[0].settings)
+    }
+
+    @Test fun `a sequence whose commit does not go out tells onTransactionEnd what it wrote, with what the radio held before`() = runTest {
+        val ended = mutableListOf<Ended>()
+        // Frames: the read of the position config (1), begin (2), the write (3), the commit (4), which the link refuses.
+        val rig = Rig(this, failAt = mutableSetOf(4), onTransactionEnd = { n, open, settings, values -> ended += Ended(n, open, settings, values) })
+
+        val result = rig.writer.pushDeviceConfig(DeviceEdits(positionBroadcastSecs = 300))
+
+        assertTrue(result.toString(), result is AdminWriteResult.Incomplete && !result.committed)
+        assertEquals(1, ended.size)
+        val e = ended[0]
+        assertEquals(node, e.node)
+        assertTrue(e.leftOpen)
+        assertEquals(listOf(AdminSetting.POSITION_INTERVAL), e.settings)
+        val written = e.values.getValue(AdminSetting.POSITION_INTERVAL)
+        assertEquals("what the radio held when the entry was read, just before the write", 900, written.before)
+        assertEquals(300, written.sent)
+        assertTrue("the radio holds the transaction open", rig.radio.inTransaction)
+    }
+
+    @Test fun `the value before is the value of the fresh read, not of an older copy`() = runTest {
+        val ended = mutableListOf<Ended>()
+        val rig = Rig(this, failAt = mutableSetOf(4), onTransactionEnd = { n, open, settings, values -> ended += Ended(n, open, settings, values) })
+        rig.radio.config[2] = ProtoMsg().varint(1, 777).varint(7, 811).varint(13, 1).build() // another client changed it
+
+        rig.writer.pushDeviceConfig(DeviceEdits(positionBroadcastSecs = 300))
+
+        assertEquals(777, ended.single().values.getValue(AdminSetting.POSITION_INTERVAL).before)
+    }
+
+    @Test fun `a sequence that stops before the first write still reports the transaction it opened`() = runTest {
+        val ended = mutableListOf<Ended>()
+        // The read (1), begin (2) and the write (3), which the link refuses, and so does the commit.
+        val rig = Rig(this, failAt = mutableSetOf(3, 4), onTransactionEnd = { n, open, settings, values -> ended += Ended(n, open, settings, values) })
+
+        rig.writer.pushDeviceConfig(DeviceEdits(positionBroadcastSecs = 300))
+
+        val e = ended.single()
+        assertTrue(e.leftOpen)
+        assertTrue("nothing was written", e.settings.isEmpty() && e.values.isEmpty())
+        assertTrue(rig.radio.inTransaction)
+    }
+
+    @Test fun `a sequence that never began says nothing`() = runTest {
+        var calls = 0
+        val unreadable = Rig(this, failAt = mutableSetOf(1), onTransactionEnd = { _, _, _, _ -> calls++ })
+        unreadable.writer.pushDeviceConfig(DeviceEdits(positionBroadcastSecs = 300))
+        val silent = Rig(this, onTransactionEnd = { _, _, _, _ -> calls++ }).also { it.radio.answers = false }
+        silent.writer.pushDeviceConfig(DeviceEdits(positionBroadcastSecs = 300))
+        val nothing = Rig(this, onTransactionEnd = { _, _, _, _ -> calls++ })
+        nothing.writer.pushDeviceConfig(DeviceEdits(positionBroadcastSecs = 900)) // the radio has it already
+        assertEquals(0, calls)
+    }
+
+    @Test fun `every kind of sequence reports, not only the Device settings push`() = runTest {
+        val ended = mutableListOf<Ended>()
+        val rig = Rig(this, failAt = mutableSetOf(4), onTransactionEnd = { n, open, settings, values -> ended += Ended(n, open, settings, values) })
+
+        rig.writer.applyRebroadcastMode(RebroadcastMode.KNOWN_ONLY)
+
+        val e = ended.single()
+        assertTrue(e.leftOpen)
+        assertEquals(RebroadcastMode.KNOWN_ONLY, e.values.getValue(AdminSetting.REBROADCAST_MODE).sent)
+    }
+
+    @Test fun `commitLeftOpen sends one commit, and says whether it went out`() = runTest {
+        val rig = Rig(this)
+        assertTrue(rig.writer.commitLeftOpen())
+        assertEquals(listOf("commit"), rig.radio.log)
+
+        assertFalse("no radio attached", Rig(this, destination = null).writer.commitLeftOpen())
+        assertFalse("the link refuses it", Rig(this, failAt = mutableSetOf(1)).writer.commitLeftOpen())
+    }
+
+    @Test fun `while the writer is held no sequence and no read goes out, the commit does, and everything follows when it is released`() = runTest {
+        val rig = Rig(this)
+        val gate = CompletableDeferred<Unit>()
+        rig.writer.holdUntil(gate)
+
+        val push = async { rig.writer.pushDeviceConfig(DeviceEdits(positionBroadcastSecs = 300)) }
+        val read = async { rig.writer.readAll() }
+        delay(1_000)
+        assertTrue("nothing went out", rig.radio.log.isEmpty())
+
+        assertTrue(rig.writer.commitLeftOpen())
+        assertEquals("the commit is not held", listOf("commit"), rig.radio.log)
+
+        gate.complete(Unit)
+        assertEquals(AdminWriteResult.Sent(listOf(AdminSetting.POSITION_INTERVAL)), push.await())
+        assertEquals(12, read.await())
+        assertEquals("commit", rig.radio.log.first())
     }
 
     // endregion

@@ -22,6 +22,8 @@ data class RadioSettings(
     val longName: String? = null,
     val shortName: String? = null,
     val role: MeshRole? = null,
+    /** Not on the Device settings screen: kept so that a write of it can be compared with what the radio reports. */
+    val rebroadcastMode: RebroadcastMode? = null,
     val positionBroadcastSecs: Int? = null,
     val channelName: String? = null,
     val channelPreset: MeshChannelPreset? = null,
@@ -139,7 +141,7 @@ data class DeviceSettingsState(
             )
             is AdminResponse.DeviceConfig -> copy(
                 draft = draft.copy(role = sync(draft.role, old.role, report.role)),
-                radio = old.copy(role = report.role),
+                radio = old.copy(role = report.role, rebroadcastMode = report.rebroadcastMode),
             )
             is AdminResponse.PositionConfig -> copy(
                 draft = draft.copy(

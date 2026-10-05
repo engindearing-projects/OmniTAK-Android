@@ -30,7 +30,7 @@ class SentSettings(val node: UInt, val values: Map<AdminSetting, Any>) {
         val notes = ArrayList<String>()
         var reason: String? = null
         for ((setting, sent) in values.entries.sortedBy { it.key.ordinal }) {
-            val reported = reportedValue(radio, setting) ?: continue
+            val reported = radio.valueOf(setting) ?: continue
             if (reported == sent) continue
             notes += "The radio reports ${show(setting, reported)} for the ${setting.label}. ${show(setting, sent)} was sent."
             if (setting == AdminSetting.POSITION_INTERVAL) reason = intervalReason(sent, reported, facts)
@@ -49,18 +49,6 @@ class SentSettings(val node: UInt, val values: Map<AdminSetting, Any>) {
         val floor = PositionFloor.floorSecs(facts.role ?: return null)
         val explained = facts.onDefaultChannel() == true && sent > 0 && sent < floor && reported == floor
         return if (explained) PositionFloor.reason(floor) else null
-    }
-
-    private fun reportedValue(radio: RadioSettings, setting: AdminSetting): Any? = when (setting) {
-        AdminSetting.LONG_NAME -> radio.longName
-        AdminSetting.SHORT_NAME -> radio.shortName
-        AdminSetting.ROLE -> radio.role
-        AdminSetting.POSITION_INTERVAL -> radio.positionBroadcastSecs
-        AdminSetting.CHANNEL_NAME -> radio.channelName
-        AdminSetting.MODEM_PRESET -> radio.channelPreset
-        AdminSetting.REGION -> radio.region
-        // Not on the Device settings screen: the app does not keep what the radio reports for them.
-        AdminSetting.REBROADCAST_MODE, AdminSetting.CHANNEL -> null
     }
 
     private fun show(setting: AdminSetting, value: Any): String = when {
