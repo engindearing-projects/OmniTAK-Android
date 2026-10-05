@@ -15,6 +15,7 @@ import soy.engindearing.omnitak.mobile.data.AdminWriteResult
 import soy.engindearing.omnitak.mobile.data.DeviceEdits
 import soy.engindearing.omnitak.mobile.data.MeshChannel
 import soy.engindearing.omnitak.mobile.data.MeshChannelPreset
+import soy.engindearing.omnitak.mobile.data.MeshConnectionType
 import soy.engindearing.omnitak.mobile.data.MeshRegion
 import soy.engindearing.omnitak.mobile.data.ProtoFields
 import soy.engindearing.omnitak.mobile.data.RadioSettingsCache
@@ -36,7 +37,8 @@ import soy.engindearing.omnitak.mobile.data.SentLedger
  * patches that. The request carries its own random packet id ([AdminReads]), and
  * only an answer that quotes it, from the radio itself, ends the wait: not
  * whatever else arrives for the same entry. If no answer comes within
- * [readTimeoutMs] nothing is changed and the result says so.
+ * [readTimeoutMs] nothing is changed and the result says that the radio did
+ * not answer, which is all that is known.
  *
  * A sequence runs inside `begin_edit_settings` / `commit_edit_settings`, a
  * single write included, so a transaction left open by a dropped link is
@@ -77,7 +79,8 @@ class MeshSettingsWriter(
     private val send: suspend (ByteArray) -> Boolean,
     private val ledger: SentLedger = SentLedger(),
     private val frameSpacingMs: Long = ADMIN_FRAME_SPACING_MS,
-    private val readTimeoutMs: Long = READ_TIMEOUT_MS,
+    /** How long a read waits for its answer, asked at each read: it depends on the link ([readTimeoutFor]). */
+    private val readTimeoutMs: () -> Long = { READ_TIMEOUT_MS },
     private val reads: AdminReads = AdminReads(),
 ) {
     private val turn = Mutex()
@@ -193,7 +196,7 @@ class MeshSettingsWriter(
         for (key in keys) {
             if (sent > 0 && frameSpacingMs > 0) delay(frameSpacingMs)
             // Each request is recorded, so the radio's answer to it is recognised when it comes.
-            val request = reads.open(key, readTimeoutMs)
+            val request = reads.open(key, readTimeoutMs())
             if (!send(readRequest(dest, key, request.id))) {
                 reads.cancel(request.id)
                 break
@@ -315,13 +318,14 @@ class MeshSettingsWriter(
          */
         private suspend fun read(key: Key): ByteArray? {
             pace()
-            val request = reads.open(key, readTimeoutMs, awaited = true)
+            val timeout = readTimeoutMs()
+            val request = reads.open(key, timeout, awaited = true)
             if (!send(readRequest(dest, key, request.id))) {
                 reads.cancel(request.id)
                 stop = Stop.LINK
                 return null
             }
-            val answer = withTimeoutOrNull(readTimeoutMs) { request.answer?.await() }
+            val answer = withTimeoutOrNull(timeout) { request.answer?.await() }
             reads.cancel(request.id)
             if (answer == null) {
                 stop = Stop.NO_ANSWER
@@ -398,8 +402,22 @@ class MeshSettingsWriter(
          */
         const val ADMIN_FRAME_SPACING_MS = 100L
 
-        /** How long a read waits for the radio's answer before the write is refused. */
+        /**
+         * How long a read waits for the radio's answer before the write is refused, over TCP. Measured on a
+         * simulated radio: answers come in well under a second.
+         */
         const val READ_TIMEOUT_MS = 3_000L
+
+        /**
+         * The same over Bluetooth. An answer waits there for the notification-driven drain or the one second poll
+         * of the BLE client, behind whatever else the radio has queued for the phone, and the client itself only
+         * calls a link dead after 10 to 15 seconds. Not measured on a real link.
+         */
+        const val READ_TIMEOUT_BLE_MS = 8_000L
+
+        /** The read timeout for the link in use: [transport] null (no transport yet) or TCP get [READ_TIMEOUT_MS]. */
+        fun readTimeoutFor(transport: MeshConnectionType?): Long =
+            if (transport == MeshConnectionType.BLUETOOTH) READ_TIMEOUT_BLE_MS else READ_TIMEOUT_MS
 
         private const val MAX_INTERVAL_SECS = 24 * 60 * 60
 

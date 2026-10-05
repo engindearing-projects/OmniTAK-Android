@@ -14,12 +14,11 @@ enum class RefusalReason(val message: String) {
      * The radio did not answer the read that comes before a write. A write
      * starts from what the radio holds right now (it replaces a whole config
      * with what it receives), so without that answer there is nothing safe to
-     * send. A managed radio ignores every local admin message, reads included.
+     * send. A managed radio ignores every local admin message, reads included,
+     * and looks the same from here as a slow link, so the text says only what is
+     * known: the radio did not answer.
      */
-    NO_ANSWER(
-        "The radio did not answer, so nothing was changed. " +
-            "It may be managed, or the link may be poor. Reconnect and try again.",
-    ),
+    NO_ANSWER("The radio did not answer, so nothing was changed. Check the connection and try again."),
 
     /** What the radio sent could not be read, or the edited result would not fit in one admin message. */
     UNREADABLE("The radio's settings could not be read, so nothing was changed. Reconnect and try again."),

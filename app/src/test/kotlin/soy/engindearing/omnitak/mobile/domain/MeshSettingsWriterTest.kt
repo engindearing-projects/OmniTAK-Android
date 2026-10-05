@@ -29,6 +29,7 @@ import soy.engindearing.omnitak.mobile.data.DeviceSettingsState
 import soy.engindearing.omnitak.mobile.data.FakeRadio
 import soy.engindearing.omnitak.mobile.data.MeshChannel
 import soy.engindearing.omnitak.mobile.data.MeshChannelPreset
+import soy.engindearing.omnitak.mobile.data.MeshConnectionType
 import soy.engindearing.omnitak.mobile.data.MeshPacketDecoded
 import soy.engindearing.omnitak.mobile.data.MeshRegion
 import soy.engindearing.omnitak.mobile.data.MeshRole
@@ -62,7 +63,7 @@ class MeshSettingsWriterTest {
         val radio: FakeRadio = FakeRadio.factory(),
         destination: UInt? = 0x0A0B0C0Du,
         frameSpacingMs: Long = 0,
-        readTimeoutMs: Long = 3_000,
+        var readTimeoutMs: Long = 3_000,
         var latencyMs: Long = 0,
         val ledger: SentLedger = SentLedger(),
         /** 1-based numbers of the frames the link refuses. */
@@ -80,7 +81,7 @@ class MeshSettingsWriterTest {
 
         val writer = MeshSettingsWriter(
             cache, { destination }, { frame -> send(frame) },
-            ledger = ledger, frameSpacingMs = frameSpacingMs, readTimeoutMs = readTimeoutMs, reads = reads,
+            ledger = ledger, frameSpacingMs = frameSpacingMs, readTimeoutMs = { readTimeoutMs }, reads = reads,
         )
 
         private suspend fun send(frame: ByteArray): Boolean {
@@ -285,8 +286,33 @@ class MeshSettingsWriterTest {
         assertEquals(AdminWriteResult.Refused(RefusalReason.NO_ANSWER), result)
         assertEquals("only the read went out: no begin, no write, no commit", listOf("ignored get_config:1"), rig.radio.log)
         assertTrue("it waited a few seconds, not forever", currentTime in 3_000..4_000)
-        assertTrue(result.describe().contains("managed"))
+        // All that is known is that the radio did not answer. A managed radio looks the same as a slow link.
+        assertTrue(result.describe().contains("did not answer"))
+        assertFalse("not a guess about why: ${result.describe()}", result.describe().contains("managed"))
         assertEquals("a refusal is not a write", false, result.reachedRadio)
+    }
+
+    @Test fun `a slower link gets a longer wait before a write is refused`() = runTest {
+        // An answer at five seconds: late over TCP, in time over Bluetooth.
+        val tcp = Rig(this, latencyMs = 5_000, readTimeoutMs = MeshSettingsWriter.readTimeoutFor(MeshConnectionType.TCP))
+        assertEquals(AdminWriteResult.Refused(RefusalReason.NO_ANSWER), tcp.writer.pushDeviceConfig(DeviceEdits(positionBroadcastSecs = 300)))
+
+        val ble = Rig(this, latencyMs = 5_000, readTimeoutMs = MeshSettingsWriter.readTimeoutFor(MeshConnectionType.BLUETOOTH))
+        assertEquals(AdminWriteResult.Sent(listOf(AdminSetting.POSITION_INTERVAL)), ble.writer.pushDeviceConfig(DeviceEdits(positionBroadcastSecs = 300)))
+    }
+
+    @Test fun `the read timeout follows the link in use`() {
+        assertEquals(3_000L, MeshSettingsWriter.readTimeoutFor(MeshConnectionType.TCP))
+        assertEquals("before any transport is chosen", 3_000L, MeshSettingsWriter.readTimeoutFor(null))
+        assertEquals(8_000L, MeshSettingsWriter.readTimeoutFor(MeshConnectionType.BLUETOOTH))
+    }
+
+    @Test fun `a timeout in the middle of a push says the radio stopped answering, not why`() = runTest {
+        val rig = Rig(this)
+        rig.radio.onSetConfig = { _, radio -> radio.answers = false }
+        val result = rig.writer.pushDeviceConfig(DeviceEdits(role = MeshRole.ROUTER, positionBroadcastSecs = 300))
+        assertFalse("not a guess about why: ${result.describe()}", result.describe().contains("managed"))
+        assertTrue(result.describe().contains("stopped answering"))
     }
 
     @Test fun `an answer that comes too late is a refusal`() = runTest {

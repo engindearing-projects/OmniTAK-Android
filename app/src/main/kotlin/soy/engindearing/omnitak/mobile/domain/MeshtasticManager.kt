@@ -276,6 +276,8 @@ class MeshtasticManager(
         destination = { if (adminLinkUp()) adminDestination() else null },
         send = { bytes -> sendAdminFrame(bytes) },
         ledger = sentLedger,
+        // Longer over Bluetooth: an answer waits there for the drain or the poll of the BLE client.
+        readTimeoutMs = { MeshSettingsWriter.readTimeoutFor(_activeTransport.value) },
         reads = adminReads,
     )
 
