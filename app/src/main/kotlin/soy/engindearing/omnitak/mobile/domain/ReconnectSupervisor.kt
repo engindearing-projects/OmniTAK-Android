@@ -3,12 +3,17 @@ package soy.engindearing.omnitak.mobile.domain
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
+
+/** A connection that has held this long counts as up: the next drop is retried at once again. */
+internal const val STABLE_AFTER_MS = 10_000L
 
 /**
  * Keeps one wanted connection dialed (#102, #233). Runs until cancelled.
  *
  * Each pass waits for the connection to settle, then either sleeps until it is
- * no longer up, or waits out the backoff and dials again.
+ * no longer up, or waits out the backoff and dials again. The backoff starts
+ * over only after a connection has held for [stableAfterMs].
  *
  * Why a loop and not `state.collect { ... }`: a StateFlow collector is only
  * handed a value that differs from the last one it was handed. A dial that
@@ -31,13 +36,22 @@ internal suspend fun superviseReconnect(
     stillWanted: () -> Boolean,
     dial: () -> Unit,
     unwantedPollMs: Long = ReconnectPolicy.DEFAULT_MAX_DELAY_MS,
+    stableAfterMs: Long = STABLE_AFTER_MS,
 ) {
     while (true) {
         // A dial in flight decides nothing: wait for it to come up or fail.
         when (state.first { it !is ConnectionState.Connecting }) {
             is ConnectionState.Connected -> {
-                policy.reset()
-                state.first { it !is ConnectionState.Connected }
+                // The backoff starts over once the connection has held for a while.
+                // A server that accepts and drops at once (a full server, a proxy with
+                // nothing behind it) must not be re-dialed in a tight loop.
+                val droppedEarly = withTimeoutOrNull(stableAfterMs) {
+                    state.first { it !is ConnectionState.Connected }
+                } != null
+                if (!droppedEarly) {
+                    policy.reset()
+                    state.first { it !is ConnectionState.Connected }
+                }
             }
             else -> { // Disconnected or Failed
                 if (!stillWanted()) {

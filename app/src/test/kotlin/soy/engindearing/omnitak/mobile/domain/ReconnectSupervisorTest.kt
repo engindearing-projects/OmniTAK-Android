@@ -1,12 +1,14 @@
 package soy.engindearing.omnitak.mobile.domain
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -72,18 +74,42 @@ class ReconnectSupervisorTest {
         runCurrent()
         assertEquals("the first retry after a drop is immediate", 1, conn.dials)
 
-        // The next attempt, after the first backoff step, succeeds.
+        // The next attempt, after the first backoff step, succeeds and holds.
         conn.outcome = up
         advanceTimeBy(2_001)
         runCurrent()
         assertEquals(2, conn.dials)
         assertEquals(up, conn.state.value)
+        advanceTimeBy(STABLE_AFTER_MS + 1)
+        runCurrent()
 
-        // It drops again: being up reset the backoff, so this retry is immediate too.
+        // It drops again: having held, it reset the backoff, so this retry is immediate too.
         conn.outcome = unreachable
         conn.state.value = ConnectionState.Failed("No response from server")
         runCurrent()
         assertEquals(3, conn.dials)
+    }
+
+    @Test
+    fun aServerThatDropsEveryConnectionAtOnceIsNotDialedInATightLoop() = runTest {
+        // Every dial comes up, and the server closes it a second later.
+        val conn = InstantConn(initial = ConnectionState.Disconnected, outcome = up)
+        backgroundScope.launch {
+            conn.state.collect {
+                if (it is ConnectionState.Connected) {
+                    delay(1_000)
+                    conn.state.value = ConnectionState.Disconnected
+                }
+            }
+        }
+        backgroundScope.launch {
+            superviseReconnect(conn.state, ReconnectPolicy(), stillWanted = { true }, dial = conn::dial)
+        }
+        advanceTimeBy(5 * 60_000L)
+        runCurrent()
+        // 0, 2, 4, 8, 16 s, then every 30 s, each plus the second the connection lasted:
+        // about fourteen in five minutes. Re-dialing at once every time would be about 300.
+        assertTrue("dials in five minutes: ${conn.dials}", conn.dials in 10..16)
     }
 
     @Test
