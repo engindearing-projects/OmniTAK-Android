@@ -6,6 +6,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import soy.engindearing.omnitak.mobile.data.AdminSetting
@@ -107,6 +108,7 @@ class MeshtasticManagerOpenTransactionTest {
 
         assertEquals("nothing is sent to it", before, radio.log.size)
         assertEquals(InterruptedWrite.NOT_SAVED, app.mgr.lastPushResult.value)
+        assertNull("the writes were lost with the restart: the radio is not blamed for ignoring them", app.mgr.settingsNotice.value)
         assertEquals(original, ownerName(radio))
         assertFalse(radio.restartPending)
     }
@@ -226,6 +228,7 @@ class MeshtasticManagerOpenTransactionTest {
 
         assertEquals("a commit to a radio that restarted would restart it a second time for nothing", before, radio.log.size)
         assertEquals(InterruptedWrite.NOT_SAVED, app.mgr.lastPushResult.value)
+        assertNull("and it is not blamed for ignoring the writes either", app.mgr.settingsNotice.value)
         assertFalse(radio.restartPending)
     }
 
@@ -453,10 +456,26 @@ class MeshtasticManagerOpenTransactionTest {
         assertTrue(waitUntil { radio.restartPending })
         app.restart().connect() // the radio restarted because of the commit: the count is 6
         settle()
+        assertEquals("the result line still says what happened, not that it was lost", InterruptedWrite.SAVED, app.mgr.lastPushResult.value)
         app.drop().connect()
         settle()
 
         assertEquals("one commit, not one for each link-up", 1, radio.log.count { it == "commit" })
+    }
+
+    @Test fun `the sequence of a radio that does not count is judged once too`() {
+        val radio = plain()
+        val app = RadioApp(radio).connect()
+        interruptedRename(app)
+        app.drop().connect()
+        assertTrue(waitUntil { radio.restartPending })
+        app.restart().connect() // restarted by the commit; the name was saved, so a second look would find it "still held"
+        settle()
+        app.drop().connect()
+        settle()
+
+        assertEquals("one commit, not one for each link-up", 1, radio.log.count { it == "commit" })
+        assertEquals(InterruptedWrite.SAVED, app.mgr.lastPushResult.value)
     }
 
     @Test fun `the wording the operator reads`() {

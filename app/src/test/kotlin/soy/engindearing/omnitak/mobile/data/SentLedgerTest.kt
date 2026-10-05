@@ -98,4 +98,19 @@ class SentLedgerTest {
         ledger.clear()
         assertTrue(ledger.check(node, roleReport(MeshRole.CLIENT)).isEmpty())
     }
+
+    @Test fun `forget drops what was sent to one radio and leaves the others alone`() {
+        val ledger = SentLedger()
+        val a = 0x0A0B0C0Du
+        val b = 0x01020304u
+        ledger.expect(a, AdminSetting.ROLE, MeshRole.TAK)
+        ledger.expect(a, AdminSetting.POSITION_INTERVAL, 120)
+        ledger.expect(b, AdminSetting.ROLE, MeshRole.TAK)
+
+        ledger.forget(a)
+
+        assertEquals("only the other radio's entry is left", 1, ledger.size)
+        assertEquals("the forgotten write is not judged", emptyList<AdminSetting>(), ledger.check(a, AdminResponse.DeviceConfig(MeshRole.CLIENT, RebroadcastMode.ALL)))
+        assertEquals("the other radio's still is", listOf(AdminSetting.ROLE), ledger.check(b, AdminResponse.DeviceConfig(MeshRole.CLIENT, RebroadcastMode.ALL)))
+    }
 }

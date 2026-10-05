@@ -415,6 +415,9 @@ class MeshtasticManager(
      */
     private fun settleInterrupted(node: UInt, count: UInt) {
         val rec = synchronized(transactionLock) { interrupted } ?: return
+        // What the sequence wrote is judged here from now on. The ledger would blame a radio that restarted since for
+        // ignoring it ("It may be managed"), when the writes were simply lost with the restart.
+        if (rec.node == node) sentLedger.forget(node)
         when {
             rec.node != node -> forgetInterrupted(rec)
             rec.rebootCount != 0u || count != 0u ->

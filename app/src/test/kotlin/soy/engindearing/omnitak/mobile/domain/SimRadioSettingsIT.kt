@@ -1033,6 +1033,7 @@ class SimRadioSettingsIT {
             assertEquals("the unsaved name is gone with the restart", "Txn App One", afterTwo["owner.long_name"])
             assertTrue("the manager says what it found", waitUntil(20_000) { s.mgr.lastPushResult.value == InterruptedWrite.NOT_SAVED })
             log("2. the app says: ${s.mgr.lastPushResult.value}")
+            assertNull("the writes were lost with the restart: the radio is not blamed for ignoring them", s.mgr.settingsNotice.value)
             // A commit sent to this radio would save its config and restart it again about seven seconds later.
             Thread.sleep(15_000)
             assertTrue("nothing was sent: the radio was not restarted a second time", s.mgr.activeConnectionState.value is ConnectionState.Connected)

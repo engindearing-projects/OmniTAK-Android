@@ -67,6 +67,16 @@ class SentLedger(
         return kept.sortedBy { it.ordinal }
     }
 
+    /**
+     * Forget what was sent to [node] and not judged yet. For a sequence that was cut off by a lost link: its writes
+     * are judged by what the next link-up finds ([InterruptedWrite]), and a radio that restarted since would
+     * otherwise be blamed here for ignoring them ("It may be managed").
+     */
+    @Synchronized
+    fun forget(node: UInt) {
+        pending.keys.removeAll { it.node == node }
+    }
+
     @Synchronized
     fun clear() = pending.clear()
 
