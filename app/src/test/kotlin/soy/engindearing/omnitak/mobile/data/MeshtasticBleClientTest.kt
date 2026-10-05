@@ -225,6 +225,17 @@ class MeshtasticBleClientTest {
         assertTrue(d.expired(20_000 + MeshtasticBleClient.CONNECT_TIMEOUT_MS, pairing = false))
     }
 
+    @Test fun a_step_forward_starts_the_idle_limit_again() {
+        // Seen on the bench: the radio was rebooting, the link came up 14.4 s
+        // into the attempt, and the attempt was given up 0.7 s later with the
+        // link in hand. Setup after a late connect gets its own 15 s.
+        val d = deadline()
+        assertFalse(d.expired(14_000, pairing = false))
+        assertFalse(d.expired(15_000, pairing = false, progressed = true))
+        assertFalse(d.expired(15_000 + MeshtasticBleClient.CONNECT_TIMEOUT_MS - 1, pairing = false))
+        assertTrue(d.expired(15_000 + MeshtasticBleClient.CONNECT_TIMEOUT_MS, pairing = false))
+    }
+
     @Test fun one_pairing_cannot_run_forever() {
         val d = deadline()
         assertFalse(d.expired(2_000, pairing = true))

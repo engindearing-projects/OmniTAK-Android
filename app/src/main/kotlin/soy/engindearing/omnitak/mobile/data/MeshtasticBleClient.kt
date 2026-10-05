@@ -368,14 +368,18 @@ class MeshtasticBleClient(context: Context) {
         // wake up to a wait that looks a minute overdue, before the answer
         // that woke it has been handled.
         val deadline = ProgressDeadline(SystemClock.uptimeMillis(), idleLimitMs, PAIRING_TIMEOUT_MS)
+        var steps = l.steps
         var end: T? = null
         var expired = false
         while (end == null && !expired) {
             end = withTimeoutOrNull(WATCHDOG_TICK_MS) { result.await() }
-            if (end == null && deadline.expired(SystemClock.uptimeMillis(), l.isBonding())) {
+            if (end != null) break
+            val stepsNow = l.steps
+            if (deadline.expired(SystemClock.uptimeMillis(), l.isBonding(), progressed = stepsNow != steps)) {
                 result.cancel()
                 expired = true
             }
+            steps = stepsNow
         }
         end
     }
@@ -779,6 +783,14 @@ class MeshtasticBleClient(context: Context) {
         /** The GATT link came up at least once. */
         @Volatile var cameUp = false
 
+        /**
+         * Counts the steps a connect has got through (link up, each service
+         * discovery, the cache refresh). A wait that sees it move starts its
+         * idle limit again: a radio that answers 14 s into a 15 s window is
+         * making progress, not hanging.
+         */
+        @Volatile var steps = 0
+
         /** Android was pairing with the radio at some point on this link. */
         @Volatile var pairingSeen = false
 
@@ -823,6 +835,7 @@ class MeshtasticBleClient(context: Context) {
                 override fun onDeviceConnected(device: BluetoothDevice) {
                     // Wait for service discovery before flipping to Connected.
                     cameUp = true
+                    steps++
                 }
                 override fun onDeviceFailedToConnect(device: BluetoothDevice, reason: Int) {
                     observerReason = reason
@@ -971,6 +984,7 @@ class MeshtasticBleClient(context: Context) {
         }
 
         override fun isRequiredServiceSupported(gatt: BluetoothGatt): Boolean {
+            steps++
             val service = gatt.getService(SERVICE_UUID)
             toRadio = service?.getCharacteristic(TO_RADIO_UUID)
             fromRadio = service?.getCharacteristic(FROM_RADIO_UUID)
@@ -1014,7 +1028,10 @@ class MeshtasticBleClient(context: Context) {
                 // cache, and Nordic discovers again and re-runs
                 // isRequiredServiceSupported() and initialize().
                 refreshDeviceCache()
-                    .done { cacheRefreshed = true }
+                    .done {
+                        cacheRefreshed = true
+                        steps++
+                    }
                     .fail { _, status ->
                         log(Log.WARN, "service cache refresh did not run (status=$status); keeping the first service list")
                     }
@@ -1256,10 +1273,11 @@ class MeshtasticBleClient(context: Context) {
      * When to give up on something that should finish within [idleLimitMs]
      * unless Android is pairing with the radio (#175, #203).
      *
-     * The limit runs from the start, or from the last moment a pairing was
-     * seen: entering a PIN takes longer than the limit, and what follows a
-     * pairing (service discovery, setup, the request being sent again) needs
-     * the whole limit once more. A single pairing may take [pairingLimitMs].
+     * The limit runs from the start, from the last step forward, or from the
+     * last moment a pairing was seen: entering a PIN takes longer than the
+     * limit, and what follows a pairing (service discovery, setup, the request
+     * being sent again) needs the whole limit once more. A single pairing may
+     * take [pairingLimitMs].
      */
     internal class ProgressDeadline(
         startedAtMs: Long,
@@ -1269,8 +1287,13 @@ class MeshtasticBleClient(context: Context) {
         private var idleSinceMs = startedAtMs
         private var pairingSinceMs: Long? = null
 
-        /** Feed one observation; true when it is time to give up. */
-        fun expired(nowMs: Long, pairing: Boolean): Boolean {
+        /**
+         * Feed one observation; true when it is time to give up.
+         * [progressed] says the thing being waited on got a step further since
+         * the last observation, which starts the idle limit again.
+         */
+        fun expired(nowMs: Long, pairing: Boolean, progressed: Boolean = false): Boolean {
+            if (progressed) idleSinceMs = nowMs
             if (!pairing) {
                 pairingSinceMs = null
                 return nowMs - idleSinceMs >= idleLimitMs
