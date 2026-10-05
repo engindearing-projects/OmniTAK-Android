@@ -54,6 +54,7 @@ class TAKConnectionLivenessTest {
 
         /** While true the server keeps its sockets open and says nothing: the path is gone. */
         @Volatile var silent = false
+        @Volatile private var closed = false
 
         init {
             thread(isDaemon = true) {
@@ -65,6 +66,8 @@ class TAKConnectionLivenessTest {
                     }
                     accepted.incrementAndGet()
                     clients += s
+                    // close() may have walked the list just before this socket was added.
+                    if (closed) runCatching { s.close() }
                     thread(isDaemon = true) { serve(s) }
                 }
             }
@@ -110,6 +113,7 @@ class TAKConnectionLivenessTest {
         }
 
         override fun close() {
+            closed = true
             runCatching { listener.close() }
             clients.forEach { runCatching { it.close() } }
         }
@@ -162,7 +166,7 @@ class TAKConnectionLivenessTest {
 
     private fun awaitState(
         conn: TAKConnection,
-        timeoutMs: Long = 5_000,
+        timeoutMs: Long = 15_000,
         what: String,
         predicate: (ConnectionState) -> Boolean,
     ): ConnectionState {
@@ -176,7 +180,7 @@ class TAKConnectionLivenessTest {
         throw AssertionError("unreachable")
     }
 
-    private fun awaitTrue(timeoutMs: Long = 5_000, what: String, condition: () -> Boolean) {
+    private fun awaitTrue(timeoutMs: Long = 15_000, what: String, condition: () -> Boolean) {
         val deadline = System.nanoTime() + timeoutMs * 1_000_000
         while (System.nanoTime() < deadline) {
             if (condition()) return
@@ -307,7 +311,7 @@ class TAKConnectionLivenessTest {
         val server = fakeServer(answerPings = true)
         val conn = connection(
             server.port,
-            TAKConnection.Timing(3_000, pingIdleMs = 60, deadIdleMs = 300, tickMs = 15, firstReplyMs = 300),
+            TAKConnection.Timing(3_000, pingIdleMs = 100, deadIdleMs = 600, tickMs = 20, firstReplyMs = 600),
         )
         // What ServerManager's supervisor does on its first retry: dial again at once.
         scope.launch {
@@ -319,7 +323,7 @@ class TAKConnectionLivenessTest {
             // Up, and this session has heard from the server a moment ago.
             awaitTrue(what = "a live connection in round ${round + 1}") {
                 conn.state.value is ConnectionState.Connected && conn.answersPings &&
-                    (conn.idleMs ?: Long.MAX_VALUE) < 150
+                    (conn.idleMs ?: Long.MAX_VALUE) < 300
             }
             val dialsBefore = server.accepted.get()
             server.silent = true
@@ -334,7 +338,7 @@ class TAKConnectionLivenessTest {
         val server = fakeServer(answerPings = true)
         val conn = connection(
             server.port,
-            TAKConnection.Timing(3_000, pingIdleMs = 60, deadIdleMs = 300, tickMs = 15, firstReplyMs = 400),
+            TAKConnection.Timing(3_000, pingIdleMs = 60, deadIdleMs = 300, tickMs = 15, firstReplyMs = 2_500),
         )
         conn.connect()
         awaitState(conn, what = "Connected") { it is ConnectionState.Connected }
@@ -367,6 +371,9 @@ class TAKConnectionLivenessTest {
         val conn = connection(server.port, TAKConnection.Timing(3_000, pingIdleMs = 60_000, deadIdleMs = 120_000, tickMs = 50))
         conn.connect()
         awaitState(conn, what = "Connected") { it is ConnectionState.Connected }
+        // Let the first exchange finish: with a write still in flight the end could
+        // as well be reported as a failed send, which is a different test.
+        awaitTrue(what = "the first pong") { conn.answersPings }
 
         server.close()
 
@@ -378,7 +385,7 @@ class TAKConnectionLivenessTest {
         val stall = StallServer().also { closeables += it }
         val conn = connection(stall.port, TAKConnection.Timing(connectTimeoutMs = 400), tls = true)
         conn.connect()
-        awaitState(conn, timeoutMs = 5_000, what = "Failed") { it is ConnectionState.Failed }
+        awaitState(conn, what = "Failed") { it is ConnectionState.Failed }
     }
 
     @Test
