@@ -69,7 +69,9 @@ class ChannelApplyEncoderTest {
 
     @Test
     fun `Meshtastic set_config rebroadcast KNOWN_ONLY encodes enum 3`() {
-        val frame = AdminMessageSerializer.buildSetRebroadcastMode(myNodeNum, RebroadcastMode.KNOWN_ONLY)
+        // The radio reported an empty DeviceConfig, so the edited field is all there is. (With a populated
+        // config the other fields ride along: see AdminReadModifyWriteTest.)
+        val frame = AdminMessageSerializer.buildSetRebroadcastMode(myNodeNum, RebroadcastMode.KNOWN_ONLY, ByteArray(0))!!.frame
 
         // set_config=34 (tag 92 02), Config.device=1{ rebroadcast_mode=6 = 3 }.
         val expected = "9202040a023003".chunked(2).map { it.toInt(16).toByte() }.toByteArray()
@@ -88,10 +90,12 @@ class ChannelApplyEncoderTest {
 
     @Test
     fun `set_config LoRa US LONG_FAST encodes use_preset and region with default preset omitted`() {
-        val frame = AdminMessageSerializer.buildSetLoRaConfig(myNodeNum, 
+        // The radio reported an empty LoRaConfig, so the edited fields are all there is.
+        val frame = AdminMessageSerializer.buildSetLoRaConfig(myNodeNum,
             region = MeshRegion.US,
             modemPreset = MeshChannelPreset.LONG_FAST,
-        )
+            currentLora = ByteArray(0),
+        )!!.frame
 
         // set_config=34 (tag 92 02), Config.lora=6 (tag 32){ use_preset=1 = true
         // (08 01), region=7 = US(1) (38 01) }. modem_preset LONG_FAST=0 omitted
@@ -102,10 +106,11 @@ class ChannelApplyEncoderTest {
 
     @Test
     fun `set_config LoRa EU868 MEDIUM_FAST encodes preset 4 and region 3`() {
-        val frame = AdminMessageSerializer.buildSetLoRaConfig(myNodeNum, 
+        val frame = AdminMessageSerializer.buildSetLoRaConfig(myNodeNum,
             region = MeshRegion.EU_868,
             modemPreset = MeshChannelPreset.MEDIUM_FAST,
-        )
+            currentLora = ByteArray(0),
+        )!!.frame
 
         // Config.lora{ use_preset=1 (08 01), modem_preset=2 = MEDIUM_FAST(4)
         // (10 04), region=7 = EU_868(3) (38 03) }.
@@ -115,10 +120,11 @@ class ChannelApplyEncoderTest {
 
     @Test
     fun `set_config LoRa with UNSET region omits the region field`() {
-        val frame = AdminMessageSerializer.buildSetLoRaConfig(myNodeNum, 
+        val frame = AdminMessageSerializer.buildSetLoRaConfig(myNodeNum,
             region = MeshRegion.UNSET,
             modemPreset = MeshChannelPreset.SHORT_FAST,
-        )
+            currentLora = ByteArray(0),
+        )!!.frame
 
         // region UNSET(0) omitted; LoRaConfig = use_preset(08 01) +
         // modem_preset SHORT_FAST(6) (10 06). No 38 (region) tag present.
@@ -145,7 +151,8 @@ class ChannelApplyEncoderTest {
 
     @Test
     fun `set_owner encodes long and short name with correct tags`() {
-        val frame = AdminMessageSerializer.buildSetOwner(myNodeNum, longName = "OmniTAK", shortName = "OTK")
+        // The radio reported an empty User, so the names are all there is.
+        val frame = AdminMessageSerializer.buildSetOwner(myNodeNum, longName = "OmniTAK", shortName = "OTK", currentOwner = ByteArray(0))!!.frame
 
         // set_owner=32 (tag 82 02), User{ long_name=2 (12 07 "OmniTAK"),
         // short_name=3 (1a 03 "OTK") }. id blank + is_licensed false omitted.
@@ -156,11 +163,12 @@ class ChannelApplyEncoderTest {
 
     @Test
     fun `set_owner with is_licensed sets bool field 6`() {
-        val frame = AdminMessageSerializer.buildSetOwner(myNodeNum, 
+        val frame = AdminMessageSerializer.buildSetOwner(myNodeNum,
             longName = "W1AW",
             shortName = "W1AW",
+            currentOwner = ByteArray(0),
             isLicensed = true,
-        )
+        )!!.frame
 
         // User{ long_name=2 (12 04 "W1AW"), short_name=3 (1a 04 "W1AW"),
         // is_licensed=6 = true (30 01) }.
@@ -171,7 +179,7 @@ class ChannelApplyEncoderTest {
 
     @Test
     fun `set_owner truncates short name to 4 chars`() {
-        val frame = AdminMessageSerializer.buildSetOwner(myNodeNum, longName = "Node", shortName = "TOOLONG")
+        val frame = AdminMessageSerializer.buildSetOwner(myNodeNum, longName = "Node", shortName = "TOOLONG", currentOwner = ByteArray(0))!!.frame
 
         // short_name field 3 must carry exactly 4 bytes: tag 1a, len 04, "TOOL".
         val shortField = ("1a04" + "TOOL".toByteArray().joinToString("") { "%02x".format(it) })

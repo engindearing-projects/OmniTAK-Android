@@ -251,8 +251,8 @@ object AdminMessageParser {
         return shortName to longName
     }
 
-    /** Inverse of [AdminMessageSerializer.roleProtoOrdinal]. */
-    private fun roleFromOrdinal(ordinal: Int): MeshRole? = when (ordinal) {
+    /** Inverse of [AdminMessageSerializer.roleProtoOrdinal]. Null for a role this app has no entry for. */
+    internal fun roleFromOrdinal(ordinal: Int): MeshRole? = when (ordinal) {
         0 -> MeshRole.CLIENT
         1 -> MeshRole.CLIENT_MUTE
         2 -> MeshRole.ROUTER
@@ -267,8 +267,8 @@ object AdminMessageParser {
         else -> null
     }
 
-    /** Inverse of [AdminMessageSerializer.presetProtoOrdinal]. */
-    private fun presetFromOrdinal(ordinal: Int): MeshChannelPreset? = when (ordinal) {
+    /** Inverse of [AdminMessageSerializer.presetProtoOrdinal]. Null for a preset this app has no entry for. */
+    internal fun presetFromOrdinal(ordinal: Int): MeshChannelPreset? = when (ordinal) {
         0 -> MeshChannelPreset.LONG_FAST
         1 -> MeshChannelPreset.LONG_SLOW
         2 -> MeshChannelPreset.VERY_LONG_SLOW

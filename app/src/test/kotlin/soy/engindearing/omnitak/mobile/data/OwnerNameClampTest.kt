@@ -63,7 +63,7 @@ class OwnerNameClampTest {
     @Test
     fun `a long CJK name is clamped to 39 bytes, not 39 characters`() {
         val cjk = "台".repeat(39) // 39 chars, 117 UTF-8 bytes
-        val frame = AdminMessageSerializer.buildSetOwner(myNodeNum, cjk, "TW")
+        val frame = AdminMessageSerializer.buildSetOwner(myNodeNum, cjk, "TW", ByteArray(0))!!.frame
 
         val encoded = ownerFieldBytes(frame, field = 2)
         requireNotNull(encoded) { "long_name not found in frame" }
@@ -77,7 +77,7 @@ class OwnerNameClampTest {
     @Test
     fun `clamping lands on a character boundary`() {
         val cjk = "台".repeat(39)
-        val frame = AdminMessageSerializer.buildSetOwner(myNodeNum, cjk, "TW")
+        val frame = AdminMessageSerializer.buildSetOwner(myNodeNum, cjk, "TW", ByteArray(0))!!.frame
         val encoded = ownerFieldBytes(frame, field = 2)!!
 
         // 3 bytes each — 13 whole characters is exactly 39 bytes.
@@ -91,7 +91,7 @@ class OwnerNameClampTest {
 
     @Test
     fun `an emoji short name is not split across its surrogate pair`() {
-        val frame = AdminMessageSerializer.buildSetOwner(myNodeNum, "Drone Team", "🛩️X")
+        val frame = AdminMessageSerializer.buildSetOwner(myNodeNum, "Drone Team", "🛩️X", ByteArray(0))!!.frame
         val encoded = ownerFieldBytes(frame, field = 3)!!
 
         assertTrue("short_name must fit 4 bytes; got ${encoded.size}", encoded.size <= 4)
@@ -103,7 +103,7 @@ class OwnerNameClampTest {
 
     @Test
     fun `ascii names are unchanged`() {
-        val frame = AdminMessageSerializer.buildSetOwner(myNodeNum, "Pato Golf", "PATO")
+        val frame = AdminMessageSerializer.buildSetOwner(myNodeNum, "Pato Golf", "PATO", ByteArray(0))!!.frame
         assertEquals("Pato Golf", String(ownerFieldBytes(frame, 2)!!, Charsets.UTF_8))
         assertEquals("PATO", String(ownerFieldBytes(frame, 3)!!, Charsets.UTF_8))
     }

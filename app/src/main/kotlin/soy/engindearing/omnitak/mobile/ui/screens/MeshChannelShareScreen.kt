@@ -123,8 +123,8 @@ fun MeshChannelShareScreen(onBack: () -> Unit = {}) {
 
     fun applyMeshtastic(ch: MeshChannel, index: Int) {
         scope.launch {
-            val ok = app.meshtastic.applyChannel(ch, index)
-            status = if (ok) "Applied \"${ch.name}\" to radio" else "Apply failed — no radio connected"
+            val result = app.meshtastic.applyChannel(ch, index)
+            status = result.describe(success = "Applied \"${ch.name}\" to radio")
         }
     }
 
@@ -137,30 +137,22 @@ fun MeshChannelShareScreen(onBack: () -> Unit = {}) {
 
     fun applyRebroadcast(mode: RebroadcastMode) {
         scope.launch {
-            val ok = app.meshtastic.applyRebroadcastMode(mode)
-            status = if (ok) "Rebroadcast set to ${mode.label}" else "Set rebroadcast failed — no radio"
+            val result = app.meshtastic.applyRebroadcastMode(mode)
+            status = result.describe(success = "Rebroadcast set to ${mode.label}")
         }
     }
 
     fun applyLoRa() {
         scope.launch {
-            val ok = app.meshtastic.applyLoRaConfig(region, preset)
-            status = if (ok) {
-                "Set ${region.label} / ${preset.label} on radio"
-            } else {
-                "Set LoRa config failed — no radio connected"
-            }
+            val result = app.meshtastic.applyLoRaConfig(region, preset)
+            status = result.describe(success = "Set ${region.label} / ${preset.label} on radio")
         }
     }
 
     fun applyOwner() {
         scope.launch {
-            val ok = app.meshtastic.applyOwner(longName.trim(), shortName.trim())
-            status = if (ok) {
-                "Set device name to \"${longName.trim()}\" (${shortName.trim()})"
-            } else {
-                "Set device name failed — no radio connected"
-            }
+            val result = app.meshtastic.applyOwner(longName.trim(), shortName.trim())
+            status = result.describe(success = "Set device name to \"${longName.trim()}\" (${shortName.trim()})")
         }
     }
 

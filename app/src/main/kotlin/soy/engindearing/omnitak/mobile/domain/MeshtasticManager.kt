@@ -24,6 +24,7 @@ import java.io.ByteArrayOutputStream
 import soy.engindearing.omnitak.mobile.data.AdminMessageParser
 import soy.engindearing.omnitak.mobile.data.AdminMessageSerializer
 import soy.engindearing.omnitak.mobile.data.AdminResponse
+import soy.engindearing.omnitak.mobile.data.AdminWriteResult
 import soy.engindearing.omnitak.mobile.data.AtakPluginParser
 import soy.engindearing.omnitak.mobile.data.ChatMessage
 import soy.engindearing.omnitak.mobile.data.ChatStatus
@@ -44,6 +45,7 @@ import soy.engindearing.omnitak.mobile.data.MeshNode
 import soy.engindearing.omnitak.mobile.data.MeshtasticBleClient
 import soy.engindearing.omnitak.mobile.data.MeshtasticProtoParser
 import soy.engindearing.omnitak.mobile.data.MeshtasticTcpClient
+import soy.engindearing.omnitak.mobile.data.RadioSettingsCache
 
 /**
  * Application-scoped Meshtastic state holder. Owns the TCP and BLE
@@ -212,6 +214,51 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
                 null -> flowOf(ConnectionState.Disconnected)
             }
         }.stateIn(scope, SharingStarted.Eagerly, ConnectionState.Disconnected)
+
+    /**
+     * What the radio last told us about its own settings, as raw bytes: every
+     * Config variant, every channel, and its owner record. A settings write
+     * starts from these (the firmware replaces a whole config with what it
+     * receives), so the cache is fed by every frame in [dispatchFrame] and
+     * emptied when the link drops or a new config download begins.
+     */
+    internal val radioSettings = RadioSettingsCache()
+
+    /** Test seam: when set, settings writes go here instead of the BLE/TCP transport. Null in the app. */
+    @Volatile internal var adminSendOverride: (suspend (ByteArray) -> Boolean)? = null
+
+    private val settingsWriter = MeshSettingsWriter(
+        cache = radioSettings,
+        destination = { if (adminLinkUp()) adminDestination() else null },
+        send = { bytes -> sendAdminFrame(bytes) },
+    )
+
+    init {
+        // The cache must not outlive the link it was read over: a write built
+        // from another session's settings (or another radio's) would put
+        // stale values back. Cleared here when the link drops, and by
+        // [RadioSettingsCache.onFromRadio] when the first frame of a new
+        // config download (my_info) arrives. A user disconnect and an
+        // involuntary drop both show up as the state leaving Connected, so
+        // this one watcher covers TCP and BLE without touching either
+        // transport's connect or reconnect code.
+        scope.launch {
+            var wasConnected = false
+            activeConnectionState.collect { state ->
+                wasConnected = onLinkState(state, wasConnected)
+            }
+        }
+    }
+
+    /** One step of the link-drop watcher. Returns whether the link is up now. */
+    internal fun onLinkState(state: ConnectionState, wasConnected: Boolean): Boolean {
+        val connected = state is ConnectionState.Connected
+        if (wasConnected && !connected) {
+            Log.i(TAG, "link dropped, forgetting the radio's settings")
+            radioSettings.clear()
+        }
+        return connected
+    }
 
     /** Eagerly construct the BLE client (if a Context is available) so
      *  the BLE tab can observe its state flows even before any
@@ -395,7 +442,8 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
 
     internal fun dispatchFrame(frame: ByteArray) {
         bytesRx += frame.size
-        when (val parsed = MeshtasticProtoParser.parseFromRadio(frame)) {
+        val parsed = MeshtasticProtoParser.parseFromRadio(frame)
+        when (parsed) {
             is FromRadioFrame.NodeInfoFrame -> upsertNode(parsed.node)
             is FromRadioFrame.Packet -> handlePacket(parsed.packet)
             is FromRadioFrame.MyInfo -> {
@@ -404,9 +452,13 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
             }
             is FromRadioFrame.ConfigComplete -> Log.i(TAG, "config complete id=${parsed.id}")
             is FromRadioFrame.ConfigFrame -> {
-                Log.i(TAG, "RX FromRadio.config (post-want_config_id dump): ${parsed.response}")
-                runCatching { adminResponseSink?.invoke(parsed.response) }
-                    .onFailure { Log.w(TAG, "adminResponseSink (config) failed: ${it.message}") }
+                Log.i(TAG, "RX FromRadio.config (post-want_config_id dump): ${parsed.response ?: "variant with no decoded value"}")
+                // The settings screen only decodes device, position and lora;
+                // the other variants still reach the settings cache below.
+                parsed.response?.let { response ->
+                    runCatching { adminResponseSink?.invoke(response) }
+                        .onFailure { Log.w(TAG, "adminResponseSink (config) failed: ${it.message}") }
+                }
             }
             is FromRadioFrame.ChannelFrame -> {
                 Log.i(TAG, "RX FromRadio.channel: ${parsed.response}")
@@ -415,6 +467,12 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
             }
             is FromRadioFrame.Unknown -> Log.v(TAG, "unrecognised FromRadio frame (${frame.size}B)")
             null -> Log.w(TAG, "frame parse returned null (${frame.size}B)")
+        }
+        // After the branch above, so my_info has already set our node number
+        // when the cache checks that a NodeInfo or admin response is ours.
+        if (parsed != null) {
+            runCatching { radioSettings.onFromRadio(parsed, _myNodeNum) }
+                .onFailure { Log.w(TAG, "settings cache could not take a frame: ${it.message}") }
         }
     }
 
@@ -742,78 +800,61 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
      * GAP-109a — push the operator's draft device config to the connected
      * radio via portnum-6 (ADMIN_APP) AdminMessage payloads.
      *
-     * Splits the config across four admin messages because the firmware
-     * groups settings into separate protobuf submessages. Sends them
-     * sequentially over the active transport; each one is a fully-framed
-     * `ToRadio`, so a single missed write doesn't corrupt the others.
+     * Only what differs from the radio's own settings is written (judged
+     * against what it last reported, see [radioSettings]), and each write is
+     * the radio's own message with that one field changed, because the firmware
+     * replaces a whole config with what it receives. The writes ride one
+     * `begin_edit_settings` / `commit_edit_settings` pair, so the radio saves
+     * and reboots once. If nothing differs, nothing is sent; if the radio's
+     * settings have not arrived, nothing is sent and the result says so.
      *
-     * Returns the count of messages successfully dispatched (0..4). The
-     * caller can surface this to the operator — e.g. "3 of 4 settings
-     * pushed; retry?". Doesn't wait for AdminMessage acks: those come
-     * back as `FromRadio.routing` frames and would need protobuf decode
-     * we haven't built yet (filed under GAP-109b).
+     * Doesn't wait for AdminMessage acks: those come back as
+     * `FromRadio.routing` frames and would need protobuf decode we haven't
+     * built yet (filed under GAP-109b).
      */
-    suspend fun pushDeviceConfig(config: MeshDeviceConfig): Int {
-        val transport = _activeTransport.value ?: return 0
-        val dest = adminDestination() ?: return 0
-
-        val messages = listOf(
-            AdminMessageSerializer.buildSetOwner(dest, config.longName, config.shortName),
-            AdminMessageSerializer.buildSetDeviceRole(dest, config.role),
-            AdminMessageSerializer.buildSetPositionBroadcastSecs(dest, config.positionBroadcastSecs),
-            AdminMessageSerializer.buildSetChannel0Name(dest, config.channelName),
-            AdminMessageSerializer.buildSetLoraPreset(dest, config.channelPreset),
-        )
-        var sent = 0
-        for (bytes in messages) {
-            val ok = when (transport) {
-                MeshConnectionType.TCP -> tcpClient.sendBytes(bytes)
-                MeshConnectionType.BLUETOOTH -> bleClient?.sendToRadio(bytes) ?: false
-            }
-            if (ok) sent += 1 else break // bail on first failure so we don't wedge mid-write
-        }
-        return sent
-    }
+    suspend fun pushDeviceConfig(config: MeshDeviceConfig): AdminWriteResult =
+        settingsWriter.pushDeviceConfig(config)
 
     /**
      * #172 — push an imported [MeshChannel] (from a scanned/pasted
      * `meshtastic.org/e/#…` share) onto the connected radio at [index] via a
-     * `set_channel` AdminMessage. Returns true on wire-layer dispatch.
+     * `set_channel` AdminMessage. A full replacement by design: the shared name
+     * and key become the channel.
      */
-    suspend fun applyChannel(channel: MeshChannel, index: Int = 0): Boolean =
-        dispatchAdmin { dest -> AdminMessageSerializer.buildSetChannel(dest, channel, index) }
+    suspend fun applyChannel(channel: MeshChannel, index: Int = 0): AdminWriteResult =
+        settingsWriter.applyChannel(channel, index)
 
     /**
      * #172 — set the radio's rebroadcast scope (PatoG1899's "known channels
-     * only"). Returns true on wire-layer dispatch.
+     * only"). The radio's other device settings are carried over.
      */
-    suspend fun applyRebroadcastMode(mode: RebroadcastMode): Boolean =
-        dispatchAdmin { dest -> AdminMessageSerializer.buildSetRebroadcastMode(dest, mode) }
+    suspend fun applyRebroadcastMode(mode: RebroadcastMode): AdminWriteResult =
+        settingsWriter.applyRebroadcastMode(mode)
 
     /**
      * #181 — set the radio's LoRa region + modem preset in one admin write
      * (`set_config { lora { use_preset, modem_preset, region } }`). Region is
      * the band a fresh radio needs before it will transmit; preset is the
-     * range/throughput profile. Returns true on wire-layer dispatch.
+     * range/throughput profile. Every other LoRa setting (hop limit, transmit
+     * switch, ...) is carried over from what the radio reported.
      */
     suspend fun applyLoRaConfig(
         region: MeshRegion,
         preset: MeshChannelPreset,
         usePreset: Boolean = true,
-    ): Boolean =
-        dispatchAdmin { dest -> AdminMessageSerializer.buildSetLoRaConfig(dest, region, preset, usePreset) }
+    ): AdminWriteResult = settingsWriter.applyLoRaConfig(region, preset, usePreset)
 
     /**
      * #181 — set the radio's owner (display name) via `set_owner { User }`.
-     * Long name shows in the node list; short name is the 4-char tag. Returns
-     * true on wire-layer dispatch.
+     * Long name shows in the node list; short name is the 4-char tag. The rest
+     * of the owner record, including the licensed flag, stays as the radio has
+     * it unless [isLicensed] says otherwise.
      */
     suspend fun applyOwner(
         longName: String,
         shortName: String,
-        isLicensed: Boolean = false,
-    ): Boolean =
-        dispatchAdmin { dest -> AdminMessageSerializer.buildSetOwner(dest, longName, shortName, isLicensed = isLicensed) }
+        isLicensed: Boolean? = null,
+    ): AdminWriteResult = settingsWriter.applyOwner(longName, shortName, isLicensed)
 
     /**
      * #185 — the destination for an admin write: the node number of the radio
@@ -824,19 +865,16 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
      */
     private fun adminDestination(): UInt? = _myNodeNum?.takeIf { it != 0u && it != BROADCAST_ADDR }
 
-    /**
-     * Frame one admin message for the attached radio and dispatch it over the
-     * active transport. [build] runs only once a destination is known.
-     */
-    private suspend fun dispatchAdmin(build: (UInt) -> ByteArray): Boolean {
-        val dest = adminDestination() ?: run {
-            Log.w(TAG, "admin write skipped — radio has not reported my_node_num yet")
-            return false
-        }
-        val toRadio = build(dest)
+    /** True when an admin write has somewhere to go: a live link (or the test seam). */
+    private fun adminLinkUp(): Boolean =
+        adminSendOverride != null || activeConnectionState.value is ConnectionState.Connected
+
+    /** Hand one framed admin ToRadio to the active transport. False when there is none or the write failed. */
+    private suspend fun sendAdminFrame(bytes: ByteArray): Boolean {
+        adminSendOverride?.let { return it(bytes) }
         return when (_activeTransport.value) {
-            MeshConnectionType.TCP -> tcpClient.sendBytes(toRadio)
-            MeshConnectionType.BLUETOOTH -> bleClient?.sendToRadio(toRadio) ?: false
+            MeshConnectionType.TCP -> tcpClient.sendBytes(bytes)
+            MeshConnectionType.BLUETOOTH -> bleClient?.sendToRadio(bytes) ?: false
             null -> false
         }
     }

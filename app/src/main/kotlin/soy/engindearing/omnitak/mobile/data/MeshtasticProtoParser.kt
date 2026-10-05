@@ -59,21 +59,25 @@ object MeshtasticProtoParser {
                 4 -> { // NodeInfo (canonical field 4)
                     if (wire != 2) { idx = skipField(bytes, idx, wire); continue }
                     val sub = readLengthDelimited(bytes, idx) ?: return null
-                    val node = parseNodeInfo(sub.first) ?: return FromRadioFrame.Unknown
-                    return FromRadioFrame.NodeInfoFrame(node)
+                    val parsed = parseNodeInfo(sub.first) ?: return FromRadioFrame.Unknown
+                    return FromRadioFrame.NodeInfoFrame(parsed.node, userRaw = parsed.userRaw)
                 }
-                5 -> { // Config (canonical field 5) — DeviceConfig / PositionConfig / LoRaConfig
+                5 -> { // Config (canonical field 5): every Config variant the radio dumps
                     if (wire != 2) { idx = skipField(bytes, idx, wire); continue }
                     val sub = readLengthDelimited(bytes, idx) ?: return null
+                    // The decoded value covers the variants the settings screen shows
+                    // (device, position, lora); every other variant (power, network,
+                    // display, bluetooth, security, ...) has none. The raw bytes are
+                    // handed on for all of them: a settings write starts from what the
+                    // radio reported, so it needs the whole message, not a summary.
                     val response = AdminMessageParser.parseConfigPublic(sub.first)
-                        ?: return FromRadioFrame.Unknown
-                    return FromRadioFrame.ConfigFrame(response)
+                    return FromRadioFrame.ConfigFrame(response, raw = sub.first)
                 }
                 10 -> { // Channel (canonical field 10) — primary + secondary channels
                     if (wire != 2) { idx = skipField(bytes, idx, wire); continue }
                     val sub = readLengthDelimited(bytes, idx) ?: return null
                     val ch = AdminMessageParser.parseChannelPublic(sub.first)
-                    return FromRadioFrame.ChannelFrame(ch)
+                    return FromRadioFrame.ChannelFrame(ch, raw = sub.first)
                 }
                 7 -> { // config_complete_id
                     if (wire != 0) { idx = skipField(bytes, idx, wire); continue }
@@ -170,12 +174,13 @@ object MeshtasticProtoParser {
      * `last_heard` is left null when the field is missing or 0 (the firmware
      * sends 0 for a node it has never heard). It is never defaulted to "now".
      */
-    private fun parseNodeInfo(bytes: ByteArray): MeshNode? {
+    private fun parseNodeInfo(bytes: ByteArray): ParsedNodeInfo? {
         var idx = 0
         var nodeNum: UInt = 0u
         var nodeNumSeen = false
         var shortName = ""
         var longName = ""
+        var userRaw: ByteArray? = null
         var role: Int? = null
         var position: MeshPosition? = null
         var snr: Double? = null
@@ -201,6 +206,7 @@ object MeshtasticProtoParser {
                     if (user.shortName.isNotEmpty()) shortName = user.shortName
                     if (user.longName.isNotEmpty()) longName = user.longName
                     if (user.role != null) role = user.role
+                    userRaw = sub.first
                     idx = sub.second
                 }
                 3 -> { // position (Position)
@@ -243,7 +249,7 @@ object MeshtasticProtoParser {
             else "%04X".format((id and 0xFFFFL).toInt())
         val resolvedLong = if (longName.isNotEmpty()) longName
             else "Node %08X".format(id.toInt())
-        return MeshNode(
+        val node = MeshNode(
             id = id,
             shortName = resolvedShort,
             longName = resolvedLong,
@@ -254,7 +260,12 @@ object MeshtasticProtoParser {
             batteryLevel = battery,
             role = role,
         )
+        return ParsedNodeInfo(node, userRaw)
     }
+
+    /** A decoded NodeInfo plus the exact bytes of its `user` field (null when it had none). The radio's own
+     *  entry is how the app learns what its owner record holds, see [RadioSettingsCache]. */
+    private class ParsedNodeInfo(val node: MeshNode, val userRaw: ByteArray?)
 
     /** Decoded `User` submessage fields we surface off a NodeInfo. */
     data class ParsedUser(val shortName: String, val longName: String, val role: Int?)
@@ -511,13 +522,41 @@ object MeshtasticProtoParser {
 sealed interface FromRadioFrame {
     data class Packet(val packet: MeshPacketDecoded) : FromRadioFrame
     data class MyInfo(val nodeNum: UInt) : FromRadioFrame
-    data class NodeInfoFrame(val node: MeshNode) : FromRadioFrame
-    /** GAP-109 — Config submessage at FromRadio.field=5. Wraps the same
-     *  AdminResponse types so the downstream sink can treat radio-pushed
-     *  config and admin-response config identically. */
-    data class ConfigFrame(val response: AdminResponse) : FromRadioFrame
-    /** GAP-109 — Channel submessage at FromRadio.field=10. */
-    data class ChannelFrame(val response: AdminResponse.Channel) : FromRadioFrame
+
+    /** [userRaw] is the exact bytes of the NodeInfo's `user` field, null when it had none. */
+    class NodeInfoFrame(val node: MeshNode, val userRaw: ByteArray? = null) : FromRadioFrame {
+        override fun equals(other: Any?): Boolean =
+            other is NodeInfoFrame && node == other.node &&
+                (userRaw?.contentEquals(other.userRaw) ?: (other.userRaw == null))
+
+        override fun hashCode(): Int = 31 * node.hashCode() + (userRaw?.contentHashCode() ?: 0)
+        override fun toString(): String = "NodeInfoFrame(node=$node, userRaw=${userRaw?.size ?: 0}B)"
+    }
+
+    /** GAP-109: Config submessage at FromRadio.field=5.
+     *
+     *  [response] is the decoded value (the same AdminResponse types an admin
+     *  response produces, so the downstream sink treats radio-pushed and
+     *  requested config alike). It is null for a variant the settings screen
+     *  does not show. [raw] is the Config message as the radio sent it, for
+     *  every variant, and is what [RadioSettingsCache] keeps. */
+    class ConfigFrame(val response: AdminResponse?, val raw: ByteArray) : FromRadioFrame {
+        override fun equals(other: Any?): Boolean =
+            other is ConfigFrame && response == other.response && raw.contentEquals(other.raw)
+
+        override fun hashCode(): Int = 31 * (response?.hashCode() ?: 0) + raw.contentHashCode()
+        override fun toString(): String = "ConfigFrame(response=$response, raw=${raw.size}B)"
+    }
+
+    /** GAP-109: Channel submessage at FromRadio.field=10. [raw] is the Channel as the radio sent it. */
+    class ChannelFrame(val response: AdminResponse.Channel, val raw: ByteArray) : FromRadioFrame {
+        override fun equals(other: Any?): Boolean =
+            other is ChannelFrame && response == other.response && raw.contentEquals(other.raw)
+
+        override fun hashCode(): Int = 31 * response.hashCode() + raw.contentHashCode()
+        override fun toString(): String = "ChannelFrame(response=$response, raw=${raw.size}B)"
+    }
+
     data class ConfigComplete(val id: UInt) : FromRadioFrame
     data object Unknown : FromRadioFrame
 }

@@ -117,14 +117,16 @@ class MeshWireToRadioFieldsTest {
     @Test fun every_admin_frame_asks_for_a_response_on_field_3_and_writes_nothing_to_field_5() {
         val channel = MeshChannel(name = "Test Chan", psk = ByteArray(16) { it.toByte() })
         val frames = mapOf(
-            "set_owner" to AdminMessageSerializer.buildSetOwner(NODE, "Test Node Alpha", "TNA"),
+            "set_owner" to AdminMessageSerializer.buildSetOwner(NODE, "Test Node Alpha", "TNA", ByteArray(0))!!.frame,
             "set_channel" to AdminMessageSerializer.buildSetChannel(NODE, channel, index = 1),
-            "set_channel0_name" to AdminMessageSerializer.buildSetChannel0Name(NODE, "Test Chan"),
-            "set_device_role" to AdminMessageSerializer.buildSetDeviceRole(NODE, MeshRole.TAK),
-            "set_rebroadcast_mode" to AdminMessageSerializer.buildSetRebroadcastMode(NODE, RebroadcastMode.KNOWN_ONLY),
-            "set_position_secs" to AdminMessageSerializer.buildSetPositionBroadcastSecs(NODE, 900),
-            "set_lora_preset" to AdminMessageSerializer.buildSetLoraPreset(NODE, MeshChannelPreset.LONG_FAST),
-            "set_lora_config" to AdminMessageSerializer.buildSetLoRaConfig(NODE, MeshRegion.US, MeshChannelPreset.LONG_FAST),
+            "set_channel0_name" to AdminMessageSerializer.buildSetChannel0Name(NODE, "Test Chan", ByteArray(0))!!.frame,
+            "set_device_role" to AdminMessageSerializer.buildSetDeviceRole(NODE, MeshRole.TAK, ByteArray(0))!!.frame,
+            "set_rebroadcast_mode" to AdminMessageSerializer.buildSetRebroadcastMode(NODE, RebroadcastMode.KNOWN_ONLY, ByteArray(0))!!.frame,
+            "set_position_secs" to AdminMessageSerializer.buildSetPositionBroadcastSecs(NODE, 900, ByteArray(0))!!.frame,
+            "set_lora_preset" to AdminMessageSerializer.buildSetLoraPreset(NODE, MeshChannelPreset.LONG_FAST, ByteArray(0))!!.frame,
+            "set_lora_config" to AdminMessageSerializer.buildSetLoRaConfig(NODE, MeshRegion.US, MeshChannelPreset.LONG_FAST, ByteArray(0))!!.frame,
+            "begin_edit_settings" to AdminMessageSerializer.buildBeginEditSettings(NODE),
+            "commit_edit_settings" to AdminMessageSerializer.buildCommitEditSettings(NODE),
             "get_owner" to AdminMessageSerializer.buildGetOwnerRequest(NODE),
             "get_config" to AdminMessageSerializer.buildGetConfigRequest(NODE, 0),
             "get_channel" to AdminMessageSerializer.buildGetChannelRequest(NODE, 0),
@@ -187,7 +189,7 @@ class MeshWireToRadioFieldsTest {
     }
 
     @Test fun set_owner_is_field_32_with_the_user_names_on_2_and_3() {
-        val admin = adminPayload(AdminMessageSerializer.buildSetOwner(NODE, "Test Node Alpha", "TNA"))
+        val admin = adminPayload(AdminMessageSerializer.buildSetOwner(NODE, "Test Node Alpha", "TNA", ByteArray(0))!!.frame)
         val user = fields(admin.single(32).bytes)
         assertEquals("Test Node Alpha", user.single(2).bytes.toString(Charsets.UTF_8))
         assertEquals("TNA", user.single(3).bytes.toString(Charsets.UTF_8))
@@ -195,12 +197,12 @@ class MeshWireToRadioFieldsTest {
 
     @Test fun set_config_is_field_34_and_picks_the_sub_config_by_number() {
         // device = 1, role = 1 (TAK = 7)
-        val role = fields(fields(adminPayload(AdminMessageSerializer.buildSetDeviceRole(NODE, MeshRole.TAK)).single(34).bytes).single(1).bytes)
+        val role = fields(fields(adminPayload(AdminMessageSerializer.buildSetDeviceRole(NODE, MeshRole.TAK, ByteArray(0))!!.frame).single(34).bytes).single(1).bytes)
         assertEquals(7uL, role.single(1).varint)
 
         // device = 1, rebroadcast_mode = 6 (KNOWN_ONLY = 3)
         val rebroadcast = fields(
-            fields(adminPayload(AdminMessageSerializer.buildSetRebroadcastMode(NODE, RebroadcastMode.KNOWN_ONLY)).single(34).bytes)
+            fields(adminPayload(AdminMessageSerializer.buildSetRebroadcastMode(NODE, RebroadcastMode.KNOWN_ONLY, ByteArray(0))!!.frame).single(34).bytes)
                 .single(1).bytes,
         )
         assertEquals(3uL, rebroadcast.single(6).varint)
@@ -209,7 +211,7 @@ class MeshWireToRadioFieldsTest {
         val lora = fields(
             fields(
                 adminPayload(
-                    AdminMessageSerializer.buildSetLoRaConfig(NODE, MeshRegion.TW, MeshChannelPreset.MEDIUM_FAST),
+                    AdminMessageSerializer.buildSetLoRaConfig(NODE, MeshRegion.TW, MeshChannelPreset.MEDIUM_FAST, ByteArray(0))!!.frame,
                 ).single(34).bytes,
             ).single(6).bytes,
         )
@@ -219,7 +221,7 @@ class MeshWireToRadioFieldsTest {
 
         val preset = fields(
             fields(
-                adminPayload(AdminMessageSerializer.buildSetLoraPreset(NODE, MeshChannelPreset.SHORT_FAST)).single(34).bytes,
+                adminPayload(AdminMessageSerializer.buildSetLoraPreset(NODE, MeshChannelPreset.SHORT_FAST, ByteArray(0))!!.frame).single(34).bytes,
             ).single(6).bytes,
         )
         assertEquals(1uL, preset.single(1).varint)

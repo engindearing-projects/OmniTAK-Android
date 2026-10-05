@@ -52,6 +52,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.OmniTAKApp
+import soy.engindearing.omnitak.mobile.data.AdminWriteResult
 import soy.engindearing.omnitak.mobile.data.MeshChannelPreset
 import soy.engindearing.omnitak.mobile.data.MeshConnectionType
 import soy.engindearing.omnitak.mobile.data.MeshDeviceConfig
@@ -104,8 +105,10 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
     var savedToast by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(savedToast) {
-        if (savedToast != null) {
-            kotlinx.coroutines.delay(1800)
+        val toast = savedToast
+        if (toast != null) {
+            // A refusal ("Radio settings are not loaded yet...") needs longer to read than "Saved".
+            kotlinx.coroutines.delay(if (toast.length > 40) 5000 else 1800)
             savedToast = null
         }
     }
@@ -276,9 +279,10 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
                 },
             )
 
-            // GAP-109a — push-to-device. Calls MeshtasticManager.pushDeviceConfig
-            // which serialises 5 AdminMessages (set_owner, set_role, PLI, channel
-            // name, LoRa preset) and dispatches them over the active transport.
+            // GAP-109a: push-to-device. Calls MeshtasticManager.pushDeviceConfig,
+            // which writes only the settings that differ from the radio's own
+            // (owner, role, PLI, channel name, LoRa preset) in one edit
+            // transaction, or refuses and says why (e.g. settings not loaded yet).
             PushToDeviceRow(
                 connected = deviceConnected,
                 onPush = {
@@ -288,15 +292,14 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
                         // the radio drops mid-write.
                         store.update { toPush }
                         dirty = false
-                        val sent = mesh.pushDeviceConfig(toPush)
-                        savedToast = when (sent) {
-                            5 -> "Pushed all 5 settings to radio"
-                            0 -> "Push failed — check radio connection"
-                            else -> "Pushed $sent of 5 — radio dropped mid-write"
-                        }
+                        val result = mesh.pushDeviceConfig(toPush)
+                        val count = (result as? AdminWriteResult.Sent)?.count ?: 0
+                        savedToast = result.describe(
+                            success = "Pushed $count setting${if (count == 1) "" else "s"} to the radio. It restarts to apply them.",
+                        )
                         // After push, refetch so the screen reflects what the
                         // radio actually accepted (some fields may be rejected).
-                        if (sent > 0) {
+                        if (result.reachedRadio) {
                             kotlinx.coroutines.delay(800)
                             mesh.requestDeviceConfig()
                         }
@@ -447,7 +450,7 @@ private fun ComingSoonNote() {
                 style = MaterialTheme.typography.bodyMedium,
             )
             Text(
-                "Edits live as a local draft until you connect a Meshtastic node. Once you do, this turns into a 'Push to device' button that writes the draft via the admin port (5 messages: owner, role, PLI cadence, channel name, modem preset). " +
+                "Edits live as a local draft until you connect a Meshtastic node. Once you do, this turns into a 'Push to device' button that writes whatever differs from the radio via the admin port (owner, role, PLI cadence, channel name, modem preset). " +
                     "Acks come back as routing frames — surfacing them in the UI is filed as GAP-109b.",
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                 style = MaterialTheme.typography.bodySmall,
