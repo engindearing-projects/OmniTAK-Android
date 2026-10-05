@@ -569,20 +569,44 @@ fun TacticalMap(
     // TRACKING to pan to the user, then restore NONE so the user can
     // still pan freely.
     //
-    // The value the map is composed with is a request only for the composition
-    // that builds the view: a cold start opens on the operator's position, as
-    // it always has. Composing the map onto the view that already exists never
-    // moves the camera (#7). The marker branch used to act on the composed
-    // value there too, so every return to the map tab threw the operator's
-    // view away for their own position at zoom 15.
+    // Two things send the map to the operator's position: a press on "Center
+    // on me", and the composition that builds the view opening the map (with
+    // location on and a fix known, the first map of a process has always
+    // opened there, marker shown or hidden). Composing the map onto the view
+    // that already exists is not one of them (#7). The marker branch used to
+    // act on the value it was composed with there too, so every return to the
+    // map tab threw the operator's view away for their own position at zoom 15.
+    val currentCameraFollowsFix by rememberUpdatedState(cameraFollowsFix)
     DisposableEffect(mapView, recenterTrigger) {
-        val requested = RetainedMapRules.recenterRequested(recenterTrigger, initialRecenterTrigger, builtHere[0])
-        // With the marker hidden only a press counts, cold start included (#210).
-        val pressed = RetainedMapRules.recenterRequested(recenterTrigger, initialRecenterTrigger, builtViewHere = false)
-        // False once this press has been superseded or the map has left the
-        // screen: a wait for the style must not act after that.
+        val reason = RetainedMapRules.recenterReason(recenterTrigger, initialRecenterTrigger, builtHere[0])
+        val pressed = reason == RetainedMapRules.Recenter.PRESSED
+        // False once this request has been superseded or the map has left the
+        // screen: a wait for the map or the style must not act after that.
         var wanted = true
-        if (requested && puckActive) {
+        if (reason == RetainedMapRules.Recenter.OPENING) {
+            // Decided when the map is ready, from the state at that moment and
+            // not from this pass: the first pass of a cold start can still hold
+            // the default preferences (marker shown), and the fix kept from the
+            // last session arrives after it.
+            mapView.getMapAsync { map ->
+                map.getStyle {
+                    if (wanted) {
+                        val tracking = currentPuckActive && map.withReadyLocationComponent("open on own position") { component ->
+                            component.cameraMode = CameraMode.TRACKING
+                            component.zoomWhileTracking(15.0)
+                        }
+                        // Marker hidden: no location component to track with.
+                        // Go to the fix at the zoom the map already has, which
+                        // is what the tracking transition does.
+                        if (!tracking && currentCameraFollowsFix) {
+                            bindings.selfFix?.let { fix ->
+                                map.animateCamera(CameraUpdateFactory.newLatLng(LatLng(fix.lat, fix.lon)), 750)
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (pressed && puckActive) {
             mapView.getMapAsync { map ->
                 // getStyle runs this now when a style is loaded, which is the
                 // normal case. With no style (none set yet, or the last one
@@ -862,16 +886,17 @@ fun TacticalMap(
     //      style — the original reason for the teardown), and
     //   2. detach the view from its Compose parent so the next AndroidView can
     //      attach it (a View may have only one parent).
-    // The map itself, its style, camera and tile cache stay; detaching ends
-    // the render thread, which starts again on the next attach.
+    // The map object with its style and camera stays; detaching ends the
+    // render thread and resets the renderer, and both start again on the next
+    // attach.
     //
     // This is its own effect, keyed on the view alone, so it runs when the map
     // really leaves the composition and at no other time. It used to sit in the
-    // lifecycle effect below, which also restarts when the lifecycle owner is
-    // replaced under a composition that stays (navigation hands a destination
-    // a new back stack entry): that took the view out of a screen still showing
-    // it. It is declared before that effect so that, on the way out, the
-    // observer is removed first.
+    // lifecycle effect below, which restarts whenever its lifecycle owner
+    // changes: were that ever to happen under a composition that stays, the
+    // view would be taken out of a screen still showing it. It is declared
+    // before that effect so that, on the way out, the observer is removed
+    // first.
     //
     // All of it only while this composition still has the view. If a newer one
     // took it, it is attached and running there: silencing the location layer

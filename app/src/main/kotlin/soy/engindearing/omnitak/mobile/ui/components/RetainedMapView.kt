@@ -57,8 +57,8 @@ import soy.engindearing.omnitak.mobile.data.SelfFix
  * those listeners must NOT capture composition-scoped `rememberUpdatedState`
  * holders — those stop updating once their composition is disposed, which would
  * leave map taps wired to a dead composition. Instead the listeners read live
- * callbacks/state from [bindings], a stable holder the composable refreshes on
- * every recomposition.
+ * callbacks/state from [bindings], a stable holder that the composable showing
+ * the view keeps current.
  *
  * IMPORTANT: a single Android View can have at most one parent. The map
  * composable must [detach] the view from its old parent before the `AndroidView`
@@ -71,10 +71,11 @@ internal object RetainedMapView {
 
     /**
      * Live wiring the retained MapView's one-time listeners read through. The
-     * composable overwrites these fields every recomposition so a retained
-     * MapView always invokes the current composition's callbacks with the
-     * current state, never a stale snapshot from the composition that first
-     * created the view.
+     * composable that shows the view keeps these fields current (the callbacks
+     * after every recomposition, the state before the other effects of a pass)
+     * so a retained MapView always invokes the current composition's callbacks
+     * with the current state, never a stale snapshot from the composition that
+     * first created the view.
      */
     class Bindings {
         var onMapReady: ((MapLibreMap) -> Unit)? = null
@@ -211,18 +212,33 @@ internal object RetainedMapRules {
         else -> ViewCall.NOTHING
     }
 
+    /** Why the map should go to the operator's position now, if it should. */
+    enum class Recenter {
+        /** It should not. */
+        NO,
+
+        /** "Center on me" was pressed. */
+        PRESSED,
+
+        /** The map is being opened by the composition that builds the view. */
+        OPENING,
+    }
+
     /**
-     * Whether the map should go to the operator's position now.
-     *
      * [trigger] changes on every press of "Center on me". [triggerAtComposition]
      * is its value when the map was composed, and that value is not a press.
+     *
      * It still counts once, for the composition that builds the view
-     * ([builtViewHere]): a cold start has always opened on the operator's
-     * position, and still does. On a view that already exists it does not
-     * count. Acting on it there moved the camera back to the operator every
-     * time the map tab was opened, because the retained view is already
-     * running when it is composed.
+     * ([builtViewHere]): with location on and a fix known, the first map of a
+     * process has always opened on the operator's position, and still does.
+     * On a view that already exists it does not count. Acting on it there
+     * moved the camera back to the operator every time the map tab was opened,
+     * because the retained view is already running when it is composed.
      */
-    fun recenterRequested(trigger: Any?, triggerAtComposition: Any?, builtViewHere: Boolean): Boolean =
-        trigger != null && (trigger != triggerAtComposition || builtViewHere)
+    fun recenterReason(trigger: Any?, triggerAtComposition: Any?, builtViewHere: Boolean): Recenter = when {
+        trigger == null -> Recenter.NO
+        trigger != triggerAtComposition -> Recenter.PRESSED
+        builtViewHere -> Recenter.OPENING
+        else -> Recenter.NO
+    }
 }

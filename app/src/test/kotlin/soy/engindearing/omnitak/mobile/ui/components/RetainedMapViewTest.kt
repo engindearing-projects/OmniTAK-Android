@@ -9,6 +9,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.maplibre.android.geometry.LatLng
 import soy.engindearing.omnitak.mobile.data.SelfFix
+import soy.engindearing.omnitak.mobile.ui.components.RetainedMapRules.Recenter
 import soy.engindearing.omnitak.mobile.ui.components.RetainedMapRules.ViewCall
 
 /**
@@ -148,30 +149,36 @@ class RetainedMapViewTest {
         // MapScreen's counter starts at 0, and a new composition of the map
         // sees whatever it is at that moment. Every return to the map tab is
         // such a composition.
-        assertFalse(RetainedMapRules.recenterRequested(trigger = 0, triggerAtComposition = 0, builtViewHere = false))
-        assertFalse(RetainedMapRules.recenterRequested(trigger = 7, triggerAtComposition = 7, builtViewHere = false))
-        assertFalse(
+        assertEquals(Recenter.NO, RetainedMapRules.recenterReason(trigger = 0, triggerAtComposition = 0, builtViewHere = false))
+        assertEquals(Recenter.NO, RetainedMapRules.recenterReason(trigger = 7, triggerAtComposition = 7, builtViewHere = false))
+        assertEquals(
             "no trigger wired up",
-            RetainedMapRules.recenterRequested(trigger = null, triggerAtComposition = null, builtViewHere = false),
+            Recenter.NO,
+            RetainedMapRules.recenterReason(trigger = null, triggerAtComposition = null, builtViewHere = false),
         )
     }
 
     @Test fun the_composition_that_builds_the_view_opens_on_the_operator() {
-        // A cold start has always gone to the operator's position.
-        assertTrue(RetainedMapRules.recenterRequested(trigger = 0, triggerAtComposition = 0, builtViewHere = true))
-        assertFalse(
+        // With location on and a fix known, the first map of a process has
+        // always opened on the operator's position.
+        assertEquals(Recenter.OPENING, RetainedMapRules.recenterReason(trigger = 0, triggerAtComposition = 0, builtViewHere = true))
+        assertEquals(
             "but not when no trigger is wired up",
-            RetainedMapRules.recenterRequested(trigger = null, triggerAtComposition = null, builtViewHere = true),
+            Recenter.NO,
+            RetainedMapRules.recenterReason(trigger = null, triggerAtComposition = null, builtViewHere = true),
         )
     }
 
-    @Test fun a_press_after_the_map_was_composed_is_a_request() {
+    @Test fun a_press_after_the_map_was_composed_is_a_press_whoever_built_the_view() {
+        // A press zooms in as well, which opening the map does not: the two
+        // must not be mistaken for one another.
         for (built in listOf(true, false)) {
-            assertTrue(RetainedMapRules.recenterRequested(trigger = 1, triggerAtComposition = 0, builtViewHere = built))
-            assertTrue(RetainedMapRules.recenterRequested(trigger = 8, triggerAtComposition = 7, builtViewHere = built))
-            assertTrue(
+            assertEquals(Recenter.PRESSED, RetainedMapRules.recenterReason(trigger = 1, triggerAtComposition = 0, builtViewHere = built))
+            assertEquals(Recenter.PRESSED, RetainedMapRules.recenterReason(trigger = 8, triggerAtComposition = 7, builtViewHere = built))
+            assertEquals(
                 "a trigger that appears later",
-                RetainedMapRules.recenterRequested(trigger = 1, triggerAtComposition = null, builtViewHere = built),
+                Recenter.PRESSED,
+                RetainedMapRules.recenterReason(trigger = 1, triggerAtComposition = null, builtViewHere = built),
             )
         }
     }

@@ -46,39 +46,47 @@ object KmlShapeRenderer {
         clearAnnotations(map)
         val newLines = ArrayList<Polyline>()
         val newPolys = ArrayList<Polygon>()
+        // False as soon as a file could not be read or a shape could not be
+        // added: then nothing is remembered and the next call tries again.
+        var complete = true
         for (overlay in overlays) {
             if (!overlay.visible) continue
             val color = runCatching { Color.parseColor(overlay.colorHex) }.getOrDefault(Color.MAGENTA)
             val width = (overlay.lineWidth * 3f).coerceIn(2f, 14f)
-            val shapes = parseShapes(runCatching { store.fileFor(overlay).readText() }.getOrDefault(""))
+            val text = runCatching { store.fileFor(overlay).readText() }.getOrNull()
+            if (text == null) complete = false
+            val shapes = parseShapes(text ?: "")
             for (line in shapes.lines) {
                 if (line.size < 2) continue
-                runCatching {
+                val added = runCatching {
                     map.addPolyline(
                         PolylineOptions().addAll(line.map { LatLng(it.first, it.second) })
                             .color(color).width(width).alpha(overlay.opacity),
                     )
-                }.getOrNull()?.let { newLines.add(it) }
+                }.getOrNull()
+                if (added != null) newLines.add(added) else complete = false
             }
             for (ring in shapes.polygons) {
                 if (ring.size < 3) continue
                 val pts = ring.map { LatLng(it.first, it.second) }
-                runCatching {
+                val fill = runCatching {
                     map.addPolygon(
                         PolygonOptions().addAll(pts).fillColor(color).alpha(overlay.opacity * 0.3f),
                     )
-                }.getOrNull()?.let { newPolys.add(it) }
+                }.getOrNull()
+                if (fill != null) newPolys.add(fill) else complete = false
                 // Crisp outline ring — fill alone reads weakly at a distance.
-                runCatching {
+                val outline = runCatching {
                     map.addPolyline(
                         PolylineOptions().addAll(pts).color(color).width(width).alpha(overlay.opacity),
                     )
-                }.getOrNull()?.let { newLines.add(it) }
+                }.getOrNull()
+                if (outline != null) newLines.add(outline) else complete = false
             }
         }
         polylines = newLines
         polygons = newPolys
-        applied = overlays.toList()
+        applied = if (complete) overlays.toList() else null
     }
 
     /**
