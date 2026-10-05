@@ -738,7 +738,12 @@ class OmniTAKApp : Application() {
             meshConnected = {
                 activeMeshManager.activeConnectionState.value is ConnectionState.Connected
             },
-            relayEnabled = { cachedPrefs.value.relayGatewayEnabled },
+            // #212: one switch per direction; to-mesh is forced off while
+            // MeshCore is the active mesh (see RelayDirections.effective).
+            relayDirections = {
+                soy.engindearing.omnitak.mobile.domain.MeshServerRelay.RelayDirections
+                    .from(cachedPrefs.value)
+            },
         )
     }
 

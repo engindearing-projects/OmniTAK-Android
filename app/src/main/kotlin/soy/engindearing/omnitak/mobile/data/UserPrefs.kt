@@ -179,6 +179,22 @@ data class UserPrefs(
      *  the point goes stale (fresh <1m full opacity, aging 1–5m, stale >5m). Off
      *  by default — opt-in so the default map look is unchanged. */
     val stalenessOverlayEnabled: Boolean = false,
+    /** #212: relay mesh → server: what the mesh hears is also sent up to the TAK
+     *  server(s) while a server AND a mesh are both connected. Off by default.
+     *  Until the operator first changes a pref it takes the legacy
+     *  [relayGatewayEnabled] value (see [resolveRelayDirection]). */
+    val relayToServerEnabled: Boolean = false,
+    /** #212: relay server → mesh: server contacts are also sent down onto the
+     *  mesh radio. Spends LoRa airtime, so off by default and hard-throttled
+     *  (see [MeshServerRelay]). Takes the legacy [relayGatewayEnabled] value
+     *  until first written. Forced off in effect while MeshCore is the active
+     *  mesh ([MeshServerRelay.RelayDirections.effective]); the stored choice is
+     *  kept. */
+    val relayToMeshEnabled: Boolean = false,
+    // #212: [relayGatewayEnabled] below is superseded by the two direction
+    // switches above. It is kept for ONE release (read, and written back
+    // unchanged; nothing else reads it) as the migration fallback for their
+    // keys. Delete it, its key and the fallback in resolveRelayDirection after.
     /** #179 — relay/gateway mode. When on AND the device is connected to BOTH a
      *  TAK server and a mesh, CoT is bridged both ways: mesh-only nodes appear
      *  server-side and server contacts reach the mesh (ATAK Meshtastic-gateway
@@ -240,6 +256,10 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
     private val KEY_KEEP_SCREEN_ON  = booleanPreferencesKey("keep_screen_on")
     private val KEY_SELF_MARKER_TRIANGLE = booleanPreferencesKey("selfMarkerTriangle")
     private val KEY_STALENESS_OVERLAY = booleanPreferencesKey("staleness_overlay_enabled")
+    // #212: one switch per relay direction. KEY_RELAY_GATEWAY below is the
+    // pre-split single switch: the fallback for these two, kept for one release.
+    private val KEY_RELAY_TO_SERVER = booleanPreferencesKey("relay_to_server_enabled")
+    private val KEY_RELAY_TO_MESH = booleanPreferencesKey("relay_to_mesh_enabled")
     private val KEY_RELAY_GATEWAY = booleanPreferencesKey("relay_gateway_enabled")
 
     val prefs: Flow<UserPrefs> = dataStore.data.map { p -> readFrom(p) }
@@ -292,6 +312,8 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
             p[KEY_KEEP_SCREEN_ON]  = next.keepScreenOn
             p[KEY_SELF_MARKER_TRIANGLE] = next.selfMarkerTriangle
             p[KEY_STALENESS_OVERLAY] = next.stalenessOverlayEnabled
+            p[KEY_RELAY_TO_SERVER] = next.relayToServerEnabled
+            p[KEY_RELAY_TO_MESH] = next.relayToMeshEnabled
             p[KEY_RELAY_GATEWAY] = next.relayGatewayEnabled
         }
     }
@@ -363,9 +385,14 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
         update { it.copy(selectedMeshFramework = value) }
     }
 
-    /** #179 — persist the mesh↔server relay/gateway toggle (default off). */
-    suspend fun setRelayGatewayEnabled(value: Boolean) {
-        update { it.copy(relayGatewayEnabled = value) }
+    /** #212: persist the mesh → server relay switch (default off). */
+    suspend fun setRelayToServerEnabled(value: Boolean) {
+        update { it.copy(relayToServerEnabled = value) }
+    }
+
+    /** #212: persist the server → mesh relay switch (default off). */
+    suspend fun setRelayToMeshEnabled(value: Boolean) {
+        update { it.copy(relayToMeshEnabled = value) }
     }
 
     /**
@@ -449,6 +476,8 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
         keepScreenOn   = p[KEY_KEEP_SCREEN_ON]  ?: false,
         selfMarkerTriangle = p[KEY_SELF_MARKER_TRIANGLE] ?: false,
         stalenessOverlayEnabled = p[KEY_STALENESS_OVERLAY] ?: false,
+        relayToServerEnabled = resolveRelayDirection(p[KEY_RELAY_TO_SERVER], p[KEY_RELAY_GATEWAY]),
+        relayToMeshEnabled = resolveRelayDirection(p[KEY_RELAY_TO_MESH], p[KEY_RELAY_GATEWAY]),
         relayGatewayEnabled = p[KEY_RELAY_GATEWAY] ?: false,
     )
 
