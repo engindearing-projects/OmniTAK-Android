@@ -289,9 +289,17 @@ class MeshtasticManager(
      */
     fun clearLastPushResult() {
         _lastPushResult.value = null
-        lastPush = null
-        _restartNote.value = null
+        synchronized(noteLock) {
+            lastPush = null
+            _restartNote.value = null
+        }
     }
+
+    /**
+     * Guards [lastPush] and [restartNote]: the download that judges a push comes in on the frame thread, and the
+     * operator's edit or push that forgets it on another, and a note must not outlive the edit that cleared it.
+     */
+    private val noteLock = Any()
 
     /** What the last Device settings push sent, and to which radio. Judged when that radio's download is in. */
     @Volatile private var lastPush: SentSettings? = null
@@ -318,9 +326,9 @@ class MeshtasticManager(
      * again at every download of that radio until the operator edits or pushes, so a download that came before
      * the radio had restarted (and still held what it received) does not hide what the next one shows.
      */
-    private fun judgeLastPush() {
-        val sent = lastPush ?: return
-        if (sent.node != _myNodeNum) return
+    private fun judgeLastPush() = synchronized(noteLock) {
+        val sent = lastPush ?: return@synchronized
+        if (sent.node != _myNodeNum) return@synchronized
         _restartNote.value = sent.check(reported, PositionFacts.read(radioSettings))
     }
 
@@ -587,9 +595,11 @@ class MeshtasticManager(
                 downloadComplete = false
                 // This download reports from nothing, and a note about a push is only for the radio it went to.
                 reported = RadioSettings()
-                if (lastPush?.node != parsed.nodeNum) {
-                    lastPush = null
-                    _restartNote.value = null
+                synchronized(noteLock) {
+                    if (lastPush?.node != parsed.nodeNum) {
+                        lastPush = null
+                        _restartNote.value = null
+                    }
                 }
                 Log.i(TAG, "my_node_num=${parsed.nodeNum}")
             }
@@ -1004,9 +1014,12 @@ class MeshtasticManager(
      */
     suspend fun pushDeviceConfig(edits: DeviceEdits): AdminWriteResult {
         // A new push replaces what the last one sent and what was said about it.
-        lastPush = null
-        _restartNote.value = null
-        return settingsWriter.pushDeviceConfig(edits) { lastPush = it }.also { _lastPushResult.value = it.describe() }
+        synchronized(noteLock) {
+            lastPush = null
+            _restartNote.value = null
+        }
+        return settingsWriter.pushDeviceConfig(edits) { synchronized(noteLock) { lastPush = it } }
+            .also { _lastPushResult.value = it.describe() }
     }
 
     /**
