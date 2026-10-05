@@ -147,7 +147,16 @@ class ServerManager(
             _messagesReceived.value = 0
             _messagesSent.value = 0
         }
-        val conn = TAKConnection(server, certVault)
+        val conn = TAKConnection(
+            server,
+            certVault,
+            // #233 — the liveness ping carries this device's UID with a "-ping"
+            // suffix, the way ATAK's does, so a server that keys clients by UID
+            // sees one device and not a second, nameless one.
+            pingUid = {
+                userPrefsStore?.ensureSelfUid()?.let { "$it-ping" } ?: TAKConnection.DEFAULT_PING_UID
+            },
+        )
         connections[server.id] = conn
         stateJobs[server.id] = scope.launch {
             conn.state.collect { state ->

@@ -16,10 +16,11 @@ import soy.engindearing.omnitak.mobile.data.TAKServer
  * can only ever produce one answer. Pure Kotlin, no Android types, no I/O,
  * fully JVM-unit-testable (see `ServerHealthTest`).
  *
- * Scope: this projects the state [ServerManager] already tracks. It does NOT
- * detect a half-open socket (the OS still says "connected" after the network
- * is gone); [TAKConnection] has no read timeout or keepalive, so such a server
- * stays [ServerHealth.CONNECTED] here until the socket actually errors.
+ * Scope: this projects the state [ServerManager] already tracks. Detecting a
+ * socket that is dead without the OS knowing (#233) is the connection's job:
+ * `TAKConnection` pings an idle server and reports Failed when a server that
+ * answers pings goes silent. A server that never answers pings can still sit
+ * on [ServerHealth.CONNECTED] with a dead socket until a write fails.
  */
 enum class ServerHealth {
     /** Enabled and the socket is up. */
