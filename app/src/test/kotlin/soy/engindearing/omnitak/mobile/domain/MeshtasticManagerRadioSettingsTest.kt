@@ -41,7 +41,7 @@ import soy.engindearing.omnitak.mobile.data.RefusalReason
  * [MeshtasticManager.dispatchFrame] (the same entry point both transports
  * use), and writes go out through the manager's own methods to a [FakeRadio]
  * standing in for the link, which answers reads by dispatching the reply as a
- * frame from our own node.
+ * frame from our own node that quotes the packet id of the request.
  *
  * Node numbers, names and key bytes are made up.
  */

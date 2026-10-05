@@ -68,7 +68,11 @@ import java.util.Random
  *     before. Right after each write the app reads the radio again and must have
  *     nothing to report about a value the radio kept;
  *  6. put back what the test changed, and assert the radio reads as it did when
- *     the test started.
+ *     the test started. One thing cannot be put back through the settings the app
+ *     writes: a radio that had no region generates its key pair the first time it
+ *     boots with one (step 4 sets a region), and the owner then carries a public
+ *     key. The final comparison leaves that one field out in that case, and the
+ *     radio keeps the key pair.
  *
  * Never prints or logs key bytes: channel keys are only ever compared by length.
  */
@@ -414,6 +418,8 @@ class SimRadioSettingsIT {
         name: String,
         s: Session,
         expect: AdminWriteResult,
+        /** Runs on the radio's own report right after the write, before it restarts. */
+        live: (Session) -> Unit = {},
         change: (Session) -> AdminWriteResult,
     ): Pair<Session, Map<String, Any?>> {
         s.mgr.clearSettingsNotice()
@@ -425,10 +431,61 @@ class SimRadioSettingsIT {
         runBlocking { s.mgr.requestDeviceConfig() }
         Thread.sleep(1_500)
         assertNull("$name: the radio took what was sent, so there is nothing to report", s.mgr.settingsNotice.value)
+        live(s)
         s.awaitRebootAndForget()
         s.close()
         val next = connect()
         return next to view(next.cache)
+    }
+
+    /**
+     * Wait for the radio's own report of the position interval, asking again now and then (an answer can be lost
+     * in a busy moment).
+     *
+     * The interval is checked here, on what the radio reports right after a write, and not only after its
+     * restart: the simulator as it comes from the stock image set `position_broadcast_secs` back to its default
+     * on a restart that followed a write of 400 s (writes of the GPS mode and the GPS update interval alone
+     * survived), and did not once the test had written its own position config. The rule is not known. The
+     * radio's report before the restart is where the app's write is always visible.
+     */
+    private fun awaitInterval(s: Session, secs: Int, what: String) {
+        val deadline = System.currentTimeMillis() + 15_000
+        var lastAsk = 0L
+        while (System.currentTimeMillis() < deadline) {
+            if (app.state.radio?.positionBroadcastSecs == secs) return
+            if (System.currentTimeMillis() - lastAsk > 3_000) {
+                runBlocking { s.mgr.requestDeviceConfig() }
+                lastAsk = System.currentTimeMillis()
+            }
+            Thread.sleep(100)
+        }
+        throw AssertionError("$what: the radio does not report a position interval of $secs, it says ${app.state.radio?.positionBroadcastSecs}")
+    }
+
+    /**
+     * The fields that changed between two downloads must be exactly [expected] (old to new). The position
+     * interval is the exception, see [awaitInterval]: after a restart it may hold the new value or the one before,
+     * and nothing else. [ignoreInterval] leaves it out altogether, for a download compared with one taken while the
+     * radio held an interval it would not keep.
+     */
+    private fun assertChanged(
+        why: String,
+        expected: Map<String, Pair<Any?, Any?>>,
+        before: Map<String, Any?>,
+        after: Map<String, Any?>,
+        ignoreInterval: Boolean = false,
+    ) {
+        val changed = diff(before, after)
+        assertEquals(why, expected - INTERVAL, changed - INTERVAL)
+        if (ignoreInterval) return
+        val now = after[INTERVAL]
+        val change = expected[INTERVAL]
+        if (change == null) {
+            assertEquals("$why: the interval must not change", before[INTERVAL], now)
+        } else {
+            assertTrue("$why: after the restart the interval is the new one or the one before, not $now", now == change.second || now == change.first)
+            log("$why: the restart ${if (now == change.second) "kept" else "reset"} the position interval")
+        }
     }
 
     @Test fun settings_writes_change_only_the_edited_field() {
@@ -453,18 +510,19 @@ class SimRadioSettingsIT {
 
                 val secs = if ((asFound["position.position_broadcast_secs"] as Long) == 400L) 500 else 400
                 val before = asFound
-                val step = stepThroughApp("factory radio, interval only", s, AdminWriteResult.Sent(listOf(AdminSetting.POSITION_INTERVAL))) { sess ->
+                val step = stepThroughApp(
+                    "factory radio, interval only", s, AdminWriteResult.Sent(listOf(AdminSetting.POSITION_INTERVAL)),
+                    live = { awaitInterval(it, secs, "factory radio, interval only") },
+                ) { sess ->
                     val edits = app.edits { copy(positionBroadcastSecs = secs) }
                     assertEquals("one setting is edited", listOf(AdminSetting.POSITION_INTERVAL), edits.settings)
                     runBlocking { sess.mgr.pushDeviceConfig(edits) }
                 }
                 s = step.first
-                val changed = diff(before, step.second)
-                log("factory radio, interval only: $changed")
-                assertEquals(
+                log("factory radio, interval only: ${diff(before, step.second)}")
+                assertChanged(
                     "only the interval may change: the role must stay CLIENT and the primary channel unnamed",
-                    mapOf("position.position_broadcast_secs" to (before["position.position_broadcast_secs"] to secs.toLong())),
-                    changed,
+                    mapOf(INTERVAL to (before[INTERVAL] to secs.toLong())), before, step.second,
                 )
                 assertEquals("role untouched", asFound["device.role"], step.second["device.role"])
                 assertEquals("channel name untouched", asFound["channel0.name"], step.second["channel0.name"])
@@ -493,30 +551,33 @@ class SimRadioSettingsIT {
             }
 
             // 3b. an interval above the app's limit, as another client can leave it: the screen shows the radio's own
-            // value and does not count it as an edit, and a push of another setting leaves it alone.
-            val threeDays = 259_200L
+            // value and does not count it as an edit, and a push of another setting leaves it alone. The interval is
+            // set in the radio's memory only (a transaction that is not committed: nothing is saved, no restart), so
+            // what is checked is what the radio itself reports, before and after the app's push.
+            val threeDays = 259_200
             send(s, listOf(
                 beginFrame(s.node),
-                setConfigFrame(s.node, RadioSettingsCache.CONFIG_POSITION, rebuild(found.position, at(1) { varint(1, threeDays) })),
-                commitFrame(s.node),
+                setConfigFrame(s.node, RadioSettingsCache.CONFIG_POSITION, rebuild(found.position, at(1) { varint(1, threeDays.toLong()) })),
             ))
-            s.awaitRebootAndForget()
-            s.close()
-            s = connect()
-            val aboveLimit = view(s.cache)
-            assertEquals("the radio holds an interval above the app's limit", threeDays, aboveLimit["position.position_broadcast_secs"])
-            assertEquals("the screen shows the radio's own value", threeDays.toInt(), app.state.draft.positionBroadcastSecs)
+            runBlocking { s.mgr.requestDeviceConfig() }
+            awaitInterval(s, threeDays, "interval above the limit")
+            assertEquals("the screen shows the radio's own value", threeDays, app.state.draft.positionBroadcastSecs)
             assertTrue("and it is not an edit", app.state.edits().isEmpty)
-            val roleOnly = stepThroughApp("role only, interval above the limit", s, AdminWriteResult.Sent(listOf(AdminSetting.ROLE))) { sess ->
-                runBlocking { sess.mgr.pushDeviceConfig(app.edits { copy(role = MeshRole.CLIENT_MUTE) }) }
+            val aboveLimit = view(s.cache)
+            val roleOnly = stepThroughApp(
+                "role only, interval above the limit", s, AdminWriteResult.Sent(listOf(AdminSetting.ROLE)),
+                live = { awaitInterval(it, threeDays, "role only, interval above the limit") },
+            ) { sess ->
+                val edits = app.edits { copy(role = MeshRole.CLIENT_MUTE) }
+                assertEquals("only the role is edited", listOf(AdminSetting.ROLE), edits.settings)
+                runBlocking { sess.mgr.pushDeviceConfig(edits) }
             }
             s = roleOnly.first
-            val roleChanged = diff(aboveLimit, roleOnly.second)
-            log("role only, interval above the limit: $roleChanged")
-            assertEquals(
-                "only the role may change: the interval must not be rewritten to the app's limit",
-                mapOf("device.role" to (null to 1L)),
-                roleChanged,
+            log("role only, interval above the limit: ${diff(aboveLimit, roleOnly.second)}")
+            assertChanged(
+                "only the role may change, and the radio went on reporting the interval it had until it restarted",
+                // The firmware mirrors the device role in the owner record, so that one follows.
+                mapOf("device.role" to (null to 1L), "owner.role" to (null to 1L)), aboveLimit, roleOnly.second, ignoreInterval = true,
             )
 
             // 4. arrange a radio that has something to lose
@@ -538,17 +599,16 @@ class SimRadioSettingsIT {
 
             // 5a. a position interval change, through pushDeviceConfig (one edit transaction)
             var before: Map<String, Any?> = seeded
-            var step = stepThroughApp("position interval", s, AdminWriteResult.Sent(listOf(AdminSetting.POSITION_INTERVAL))) { sess ->
+            var step = stepThroughApp(
+                "position interval", s, AdminWriteResult.Sent(listOf(AdminSetting.POSITION_INTERVAL)),
+                live = { awaitInterval(it, 321, "position interval") },
+            ) { sess ->
                 runBlocking { sess.mgr.pushDeviceConfig(app.edits { copy(positionBroadcastSecs = 321) }) }
             }
             s = step.first
             var changed = diff(before, step.second)
             log("position interval changed: $changed")
-            assertEquals(
-                "only the position interval may change",
-                mapOf("position.position_broadcast_secs" to (900L to 321L)),
-                changed,
-            )
+            assertChanged("only the position interval may change", mapOf(INTERVAL to (before[INTERVAL] to 321L)), before, step.second)
 
             // 5b. a LoRa preset change
             before = step.second
@@ -614,7 +674,10 @@ class SimRadioSettingsIT {
                 AdminSetting.LONG_NAME, AdminSetting.SHORT_NAME, AdminSetting.POSITION_INTERVAL,
                 AdminSetting.CHANNEL_NAME, AdminSetting.MODEM_PRESET,
             )
-            step = stepThroughApp("four changes in one push", s, AdminWriteResult.Sent(four)) { sess ->
+            step = stepThroughApp(
+                "four changes in one push", s, AdminWriteResult.Sent(four),
+                live = { awaitInterval(it, 123, "four changes in one push") },
+            ) { sess ->
                 runBlocking {
                     sess.mgr.pushDeviceConfig(
                         app.edits {
@@ -629,17 +692,17 @@ class SimRadioSettingsIT {
             s = step.first
             changed = diff(before, step.second)
             log("four changes in one push: $changed")
-            assertEquals(
+            assertChanged(
                 "exactly the settings that were edited may change, and every write of the batch must land",
-                setOf(
-                    "owner.long_name", "owner.short_name", "position.position_broadcast_secs",
-                    "channel0.name", "lora.modem_preset",
+                mapOf(
+                    "owner.long_name" to (before["owner.long_name"] to "Sim Four"),
+                    "owner.short_name" to (before["owner.short_name"] to "SF4"),
+                    INTERVAL to (before[INTERVAL] to 123L),
+                    "channel0.name" to (before["channel0.name"] to "simfour"),
+                    "lora.modem_preset" to (before["lora.modem_preset"] to 6L),
                 ),
-                changed.keys,
+                before, step.second,
             )
-            assertEquals(123L, step.second["position.position_broadcast_secs"])
-            assertEquals("simfour", step.second["channel0.name"])
-            assertEquals(6L, step.second["lora.modem_preset"])
             assertEquals("region and hop limit survive the batch", 1L, step.second["lora.region"])
             assertEquals(32, step.second["channel0.key_length"])
 
@@ -671,7 +734,10 @@ class SimRadioSettingsIT {
                 back.awaitRebootAndForget()
                 back.close()
                 val last = connect()
+                val regionAsFound = asFound["lora.region"]
+                val keyGeneratedByFirmware = asFound["owner.public_key_length"] == null && (regionAsFound == null || regionAsFound == 0L)
                 readsAfterRestore = diff(asFound, view(last.cache))
+                    .filterKeys { !(keyGeneratedByFirmware && it == "owner.public_key_length") }
                 log("restored: ${readsAfterRestore!!.ifEmpty { "identical to what was found" }}")
                 last.close()
             }.onFailure { log("RESTORE FAILED, the radio was left changed: ${it.message}") }
@@ -688,6 +754,8 @@ class SimRadioSettingsIT {
     private companion object {
         /** HardwareModel.PORTDUINO in mesh.proto: the simulator's. */
         const val PORTDUINO = 37L
+        const val INTERVAL = "position.position_broadcast_secs"
+
         const val PORT = 4403
         const val REBOOT_WAIT_MS = 45_000L
     }
