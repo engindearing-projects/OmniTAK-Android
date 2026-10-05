@@ -82,6 +82,9 @@ internal object AdminTestFrames {
     /** FromRadio.my_info = 3 { my_node_num = 1 }. */
     fun myInfoFrame(nodeNum: Int): ByteArray = ProtoMsg().msg(3, ProtoMsg().varint(1, nodeNum.toLong() and 0xFFFFFFFFL)).build()
 
+    /** FromRadio.config_complete_id = 7: the last frame of a config download. */
+    fun configCompleteFrame(id: Int = 1): ByteArray = ProtoMsg().varint(7, id).build()
+
     /** FromRadio.config = 5 { <variant> = message }. */
     fun configFrame(variant: Int, message: ByteArray): ByteArray =
         ProtoMsg().msg(5, ProtoMsg().bytes(variant, message)).build()

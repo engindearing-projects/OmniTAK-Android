@@ -264,6 +264,19 @@ class MeshtasticManager(
         _lastPushResult.value = null
     }
 
+    /** True from the end of a config download (`config_complete_id`) until the next one starts or the link drops. */
+    @Volatile private var downloadComplete = false
+    @Volatile private var downloadCompletedNanos = 0L
+
+    /** When the last frame came in from the radio, on the monotonic clock. */
+    @Volatile private var lastFrameNanos = System.nanoTime()
+
+    /** How long the link has to be quiet after a download before reads go out. Tests shorten it. */
+    @Volatile internal var settleQuietMs: Long = SETTLE_QUIET_MS
+
+    /** The longest a read waits for the download to finish. Tests shorten it. */
+    @Volatile internal var settleTimeoutMs: Long = SETTLE_TIMEOUT_MS
+
     /**
      * The reads this app has sent and not had answered, and the rule for what counts as the radio's answer to one
      * ([AdminReads]). Every admin response goes through [AdminReads.admit] before it reaches the cache, the settings
@@ -306,6 +319,7 @@ class MeshtasticManager(
             radioSettings.clear()
             // A read sent on this link cannot be answered on another one, or by another radio.
             adminReads.clear()
+            downloadComplete = false
             // Nothing may be addressed to the radio that was on this link: the next one reports its own number.
             _myNodeNum = null
             runCatching { linkDownSink?.invoke() }
@@ -495,6 +509,7 @@ class MeshtasticManager(
     }
 
     internal fun dispatchFrame(frame: ByteArray) {
+        lastFrameNanos = System.nanoTime()
         bytesRx += frame.size
         val parsed = MeshtasticProtoParser.parseFromRadio(frame)
         when (parsed) {
@@ -505,11 +520,17 @@ class MeshtasticManager(
             is FromRadioFrame.Packet -> handlePacket(parsed.packet)
             is FromRadioFrame.MyInfo -> {
                 _myNodeNum = parsed.nodeNum
-                // The first frame of a session: no read of an earlier one is waiting for an answer any more.
+                // The first frame of a session: no read of an earlier one is waiting for an answer any more,
+                // and the download that follows is not finished.
                 adminReads.clear()
+                downloadComplete = false
                 Log.i(TAG, "my_node_num=${parsed.nodeNum}")
             }
-            is FromRadioFrame.ConfigComplete -> Log.i(TAG, "config complete id=${parsed.id}")
+            is FromRadioFrame.ConfigComplete -> {
+                Log.i(TAG, "config complete id=${parsed.id}")
+                downloadCompletedNanos = System.nanoTime()
+                downloadComplete = true
+            }
             is FromRadioFrame.ConfigFrame -> {
                 Log.i(TAG, "RX FromRadio.config (post-want_config_id dump): ${parsed.response ?: "variant with no decoded value"}")
                 // The settings screen only decodes device, position and lora;
@@ -784,9 +805,37 @@ class MeshtasticManager(
      * taking their turn behind any write in progress; the answers arrive
      * asynchronously via [adminResponseSink].
      *
+     * The requests wait until the radio has finished its config download
+     * (`config_complete_id`) and the link has been quiet for a moment, so they
+     * do not land in the middle of the stream: the firmware keeps few packets
+     * for the phone and drops the oldest when they pile up, without telling
+     * anyone. The wait is bounded and gives up when the link drops. Reading
+     * back after a push goes through here too.
+     *
      * Returns the count of requests that went out, 0 when there is no radio.
      */
-    suspend fun requestDeviceConfig(): Int = settingsWriter.readAll()
+    suspend fun requestDeviceConfig(): Int {
+        awaitDownloadSettled()
+        return settingsWriter.readAll()
+    }
+
+    /** Wait for the config download to finish and the link to go quiet. Returns at once when no radio is attached. */
+    internal suspend fun awaitDownloadSettled() {
+        withTimeoutOrNull(settleTimeoutMs) {
+            while (true) {
+                // No radio to read from: nothing to wait for, and the read will say so.
+                if (!adminLinkUp() || adminDestination() == null) return@withTimeoutOrNull
+                if (downloadComplete) {
+                    val now = System.nanoTime()
+                    val quietMs = (now - lastFrameNanos) / 1_000_000L
+                    val sinceCompleteMs = (now - downloadCompletedNanos) / 1_000_000L
+                    // A busy mesh may never go quiet: the quiet wait is only for the moments after the download.
+                    if (quietMs >= settleQuietMs || sinceCompleteMs >= SETTLE_MAX_QUIET_WAIT_MS) return@withTimeoutOrNull
+                }
+                delay(25)
+            }
+        }
+    }
 
     /**
      * Send a CoT event over the active Meshtastic transport as a
@@ -955,6 +1004,16 @@ class MeshtasticManager(
 
     companion object {
         private const val TAG = "MeshtasticManager"
+
+        /** The longest a read waits for the config download to finish before it goes out anyway. */
+        const val SETTLE_TIMEOUT_MS = 20_000L
+
+        /** How long the link has to be quiet after the download: what is still queued for the phone drains meanwhile. */
+        const val SETTLE_QUIET_MS = 400L
+
+        /** After this long past the end of the download the quiet wait is over, whatever traffic there is. */
+        const val SETTLE_MAX_QUIET_WAIT_MS = 2_000L
+
         /** How often the BLE auto-reconnect loop checks whether the last
          *  radio is back in range. */
         private const val BLE_RECONNECT_INTERVAL_MS: Long = 20_000

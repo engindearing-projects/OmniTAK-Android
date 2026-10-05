@@ -14,6 +14,7 @@ import soy.engindearing.omnitak.mobile.data.AdminTestFrames
 import soy.engindearing.omnitak.mobile.data.AdminTestFrames.adminResponseFrame
 import soy.engindearing.omnitak.mobile.data.AdminTestFrames.channelFrame
 import soy.engindearing.omnitak.mobile.data.AdminTestFrames.channelMessage
+import soy.engindearing.omnitak.mobile.data.AdminTestFrames.configCompleteFrame
 import soy.engindearing.omnitak.mobile.data.AdminTestFrames.configFrame
 import soy.engindearing.omnitak.mobile.data.AdminTestFrames.deviceConfig
 import soy.engindearing.omnitak.mobile.data.AdminTestFrames.loraConfig
@@ -86,6 +87,8 @@ class MeshtasticManagerReadBackTest {
         mgr.dispatchFrame(nodeInfoFrame(me, q.radio.owner))
         for (i in 0..7) mgr.dispatchFrame(channelFrame(q.radio.channels.getValue(i)))
         for (variant in 1..10) mgr.dispatchFrame(configFrame(variant, q.radio.config[variant] ?: ByteArray(0)))
+        mgr.dispatchFrame(configCompleteFrame())
+        mgr.settleQuietMs = 0
         return q
     }
 

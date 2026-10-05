@@ -18,6 +18,7 @@ import soy.engindearing.omnitak.mobile.data.AdminTestFrames
 import soy.engindearing.omnitak.mobile.data.AdminTestFrames.adminResponseFrame
 import soy.engindearing.omnitak.mobile.data.AdminTestFrames.channelFrame
 import soy.engindearing.omnitak.mobile.data.AdminTestFrames.channelMessage
+import soy.engindearing.omnitak.mobile.data.AdminTestFrames.configCompleteFrame
 import soy.engindearing.omnitak.mobile.data.AdminTestFrames.configFrame
 import soy.engindearing.omnitak.mobile.data.AdminTestFrames.deviceConfig
 import soy.engindearing.omnitak.mobile.data.AdminTestFrames.loraConfig
@@ -71,6 +72,8 @@ class MeshtasticManagerRadioSettingsTest {
         mgr.dispatchFrame(nodeInfoFrame(me, radio.owner))
         for (i in 0..7) mgr.dispatchFrame(channelFrame(radio.channels.getValue(i)))
         for (variant in 1..10) mgr.dispatchFrame(configFrame(variant, radio.config[variant] ?: ByteArray(0)))
+        mgr.dispatchFrame(configCompleteFrame())
+        mgr.settleQuietMs = 0 // the tests that need the quiet wait set their own
         return mgr to link
     }
 
