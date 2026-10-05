@@ -205,6 +205,18 @@ data class UserPrefs(
      *  parity). DANGEROUS on a busy server (LoRa airtime), so OFF by default and
      *  hard-throttled server→mesh. See [MeshServerRelay]. */
     val relayGatewayEnabled: Boolean = false,
+    /** Ditto peer-to-peer mesh (parity with iOS `DittoMeshService.Keys`).
+     *  OFF by default and deliberately so — the mesh broadcasts this device's
+     *  live position to any nearby install on the same channel, which is the
+     *  operator's call to make, never a default. */
+    val dittoMeshEnabled: Boolean = false,
+    /** Only peers on the same channel exchange tracks. */
+    val dittoMeshChannel: String = "omnitak",
+    /** Ditto gateway: forward everything heard on the peer mesh to every
+     *  connected TAK server. Separate from [relayGatewayEnabled] (the LoRa
+     *  gateway) — different transports, different blast radius, so each gets
+     *  its own explicit opt-in. */
+    val dittoGatewayEnabled: Boolean = false,
 )
 
 class UserPrefsStore internal constructor(private val dataStore: DataStore<Preferences>) {
@@ -266,6 +278,9 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
     private val KEY_RELAY_TO_SERVER = booleanPreferencesKey("relay_to_server_enabled")
     private val KEY_RELAY_TO_MESH = booleanPreferencesKey("relay_to_mesh_enabled")
     private val KEY_RELAY_GATEWAY = booleanPreferencesKey("relay_gateway_enabled")
+    private val KEY_DITTO_ENABLED = booleanPreferencesKey("ditto_mesh_enabled")
+    private val KEY_DITTO_CHANNEL = stringPreferencesKey("ditto_mesh_channel")
+    private val KEY_DITTO_GATEWAY = booleanPreferencesKey("ditto_gateway_enabled")
 
     val prefs: Flow<UserPrefs> = dataStore.data.map { p -> readFrom(p) }
 
@@ -321,6 +336,9 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
             p[KEY_RELAY_TO_SERVER] = next.relayToServerEnabled
             p[KEY_RELAY_TO_MESH] = next.relayToMeshEnabled
             p[KEY_RELAY_GATEWAY] = next.relayGatewayEnabled
+            p[KEY_DITTO_ENABLED] = next.dittoMeshEnabled
+            p[KEY_DITTO_CHANNEL] = next.dittoMeshChannel
+            p[KEY_DITTO_GATEWAY] = next.dittoGatewayEnabled
         }
     }
 
@@ -399,6 +417,21 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
     /** #212: persist the server → mesh relay switch (default off). */
     suspend fun setRelayToMeshEnabled(value: Boolean) {
         update { it.copy(relayToMeshEnabled = value) }
+    }
+
+    /** Ditto peer mesh opt-in (default off — position sharing is consent). */
+    suspend fun setDittoMeshEnabled(value: Boolean) {
+        update { it.copy(dittoMeshEnabled = value) }
+    }
+
+    /** Ditto mesh channel; blank falls back to the shared default room. */
+    suspend fun setDittoMeshChannel(value: String) {
+        update { it.copy(dittoMeshChannel = value.trim().ifBlank { "omnitak" }) }
+    }
+
+    /** Ditto mesh → TAK server gateway toggle (default off). */
+    suspend fun setDittoGatewayEnabled(value: Boolean) {
+        update { it.copy(dittoGatewayEnabled = value) }
     }
 
     /**
@@ -486,6 +519,9 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
         relayToServerEnabled = resolveRelayDirection(p[KEY_RELAY_TO_SERVER], p[KEY_RELAY_GATEWAY]),
         relayToMeshEnabled = resolveRelayDirection(p[KEY_RELAY_TO_MESH], p[KEY_RELAY_GATEWAY]),
         relayGatewayEnabled = p[KEY_RELAY_GATEWAY] ?: false,
+        dittoMeshEnabled = p[KEY_DITTO_ENABLED] ?: false,
+        dittoMeshChannel = p[KEY_DITTO_CHANNEL]?.trim()?.ifBlank { null } ?: "omnitak",
+        dittoGatewayEnabled = p[KEY_DITTO_GATEWAY] ?: false,
     )
 
     // ATAK / OpenTakServer canonical team names are Title Case ("Cyan",

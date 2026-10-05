@@ -77,3 +77,11 @@
 # R8 full mode errors on the missing classes; suppress (not used at runtime).
 -dontwarn com.google.api.client.**
 -dontwarn org.joda.time.**
+
+# --- Ditto peer mesh -----------------------------------------------------
+# The Ditto SDK resolves native (JNI) callbacks by reflection into
+# com.ditto.** — R8 renaming breaks them only at runtime, in release builds,
+# on device. Rules per Ditto's install guide; the rustls keep preserves TLS
+# certificate verification in minified builds.
+-keep class com.ditto.** { *; }
+-keep, includedescriptorclasses class org.rustls.platformverifier.** { *; }

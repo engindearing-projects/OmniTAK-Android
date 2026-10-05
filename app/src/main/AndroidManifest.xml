@@ -39,6 +39,27 @@
         android:name="android.permission.BLUETOOTH_ADMIN"
         android:maxSdkVersion="30" />
 
+    <!-- Ditto peer mesh (DittoMeshService). Discovery needs this device to
+         ADVERTISE as a BLE peripheral, not just scan — without it nearby
+         peers can see us listed but never connect, which presents as flaky
+         range rather than a missing permission. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <!-- Wi-Fi Aware + LAN transports for the Ditto peer mesh. neverForLocation
+         matches the BLUETOOTH_SCAN declaration above: we don't derive location
+         from nearby-device results. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission
+        android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation" />
+    <uses-feature
+        android:name="android.hardware.wifi.aware"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.wifi.direct"
+        android:required="false" />
+
     <uses-feature
         android:name="android.hardware.bluetooth_le"
         android:required="false" />

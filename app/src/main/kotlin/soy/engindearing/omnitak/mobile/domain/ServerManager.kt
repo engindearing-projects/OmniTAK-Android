@@ -53,6 +53,13 @@ class ServerManager(
     // gateway is wired (the default). The relay itself enforces enabled / both-
     // transports-connected / throttle, so this fires unconditionally.
     private val inboundRelay: ((CoTEvent) -> Unit)? = null,
+    // Ditto peer-mesh seam — invoked for every frame the app ORIGINATES
+    // (broadcasts with no serverId, isRelay false), before the server write
+    // and regardless of whether any server is connected. That ordering is the
+    // point: the peer mesh is the transport that still works when every
+    // server is unreachable, so it must not be gated on the socket send.
+    // Nullable + plain lambda keeps this class headless for unit tests.
+    private val dittoPublish: ((xml: String) -> Unit)? = null,
     // Injected scope lets unit tests substitute a TestScope/StandardTestDispatcher
     // so coroutines run under test-scheduler control (advanceUntilIdle / runCurrent).
     // Production callers omit this and get the default app-wide scope.
@@ -289,8 +296,21 @@ class ServerManager(
      * every connected server (group chat, PPLI, markers); with a specific id
      * it routes to just that server (DM replies stay on their origin server).
      * Returns true if at least one server accepted the write.
+     *
+     * [isRelay] marks traffic a gateway is forwarding on behalf of another
+     * transport (Ditto peer mesh or the #179 LoRa relay). Relayed traffic
+     * goes to the servers but is NOT re-published onto the peer mesh — it
+     * already came from a mesh, and echoing it back would put every gateway
+     * device in a loop with every other one. Mirrors iOS TAKService.sendCoT.
      */
-    suspend fun sendCoT(xml: String, serverId: String? = null): Boolean {
+    suspend fun sendCoT(xml: String, serverId: String? = null, isRelay: Boolean = false): Boolean {
+        // Peers first, and unconditionally: not gated on any server being
+        // connected or the writes below succeeding. Addressed traffic
+        // (serverId != null — DMs) stays off the mesh; it is not situational
+        // awareness everyone should see.
+        if (!isRelay && serverId == null) {
+            runCatching { dittoPublish?.invoke(xml) }
+        }
         val targets = if (serverId != null) {
             listOfNotNull(connections[serverId])
         } else {
