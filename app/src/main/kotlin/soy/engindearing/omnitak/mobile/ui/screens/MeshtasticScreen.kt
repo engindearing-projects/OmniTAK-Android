@@ -550,8 +550,10 @@ private fun BlePane(
         KeyValueRow(label = "RSSI", value = if (bleRssi == 0) "—" else "$bleRssi dBm")
         KeyValueRow(label = "Nodes", value = "$nodeCount")
         // #203 — surface the auto-reconnect loop so a stuck link isn't a
-        // silent retry: the operator can see it's actually trying.
-        if (reconnectPending) {
+        // silent retry: the operator can see it's actually trying. Only
+        // while it is retrying: the row used to read "attempt 0" on a link
+        // that was up.
+        if (reconnectPending && !connected && reconnectAttempt > 0) {
             KeyValueRow(label = "Reconnecting", value = "attempt $reconnectAttempt")
         }
         // #203 — BLE failure diagnostics. The field report ("drops after
@@ -570,6 +572,14 @@ private fun BlePane(
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                 style = MaterialTheme.typography.labelSmall,
             )
+            // What the operator can do about it, when the client knows.
+            failure.hint?.let { hint ->
+                Text(
+                    hint,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
         }
         Row(
             modifier = Modifier.fillMaxWidth(),

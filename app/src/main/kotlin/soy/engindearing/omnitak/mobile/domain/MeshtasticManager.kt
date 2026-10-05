@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayOutputStream
 import soy.engindearing.omnitak.mobile.data.AdminMessageParser
 import soy.engindearing.omnitak.mobile.data.AdminMessageSerializer
@@ -162,7 +163,12 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
                 if (current is ConnectionState.Connected || current is ConnectionState.Connecting) continue
                 _reconnectAttempt.value += 1
                 Log.i(TAG, "BLE auto-reconnect: retrying $target (attempt ${_reconnectAttempt.value})")
-                connectBle(target)
+                // #203 — one attempt must never be able to end the loop. The
+                // BLE client bounds every wait it makes, so this cap should
+                // never fire; it is here so that a wait which does hang costs
+                // one attempt instead of all of them.
+                val finished = withTimeoutOrNull(BLE_RECONNECT_ATTEMPT_CAP_MS) { connectBle(target) }
+                if (finished == null) Log.w(TAG, "BLE auto-reconnect: attempt ${_reconnectAttempt.value} did not finish, moving on")
             }
         }
     }
@@ -813,6 +819,10 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
         /** How often the BLE auto-reconnect loop checks whether the last
          *  radio is back in range. */
         private const val BLE_RECONNECT_INTERVAL_MS: Long = 20_000
+
+        /** #203 — upper bound on one automatic reconnect attempt, above the
+         *  BLE client's own pairing deadline plus the handshake write. */
+        private const val BLE_RECONNECT_ATTEMPT_CAP_MS: Long = 120_000
         private const val PORTNUM_TEXT_MESSAGE_APP = 1
         private const val PORTNUM_POSITION_APP = 3
         private const val PORTNUM_ADMIN_APP = 6

@@ -2,7 +2,11 @@ package soy.engindearing.omnitak.mobile.data
 
 import android.bluetooth.BluetoothDevice
 import org.junit.Assert.assertArrayEquals
+import no.nordicsemi.android.ble.callback.FailCallback
+import no.nordicsemi.android.ble.observer.ConnectionObserver
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -87,7 +91,11 @@ class MeshtasticBleClientTest {
     @Test fun characteristic_uuids_match_meshtastic_firmware() {
         assertEquals("f75c76d2-129e-4dad-a1dd-7866124401e7", MeshtasticBleClient.TO_RADIO_UUID.toString())
         assertEquals("2c55e69e-4993-11ed-b878-0242ac120002", MeshtasticBleClient.FROM_RADIO_UUID.toString())
-        assertEquals("ed9da18c-a800-4f66-a670-aa7547de15e6", MeshtasticBleClient.FROM_NUM_UUID.toString())
+        // #203 — this asserted …aa7547de15e6 before, the same typo the client
+        // had; no radio has a characteristic by that id, so fromNum
+        // notifications were never enabled. The value below is FROMNUM_UUID
+        // in the Meshtastic Python client (meshtastic/ble_interface.py).
+        assertEquals("ed9da18c-a800-4f66-a670-aa7547e34453", MeshtasticBleClient.FROM_NUM_UUID.toString())
     }
 
     @Test fun chunk_size_under_negotiated_mtu() {
@@ -176,19 +184,15 @@ class MeshtasticBleClientTest {
 
     // region connect timeout state transition (#175) ----------------------
     // Regression for issue #175 — "Meshtastic connection hangs on Connecting
-    // indefinitely". When a reconnect to a previously-connected radio leaves a
-    // stale GATT session, Nordic's own .timeout()/.fail() callbacks can never
-    // fire, so the client used to sit in Connecting forever (app restart was the
-    // only fix). connectToAddress now wraps the connect in a watchdog; on timeout
-    // it resolves to a *retryable Disconnected* state via this pure helper so the
-    // UI stops spinning and the user can simply tap Connect again.
+    // indefinitely". A connect attempt that never hears back must not leave the
+    // client in Connecting (app restart used to be the only way out).
+    // connectToAddress runs its own deadline and settles through this pure
+    // helper, so the UI stops spinning and the user can tap Connect again.
 
-    @Test fun watchdog_timeout_resolves_to_retryable_disconnected() {
-        // attemptResult == null models the watchdog firing because Nordic never
-        // called back (the stale-GATT hang).
+    @Test fun attempt_with_nothing_to_report_resolves_to_retryable_disconnected() {
         val state = MeshtasticBleClient.resolveFailedConnectState("AA:BB:CC:DD:EE:FF", null)
         assertTrue(
-            "a connect timeout must reset to Disconnected (retryable), not stay Connecting",
+            "an attempt that ended with nothing to report must reset to Disconnected, not stay Connecting",
             state is ConnectionState.Disconnected,
         )
     }
@@ -202,14 +206,29 @@ class MeshtasticBleClientTest {
         )
     }
 
-    @Test fun watchdog_timeout_is_above_nordic_connect_timeout() {
-        // The outer watchdog must sit above Nordic's own connect timeout so the
-        // library gets first chance to report a clean failure before we force a
-        // reset — otherwise we'd cut off legitimate slow connects.
-        assertTrue(
-            "watchdog must exceed Nordic's connect timeout",
-            MeshtasticBleClient.WATCHDOG_TIMEOUT_MS > 15_000L,
-        )
+    @Test fun connect_is_abandoned_at_the_deadline_when_not_pairing() {
+        val deadline = MeshtasticBleClient.CONNECT_TIMEOUT_MS
+        assertFalse(MeshtasticBleClient.shouldAbandonConnect(deadline - 1, bonding = false))
+        assertTrue(MeshtasticBleClient.shouldAbandonConnect(deadline, bonding = false))
+    }
+
+    @Test fun connect_is_given_longer_while_android_is_pairing() {
+        // #203 — the attempt used to be torn down 15 s in, mid PIN entry, which
+        // also dismissed the pairing request.
+        val connect = MeshtasticBleClient.CONNECT_TIMEOUT_MS
+        val pairing = MeshtasticBleClient.PAIRING_TIMEOUT_MS
+        assertFalse(MeshtasticBleClient.shouldAbandonConnect(connect, bonding = true))
+        assertFalse(MeshtasticBleClient.shouldAbandonConnect(pairing - 1, bonding = true))
+        assertTrue(MeshtasticBleClient.shouldAbandonConnect(pairing, bonding = true))
+        // Pairing over (or failed) with the normal deadline already behind us.
+        assertTrue(MeshtasticBleClient.shouldAbandonConnect(connect + 5_000, bonding = false))
+    }
+
+    @Test fun nordic_backstop_sits_above_both_of_our_deadlines() {
+        // Our own deadline decides when an attempt is over. If Nordic's timeout
+        // fired first it would end a pairing that is still within its window.
+        assertTrue(MeshtasticBleClient.PAIRING_TIMEOUT_MS > MeshtasticBleClient.CONNECT_TIMEOUT_MS)
+        assertTrue(MeshtasticBleClient.NORDIC_BACKSTOP_TIMEOUT_MS > MeshtasticBleClient.PAIRING_TIMEOUT_MS)
     }
 
     @Test fun hard_failure_uses_recorded_failure_message_when_present() {
@@ -418,6 +437,254 @@ class MeshtasticBleClientTest {
             message = "required GATT service not found",
         )
         assertTrue(f.summaryLine(nowMs = 1_000L).contains("bond=BONDING"))
+    }
+
+    // endregion
+
+    // region #203 — what a failed connect attempt gets recorded as ----------
+
+    private fun facts(
+        timedOut: Boolean = false,
+        failStatus: Int? = null,
+        observerReason: Int? = null,
+        linkCameUp: Boolean = false,
+        pairingSeen: Boolean = false,
+        bondState: Int = BluetoothDevice.BOND_NONE,
+        serviceMissing: Boolean = false,
+        cacheRefreshed: Boolean = false,
+        services: List<String> = emptyList(),
+    ) = MeshtasticBleClient.ConnectAttemptFacts(
+        timedOut = timedOut,
+        failStatus = failStatus,
+        observerReason = observerReason,
+        linkCameUp = linkCameUp,
+        pairingSeen = pairingSeen,
+        bondState = bondState,
+        serviceMissing = serviceMissing,
+        cacheRefreshed = cacheRefreshed,
+        services = services,
+    )
+
+    @Test fun timeout_without_a_link_points_at_the_radio() {
+        val d = MeshtasticBleClient.describeConnectFailure(facts(timedOut = true))
+        assertEquals(MeshtasticBleClient.BleFailure.Phase.CONNECT, d.phase)
+        assertEquals(ConnectionObserver.REASON_TIMEOUT, d.reason)
+        assertEquals("no answer from the radio", d.message)
+        assertEquals(MeshtasticBleClient.HINT_NO_ANSWER, d.hint)
+    }
+
+    @Test fun timeout_while_pairing_asks_for_the_pin() {
+        val d = MeshtasticBleClient.describeConnectFailure(
+            facts(timedOut = true, linkCameUp = true, bondState = BluetoothDevice.BOND_BONDING),
+        )
+        assertEquals("pairing did not finish", d.message)
+        assertEquals(MeshtasticBleClient.HINT_PAIRING, d.hint)
+    }
+
+    @Test fun timeout_after_pairing_was_seen_still_asks_for_the_pin() {
+        // Android's own pairing timeout can put the bond back to NONE before
+        // our deadline; the attempt still failed on pairing.
+        val d = MeshtasticBleClient.describeConnectFailure(
+            facts(timedOut = true, linkCameUp = true, pairingSeen = true, bondState = BluetoothDevice.BOND_NONE),
+        )
+        assertEquals("pairing did not finish", d.message)
+        assertEquals(MeshtasticBleClient.HINT_PAIRING, d.hint)
+    }
+
+    @Test fun timeout_on_a_bonded_radio_whose_link_came_up_suggests_pairing_again() {
+        // The radio lost its side of the pairing (reflash, factory reset): the
+        // link comes up, encryption never does, setup stalls.
+        val d = MeshtasticBleClient.describeConnectFailure(
+            facts(timedOut = true, linkCameUp = true, bondState = BluetoothDevice.BOND_BONDED),
+        )
+        assertEquals("connected, but setup did not finish", d.message)
+        assertEquals(MeshtasticBleClient.HINT_REPAIR, d.hint)
+    }
+
+    @Test fun missing_service_after_a_cache_refresh_is_a_wrong_device() {
+        val services = listOf("00001800-0000-1000-8000-00805f9b34fb", "6e400001-b5a3-f393-e0a9-e50e24dcca9e")
+        val d = MeshtasticBleClient.describeConnectFailure(
+            facts(
+                failStatus = FailCallback.REASON_DEVICE_NOT_SUPPORTED,
+                observerReason = ConnectionObserver.REASON_NOT_SUPPORTED,
+                linkCameUp = true,
+                bondState = BluetoothDevice.BOND_BONDED,
+                serviceMissing = true,
+                cacheRefreshed = true,
+                services = services,
+            ),
+        )
+        assertEquals(MeshtasticBleClient.BleFailure.Phase.SERVICE_DISCOVERY, d.phase)
+        assertEquals(ConnectionObserver.REASON_NOT_SUPPORTED, d.reason)
+        assertEquals(services, d.services)
+        assertEquals(MeshtasticBleClient.HINT_NOT_MESHTASTIC, d.hint)
+    }
+
+    @Test fun missing_service_without_a_cache_refresh_blames_the_cached_list() {
+        // The refresh could not run, so the list may be Android's old copy.
+        val d = MeshtasticBleClient.describeConnectFailure(
+            facts(linkCameUp = true, serviceMissing = true, cacheRefreshed = false, services = listOf("1800")),
+        )
+        assertEquals(MeshtasticBleClient.BleFailure.Phase.SERVICE_DISCOVERY, d.phase)
+        assertEquals(MeshtasticBleClient.HINT_STALE_SERVICES, d.hint)
+    }
+
+    @Test fun nordic_failure_keeps_the_gatt_status() {
+        val d = MeshtasticBleClient.describeConnectFailure(
+            facts(failStatus = 133, observerReason = ConnectionObserver.REASON_UNKNOWN),
+        )
+        assertEquals(MeshtasticBleClient.BleFailure.Phase.CONNECT, d.phase)
+        assertEquals(ConnectionObserver.REASON_UNKNOWN, d.reason)
+        assertEquals(133, d.status)
+        assertEquals("connect failed: reason=-1, status=133", d.message)
+        assertNull(d.hint)
+    }
+
+    @Test fun nordic_failure_with_its_own_reason_code_has_no_gatt_status() {
+        val d = MeshtasticBleClient.describeConnectFailure(
+            facts(failStatus = FailCallback.REASON_DEVICE_DISCONNECTED, linkCameUp = true),
+        )
+        assertEquals(FailCallback.REASON_DEVICE_DISCONNECTED, d.reason)
+        assertNull(d.status)
+        assertEquals("connect failed: reason=-1", d.message)
+    }
+
+    @Test fun bluetooth_off_says_so() {
+        val d = MeshtasticBleClient.describeConnectFailure(
+            facts(failStatus = FailCallback.REASON_BLUETOOTH_DISABLED),
+        )
+        assertEquals(MeshtasticBleClient.HINT_BLUETOOTH_OFF, d.hint)
+    }
+
+    @Test fun radio_hanging_up_during_pairing_asks_for_the_pin() {
+        // A wrong PIN: the radio drops the link, Nordic reports a disconnect.
+        val d = MeshtasticBleClient.describeConnectFailure(
+            facts(failStatus = FailCallback.REASON_DEVICE_DISCONNECTED, linkCameUp = true, pairingSeen = true),
+        )
+        assertEquals(MeshtasticBleClient.HINT_PAIRING, d.hint)
+    }
+
+    @Test fun a_read_that_times_out_while_android_is_pairing_points_at_the_pairing_request() {
+        // First connect to a radio that wants a PIN: the session is up, the
+        // first read triggers pairing, and Android raises the request as a
+        // notification. Nothing arrives until someone answers it.
+        assertEquals(
+            MeshtasticBleClient.HINT_PAIRING,
+            MeshtasticBleClient.sessionFailureHint(BluetoothDevice.BOND_BONDING, pairingSeen = false),
+        )
+    }
+
+    @Test fun a_link_that_drops_after_a_failed_pairing_points_at_the_pairing_request() {
+        // Pairing left unanswered: Android gives up, the bond is back to NONE
+        // and the radio drops the link.
+        assertEquals(
+            MeshtasticBleClient.HINT_PAIRING,
+            MeshtasticBleClient.sessionFailureHint(BluetoothDevice.BOND_NONE, pairingSeen = true),
+        )
+    }
+
+    @Test fun an_ordinary_link_loss_on_a_paired_radio_has_no_pairing_hint() {
+        assertNull(MeshtasticBleClient.sessionFailureHint(BluetoothDevice.BOND_BONDED, pairingSeen = false))
+        // Paired during this session and dropped later for another reason.
+        assertNull(MeshtasticBleClient.sessionFailureHint(BluetoothDevice.BOND_BONDED, pairingSeen = true))
+        assertNull(MeshtasticBleClient.sessionFailureHint(BluetoothDevice.BOND_NONE, pairingSeen = false))
+    }
+
+    // endregion
+
+    // region #203 — failure log ---------------------------------------------
+
+    private fun MeshtasticBleClient.BleFailureLog.linkLoss(nowMs: Long) = record(
+        phase = MeshtasticBleClient.BleFailure.Phase.LINK_LOSS,
+        reason = ConnectionObserver.REASON_TIMEOUT,
+        status = null,
+        bondState = BluetoothDevice.BOND_BONDED,
+        message = "link lost: reason=10",
+        nowMs = nowMs,
+    )
+
+    @Test fun failure_log_counts_repeats_of_the_same_failure() {
+        val log = MeshtasticBleClient.BleFailureLog()
+        assertNull(log.last.value)
+        assertEquals(1, log.linkLoss(1_000L).consecutiveFailures)
+        assertEquals(2, log.linkLoss(2_000L).consecutiveFailures)
+        assertEquals(2, log.last.value?.consecutiveFailures)
+    }
+
+    @Test fun failure_log_keeps_the_last_failure_after_the_link_recovers() {
+        // A drop in the night must still be readable off the BLE pane after
+        // the automatic reconnect has worked.
+        val log = MeshtasticBleClient.BleFailureLog()
+        val dropped = log.linkLoss(1_000L)
+        log.sessionCameUp()
+        assertSame(dropped, log.last.value)
+    }
+
+    @Test fun failure_log_starts_a_new_streak_after_a_session() {
+        val log = MeshtasticBleClient.BleFailureLog()
+        log.linkLoss(1_000L)
+        log.linkLoss(2_000L)
+        log.sessionCameUp()
+        assertEquals(1, log.linkLoss(3_000L).consecutiveFailures)
+        assertEquals(2, log.linkLoss(4_000L).consecutiveFailures)
+    }
+
+    @Test fun failure_log_records_a_draft_with_its_hint_and_services() {
+        val log = MeshtasticBleClient.BleFailureLog()
+        val draft = MeshtasticBleClient.describeConnectFailure(
+            facts(linkCameUp = true, serviceMissing = true, cacheRefreshed = true, services = listOf("1800", "1801")),
+        )
+        val failure = log.record(draft, bondState = BluetoothDevice.BOND_BONDED, nowMs = 5_000L)
+        assertEquals(MeshtasticBleClient.BleFailure.Phase.SERVICE_DISCOVERY, failure.phase)
+        assertEquals(listOf("1800", "1801"), failure.discoveredServices)
+        assertEquals(MeshtasticBleClient.HINT_NOT_MESHTASTIC, failure.hint)
+        assertEquals(BluetoothDevice.BOND_BONDED, failure.bondState)
+        assertEquals(5_000L, failure.timestampMs)
+    }
+
+    // endregion
+
+    // region #203 — diagnostics text and scan names -------------------------
+
+    @Test fun diagnostics_text_carries_the_hint_and_the_discovered_services() {
+        val failure = MeshtasticBleClient.BleFailure(
+            timestampMs = 1_000L,
+            phase = MeshtasticBleClient.BleFailure.Phase.SERVICE_DISCOVERY,
+            nordicReason = ConnectionObserver.REASON_NOT_SUPPORTED,
+            gattStatus = null,
+            bondState = BluetoothDevice.BOND_BONDED,
+            consecutiveFailures = 1,
+            message = "Meshtastic service not found on this device",
+            discoveredServices = listOf("1800", "6e400001"),
+            hint = MeshtasticBleClient.HINT_NOT_MESHTASTIC,
+        )
+        val text = MeshtasticBleClient.formatDiagnostics(failure, listOf("1 I #3 Connected", "2 W #3 gone"), nowMs = 2_000L)
+        val lines = text.lines()
+        assertEquals("Last failure: SERVICE_DISCOVERY reason=4 status=-, bond=BONDED, 1s ago", lines[0])
+        assertEquals("Meshtastic service not found on this device", lines[1])
+        assertEquals(MeshtasticBleClient.HINT_NOT_MESHTASTIC, lines[2])
+        assertEquals("Discovered services: 1800, 6e400001", lines[3])
+        assertTrue(text.endsWith("--- BLE log (last 2) ---\n1 I #3 Connected\n2 W #3 gone"))
+    }
+
+    @Test fun diagnostics_text_without_a_failure_says_so() {
+        val text = MeshtasticBleClient.formatDiagnostics(null, emptyList(), nowMs = 0L)
+        assertTrue(text.startsWith("No BLE failures recorded"))
+    }
+
+    @Test fun scan_lists_a_radio_under_the_name_it_advertises_now() {
+        // Android remembers a name per address; a board reflashed from
+        // MeshCore to Meshtastic kept its old one in the scan list.
+        assertEquals(
+            "Meshtastic_02d8",
+            MeshtasticBleClient.scanDisplayName(advertised = "Meshtastic_02d8", cached = "MeshCore-25C70E7E"),
+        )
+    }
+
+    @Test fun scan_falls_back_to_the_remembered_name() {
+        assertEquals("Heltec", MeshtasticBleClient.scanDisplayName(advertised = null, cached = "Heltec"))
+        assertEquals("Heltec", MeshtasticBleClient.scanDisplayName(advertised = "  ", cached = "Heltec"))
+        assertNull(MeshtasticBleClient.scanDisplayName(advertised = null, cached = ""))
     }
 
     // endregion
