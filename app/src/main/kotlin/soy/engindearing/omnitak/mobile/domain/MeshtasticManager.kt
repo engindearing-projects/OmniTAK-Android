@@ -273,18 +273,46 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
         frameCollector = scope.launch {
             client.frames.collect { frame -> dispatchFrame(frame) }
         }
-        val ok = client.connectToAddress(deviceAddress)
-        if (ok) {
-            // #203 — a successful connect (manual tap or automatic retry)
-            // means whatever streak of failures preceded it is over.
-            _reconnectAttempt.value = 0
-            // Critical Meshtastic handshake: ask the radio to dump its
-            // config + node database. Without this the radio doesn't
-            // push any state and the node list stays empty.
-            client.sendToRadio(buildWantConfig())
-            Log.i(TAG, "TX want_config_id (BLE)")
+        var ok = client.connectToAddress(deviceAddress)
+        // #203 — a connect that died on a Bluetooth stack error before the
+        // link was up (status 133 and its relatives) usually works on the
+        // next try, so try again right away instead of leaving it to the
+        // reconnect loop's next pass. Not if the operator disconnected or
+        // picked another radio in the meantime.
+        var quickRetries = 0
+        while (!ok && quickRetries < BLE_QUICK_RETRIES && client.lastAttemptFailedBeforeLinkUp &&
+            reconnectTargetAddress == deviceAddress && _activeTransport.value == MeshConnectionType.BLUETOOTH
+        ) {
+            quickRetries++
+            delay(BLE_QUICK_RETRY_DELAY_MS)
+            Log.i(TAG, "BLE connect: quick retry $quickRetries for $deviceAddress")
+            ok = client.connectToAddress(deviceAddress)
         }
-        return ok
+        if (!ok) return false
+        // Critical Meshtastic handshake: ask the radio to dump its config +
+        // node database. Without this the radio doesn't push any state and
+        // the node list stays empty, so a session whose handshake was not
+        // delivered is not kept: it is dropped and the reconnect loop starts
+        // another one.
+        if (!client.sendToRadio(buildWantConfig())) {
+            Log.w(TAG, "want_config_id was not delivered (BLE); dropping the session")
+            client.abandonSession("the handshake was not delivered")
+            return false
+        }
+        Log.i(TAG, "TX want_config_id (BLE)")
+        // #203 — a session that is up (manual tap or automatic retry) means
+        // whatever streak of failures preceded it is over.
+        _reconnectAttempt.value = 0
+        return true
+    }
+
+    /**
+     * [connectBle] on the manager's own scope, for callers whose own scope
+     * can end mid-connect. The BLE pane launched the connect in the screen's
+     * scope: leaving the pane cancelled it, which now ends the attempt.
+     */
+    fun connectBleInBackground(deviceAddress: String) {
+        scope.launch { connectBle(deviceAddress) }
     }
 
     /**
@@ -821,8 +849,14 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
         private const val BLE_RECONNECT_INTERVAL_MS: Long = 20_000
 
         /** #203 — upper bound on one automatic reconnect attempt, above the
-         *  BLE client's own pairing deadline plus the handshake write. */
-        private const val BLE_RECONNECT_ATTEMPT_CAP_MS: Long = 120_000
+         *  BLE client's own deadlines (a pairing, the setup after it, quick
+         *  retries and the handshake write). */
+        private const val BLE_RECONNECT_ATTEMPT_CAP_MS: Long = 180_000
+
+        /** #203 — immediate retries after a connect that failed on a stack
+         *  error before the link was up. */
+        private const val BLE_QUICK_RETRIES: Int = 2
+        private const val BLE_QUICK_RETRY_DELAY_MS: Long = 300
         private const val PORTNUM_TEXT_MESSAGE_APP = 1
         private const val PORTNUM_POSITION_APP = 3
         private const val PORTNUM_ADMIN_APP = 6

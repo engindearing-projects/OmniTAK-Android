@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -195,38 +196,26 @@ class MeshtasticBleClient(context: Context) {
     // endregion
 
     // region Link bookkeeping -------------------------------------------
+    //
+    // [link] and [_state] change together under [linkLock]: a callback from a
+    // link only gets to write the state if that link is still the current
+    // one at the moment of the write.
 
     private fun currentLink(): Link? = synchronized(linkLock) { link }
 
     private fun isCurrent(l: Link): Boolean = synchronized(linkLock) { link === l }
 
-    /** Makes [next] the current link and returns the one it replaced. */
-    private fun swapLink(next: Link?): Link? = synchronized(linkLock) {
-        val old = link
-        link = next
-        old
-    }
-
-    /** Stops [l] being the current link. False when something already replaced it. */
-    private fun releaseLink(l: Link): Boolean = synchronized(linkLock) {
-        if (link === l) {
-            link = null
-            true
-        } else {
-            false
-        }
-    }
-
-    private fun newLink(address: String): Link = Link(address, synchronized(linkLock) { ++linkSeq })
+    private fun newLink(address: String, device: BluetoothDevice): Link =
+        Link(address, device, synchronized(linkLock) { ++linkSeq })
 
     // endregion
 
     // region Connect / Disconnect ---------------------------------------
 
     /**
-     * Connect to the radio at [address]. Suspends until the session is ready
-     * or the attempt has failed; it always returns, and never leaves [state]
-     * on Connecting.
+     * Connect to the radio at [address]: one attempt on a link of its own.
+     * Suspends until the session is ready or the attempt has failed; it
+     * always returns, and never leaves [state] on Connecting.
      *
      * A newer call replaces an attempt that is still in flight: the older
      * one returns false and leaves [state] to the newer one.
@@ -235,28 +224,48 @@ class MeshtasticBleClient(context: Context) {
         val adapter = bluetoothAdapter ?: return false
         val device = runCatching { adapter.getRemoteDevice(address) }.getOrNull() ?: return false
 
-        val attempt = runCatching { newLink(address) }.getOrElse { e ->
+        val attempt = runCatching { newLink(address, device) }.getOrElse { e ->
             Log.w(TAG, "BLE link could not be created: ${e.message}")
             return false
         }
-        swapLink(attempt)?.retire()
+        lastAttemptFailedBeforeLinkUp = false
+        val previous = synchronized(linkLock) {
+            val old = link
+            link = attempt
+            _state.value = ConnectionState.Connecting(address)
+            old
+        }
         stopBackgroundJobs()
-        _state.value = ConnectionState.Connecting(address)
 
         val end = try {
-            awaitConnect(attempt, device)
+            if (previous != null) {
+                previous.retire()
+                // Android wants a moment between closing one GATT client and
+                // opening the next to the same radio (Nordic waits 200 ms at
+                // the same point when it reuses a manager).
+                delay(GATT_SETTLE_MS)
+            }
+            awaitWithDeadline<ConnectEnd>(attempt, CONNECT_TIMEOUT_MS, onClosed = ConnectEnd.Closed) { complete ->
+                starting("connect", { complete(ConnectEnd.Failed(FailCallback.REASON_REQUEST_FAILED)) }) {
+                    attempt.startConnect(complete)
+                }
+            } ?: ConnectEnd.TimedOut
         } catch (e: CancellationException) {
-            if (releaseLink(attempt)) _state.value = ConnectionState.Disconnected
+            synchronized(linkLock) {
+                if (link === attempt) {
+                    link = null
+                    _state.value = ConnectionState.Disconnected
+                }
+            }
             attempt.retire()
             throw e
         }
 
         // On success the link's observer (onLinkReady) already flipped us to
         // Connected and started the read loops.
-        if (end is ConnectEnd.Ready && attempt.sessionUp && isCurrent(attempt)) return true
+        if (attempt.sessionUp && isCurrent(attempt)) return true
 
-        val wasCurrent = releaseLink(attempt)
-        val bondState = runCatching { device.bondState }.getOrDefault(BluetoothDevice.BOND_NONE)
+        val bondState = attempt.bondState()
         val servicesSeen = attempt.servicesSeen
         val facts = ConnectAttemptFacts(
             timedOut = end is ConnectEnd.TimedOut,
@@ -269,55 +278,75 @@ class MeshtasticBleClient(context: Context) {
             cacheRefreshed = attempt.cacheRefreshed,
             services = servicesSeen.orEmpty(),
         )
+        val draft = describeConnectFailure(facts)
+        val failure = synchronized(linkLock) {
+            when {
+                link !== attempt -> null
+                // Setup finished between the deadline passing and this line:
+                // onLinkReady has the session, so it is a success.
+                attempt.sessionUp -> return true
+                else -> {
+                    link = null
+                    failures.record(draft, bondState).also { _state.value = ConnectionState.Failed(it.message) }
+                }
+            }
+        }
         attempt.retire()
         // Replaced by a newer attempt, disconnected by the operator, or the
         // session came up and dropped again before we got here: the state and
         // the failure record belong to whoever did that.
-        if (!wasCurrent) return false
+        if (failure == null) return false
         stopBackgroundJobs()
-
-        val failure = failures.record(describeConnectFailure(facts), bondState)
+        lastAttemptFailedBeforeLinkUp = isQuickRetryable(facts)
         Log.w(TAG, "BLE connect to $address failed: ${failure.message}")
-        _state.value = resolveFailedConnectState(address, false, failure)
         return false
     }
 
     /**
-     * Starts the connect on [l] and waits for it to end. Nordic reports
-     * success and most failures itself; the loop here is the deadline. It is
-     * [CONNECT_TIMEOUT_MS] normally and [PAIRING_TIMEOUT_MS] while Android is
-     * pairing with the radio, so an operator reading the PIN off the radio's
-     * screen is not cut off mid-entry.
+     * True when the last [connectToAddress] failed on an error from the
+     * Bluetooth stack before the link was up (status 133 and its relatives).
+     * Those usually clear at once, so the caller may try again right away
+     * instead of waiting for its next scheduled attempt.
      */
-    private suspend fun awaitConnect(l: Link, device: BluetoothDevice): ConnectEnd = coroutineScope {
-        val result = async {
-            l.awaits.await<ConnectEnd>(onClosed = ConnectEnd.Closed) { complete ->
-                starting("connect", { complete(ConnectEnd.Failed(FailCallback.REASON_REQUEST_FAILED)) }) {
-                    l.startConnect(device, complete)
-                }
-            }
-        }
-        val startedAt = SystemClock.elapsedRealtime()
-        var end: ConnectEnd? = null
-        while (end == null) {
+    @Volatile var lastAttemptFailedBeforeLinkUp: Boolean = false
+        private set
+
+    /**
+     * Waits for a request on [l] and gives up when it has made no progress
+     * for [idleLimitMs]. Time spent pairing does not count against the limit
+     * (see [ProgressDeadline]), so an operator reading the PIN off the radio
+     * is not cut off, and neither is the setup that follows the pairing.
+     * Returns null when the deadline passes.
+     */
+    private suspend fun <T : Any> awaitWithDeadline(
+        l: Link,
+        idleLimitMs: Long,
+        onClosed: T,
+        start: (complete: (T) -> Unit) -> Unit,
+    ): T? = coroutineScope {
+        val result = async { l.awaits.await(onClosed, start) }
+        val deadline = ProgressDeadline(SystemClock.elapsedRealtime(), idleLimitMs, PAIRING_TIMEOUT_MS)
+        var end: T? = null
+        var expired = false
+        while (end == null && !expired) {
             end = withTimeoutOrNull(WATCHDOG_TICK_MS) { result.await() }
-            if (end != null) break
-            val bonding = runCatching { device.bondState == BluetoothDevice.BOND_BONDING }.getOrDefault(false)
-            if (bonding) l.pairingSeen = true
-            val elapsed = SystemClock.elapsedRealtime() - startedAt
-            if (shouldAbandonConnect(elapsed, bonding)) {
+            if (end == null && deadline.expired(SystemClock.elapsedRealtime(), l.isBonding())) {
                 result.cancel()
-                end = ConnectEnd.TimedOut
+                expired = true
             }
         }
-        checkNotNull(end)
+        end
     }
 
     suspend fun disconnectClean() {
-        val l = swapLink(null)
+        val l = synchronized(linkLock) {
+            val old = link
+            link = null
+            old
+        }
         stopBackgroundJobs()
-        if (l != null) {
-            if (l.sessionUp) {
+        try {
+            if (l != null && l.sessionUp) {
                 // Ask the radio for an orderly disconnect, but never wait on
                 // it for long: the link may already be gone.
                 withTimeoutOrNull(DISCONNECT_TIMEOUT_MS) {
@@ -326,10 +355,23 @@ class MeshtasticBleClient(context: Context) {
                     }
                 }
             }
-            l.retire()
+        } finally {
+            l?.retire()
+            // A connect started while we were tearing down owns the state now.
+            synchronized(linkLock) {
+                if (link == null) _state.value = ConnectionState.Disconnected
+            }
         }
-        // A connect started while we were tearing down owns the state now.
-        if (currentLink() == null) _state.value = ConnectionState.Disconnected
+    }
+
+    /**
+     * Ends the current session, if there is one, as a failure, so that the
+     * reconnect loop starts a new one. For callers that find out the session
+     * is not usable: the handshake write that was not delivered, for one.
+     */
+    fun abandonSession(message: String) {
+        val l = currentLink() ?: return
+        dropDeadLink(l, BleFailure.Phase.INIT, FailCallback.REASON_REQUEST_FAILED, message)
     }
 
     /**
@@ -354,13 +396,35 @@ class MeshtasticBleClient(context: Context) {
 
     /** Setup finished on [l]: hand the session to the app. */
     private fun onLinkReady(l: Link) {
-        // A link that came up without the Meshtastic characteristics is not a
-        // session; connectToAddress reports it as a failed attempt.
-        if (!l.usable || !isCurrent(l)) return
-        l.sessionUp = true
+        val handedOver = synchronized(linkLock) {
+            // A link that came up without the Meshtastic characteristics is
+            // not a session; connectToAddress reports it as a failed attempt.
+            if (link !== l || !l.usable) {
+                false
+            } else {
+                l.sessionUp = true
+                _rssi.value = 0
+                _state.value = ConnectionState.Connected(l.address, useTLS = false)
+                true
+            }
+        }
+        if (!handedOver) return
         failures.sessionCameUp()
-        _rssi.value = 0
-        _state.value = ConnectionState.Connected(l.address, useTLS = false)
+        // The session is up without fromNum notifications: it still works on
+        // the poll, and this is where that gets written down (once, here,
+        // rather than from the request's own callback while the connect is
+        // still being decided).
+        l.notifyEnableStatus?.let { status ->
+            val bondState = l.bondState()
+            failures.record(
+                phase = BleFailure.Phase.INIT,
+                reason = status,
+                status = null,
+                bondState = bondState,
+                message = "fromNum notification enable failed: status=$status",
+                hint = sessionFailureHint(bondState, l.pairingSeen),
+            )
+        }
         // Safety-net polling loop (iOS uses a 1.0s Timer; we mirror that),
         // plus a first drain: the radio may already have queued frames.
         startPollLoop(l)
@@ -368,29 +432,69 @@ class MeshtasticBleClient(context: Context) {
     }
 
     /** The GATT link of [l] is gone. */
-    private fun onLinkDown(l: Link, device: BluetoothDevice, reason: Int) {
+    private fun onLinkDown(l: Link, reason: Int) {
         // Before the session is up, connectToAddress owns the outcome.
         if (!l.sessionUp) return
-        val wasCurrent = releaseLink(l)
-        l.retire()
-        // Torn down by us (operator disconnect, or replaced by a new attempt):
-        // not a failure, and not this link's state to set.
-        if (!wasCurrent) return
-        stopBackgroundJobs()
-        // Link loss, the radio hanging up, a supervision timeout: this is the
-        // "drops after about an hour" field report and gets recorded.
-        if (reason != ConnectionObserver.REASON_TERMINATE_LOCAL_HOST) {
-            val bondState = runCatching { device.bondState }.getOrDefault(BluetoothDevice.BOND_NONE)
-            failures.record(
-                phase = BleFailure.Phase.LINK_LOSS,
-                reason = reason,
-                status = null,
-                bondState = bondState,
-                message = "link lost: reason=$reason",
-                hint = sessionFailureHint(bondState, l.pairingSeen),
-            )
+        val bondState = l.bondState()
+        // A teardown of ours (operator disconnect, replaced by a new attempt,
+        // a dead session we dropped) released the link first and never gets
+        // past this check. Whatever does is a drop we did not ask for: link
+        // loss, the radio hanging up, Android ending the link itself, or
+        // Bluetooth being switched off. This is the "drops after about an
+        // hour" field report and gets recorded.
+        val wasCurrent = synchronized(linkLock) {
+            if (link !== l) {
+                false
+            } else {
+                link = null
+                failures.record(
+                    phase = BleFailure.Phase.LINK_LOSS,
+                    reason = reason,
+                    status = null,
+                    bondState = bondState,
+                    message = "link lost: reason=$reason",
+                    hint = if (bluetoothAdapter?.isEnabled == false) {
+                        HINT_BLUETOOTH_OFF
+                    } else {
+                        sessionFailureHint(bondState, l.pairingSeen)
+                    },
+                )
+                _state.value = ConnectionState.Disconnected
+                true
+            }
         }
-        _state.value = ConnectionState.Disconnected
+        l.retire()
+        if (wasCurrent) stopBackgroundJobs()
+    }
+
+    /**
+     * Gives up on [l] as a session that stopped working while its GATT link
+     * stayed up, so the reconnect loop starts a new one. Does nothing when
+     * [l] is no longer the current link.
+     */
+    private fun dropDeadLink(l: Link, phase: BleFailure.Phase, reason: Int, message: String) {
+        val bondState = l.bondState()
+        val dropped = synchronized(linkLock) {
+            if (link !== l) {
+                false
+            } else {
+                link = null
+                failures.record(
+                    phase = phase,
+                    reason = reason,
+                    status = null,
+                    bondState = bondState,
+                    message = message,
+                    hint = sessionFailureHint(bondState, l.pairingSeen),
+                )
+                _state.value = ConnectionState.Disconnected
+                true
+            }
+        }
+        if (!dropped) return
+        Log.w(TAG, "BLE session dropped: $message")
+        l.retire()
+        stopBackgroundJobs()
     }
 
     /**
@@ -416,7 +520,8 @@ class MeshtasticBleClient(context: Context) {
      * Write a serialized ToRadio protobuf to the radio. Splits into
      * chunks of [CHUNK_SIZE_BYTES] if needed and uses NO_RESPONSE
      * writes when the characteristic supports them (faster). Returns
-     * false when there is no session, or as soon as the link drops.
+     * false when there is no session, as soon as the link drops, or when a
+     * write goes [WRITE_TIMEOUT_MS] without an answer.
      */
     suspend fun sendToRadio(bytes: ByteArray): Boolean {
         val l = currentLink() ?: return false
@@ -430,8 +535,15 @@ class MeshtasticBleClient(context: Context) {
         }
         val chunks = chunkPayload(bytes, CHUNK_SIZE_BYTES)
         for (chunk in chunks) {
-            val ok = l.awaits.await(onClosed = false) { complete ->
+            val ok = awaitWithDeadline(l, WRITE_TIMEOUT_MS, onClosed = false) { complete ->
                 starting("write", { complete(false) }) { l.startWrite(ch, chunk, writeType, complete) }
+            }
+            if (ok == null) {
+                // Neither done nor failed. Nordic can drop a request without
+                // telling anyone (a failed pairing does it), and while one
+                // request sits unanswered nothing queued behind it runs.
+                dropDeadLink(l, BleFailure.Phase.WRITE_TIMEOUT, FailCallback.REASON_TIMEOUT, "the radio stopped answering writes")
+                return false
             }
             if (!ok) return false
         }
@@ -443,11 +555,15 @@ class MeshtasticBleClient(context: Context) {
     // region Drain / Poll loops -----------------------------------------
 
     private fun triggerDrain(l: Link) {
+        if (!isCurrent(l)) return
         synchronized(jobLock) {
             if (drainJob?.isActive == true) return
             drainJob = scope.launch { drainFromRadio(l) }
         }
     }
+
+    /** How one fromRadio read ended. */
+    private enum class ReadEnd { FRAME, EMPTY, FAILED }
 
     /**
      * Read fromRadio repeatedly until an empty payload is returned.
@@ -457,36 +573,69 @@ class MeshtasticBleClient(context: Context) {
     private suspend fun drainFromRadio(l: Link) {
         repeat(MAX_DRAIN_PER_BATCH) {
             val ch = l.fromRadio ?: return
-            val data = readOnce(l, ch) ?: return
-            val payload = data.value ?: ByteArray(0)
-            if (payload.isEmpty()) {
-                // The radio answered a moment ago and nothing is queued: the
-                // one point where an RSSI read cannot hold anything up.
-                l.sampleRssiIfDue { rssi -> _rssi.value = rssi }
-                return
+            when (readOnce(l, ch)) {
+                ReadEnd.FRAME -> l.readFailures = 0
+                ReadEnd.EMPTY -> {
+                    l.readFailures = 0
+                    // The radio answered a moment ago and nothing is queued:
+                    // the one point where an RSSI read cannot hold anything up.
+                    l.sampleRssiIfDue { rssi -> _rssi.value = rssi }
+                    return
+                }
+                ReadEnd.FAILED -> {
+                    // Reads that keep failing on a link that stays up (a
+                    // pairing the radio no longer honours answers every read
+                    // with an error) are a session that will never carry data.
+                    if (shouldDropAfterReadFailures(++l.readFailures, l.isBonding())) {
+                        dropDeadLink(l, BleFailure.Phase.READ_TIMEOUT, FailCallback.REASON_REQUEST_FAILED, "the radio keeps refusing reads")
+                    }
+                    return
+                }
+                null -> {
+                    // No answer and no failure for [READ_AWAIT_MS], and not
+                    // because of a pairing. Nordic keeps an unanswered read in
+                    // flight and runs nothing queued behind it, so this
+                    // session cannot do anything more.
+                    dropDeadLink(l, BleFailure.Phase.READ_TIMEOUT, FailCallback.REASON_TIMEOUT, "the radio stopped answering reads")
+                    return
+                }
             }
-            _bytesReceived.value += payload.size.toLong()
-            _frames.tryEmit(payload)
         }
     }
 
     /**
-     * One fromRadio read, or null when it failed, timed out or the link went
-     * away. The read runs inside an atomic request queue because a bare
+     * One fromRadio read; null when it got no answer of any kind.
+     *
+     * The read runs inside an atomic request queue because a bare
      * `readCharacteristic()` cannot carry a timeout
-     * ([no.nordicsemi.android.ble.ReadRequest] is not a `TimeoutableRequest`),
-     * and a read that never gets its GATT callback would hold up every
-     * request queued behind it.
+     * ([no.nordicsemi.android.ble.ReadRequest] is not a `TimeoutableRequest`).
+     * That timeout reports a slow read ([BleFailure.Phase.READ_TIMEOUT]); it
+     * does not free the queue, which stays behind the unanswered read until
+     * its callback arrives or the link goes down. The wait here is what ends
+     * a session stuck that way.
      */
-    private suspend fun readOnce(l: Link, ch: BluetoothGattCharacteristic): Data? =
-        l.awaits.await<Data?>(onClosed = null) { complete ->
-            starting("read", { complete(null) }) {
+    private suspend fun readOnce(l: Link, ch: BluetoothGattCharacteristic): ReadEnd? =
+        awaitWithDeadline(l, READ_AWAIT_MS, onClosed = ReadEnd.FAILED) { complete ->
+            starting("read", { complete(ReadEnd.FAILED) }) {
                 l.startRead(
                     ch = ch,
-                    onData = { data -> complete(data) },
-                    onFail = { device, status ->
+                    onData = { data ->
+                        val payload = data.value ?: ByteArray(0)
+                        if (payload.isEmpty()) {
+                            complete(ReadEnd.EMPTY)
+                        } else {
+                            // Delivered from here, not by whoever awaited the
+                            // read: an answer that comes after the wait was
+                            // given up (a read held up by pairing) still
+                            // carries a frame the radio has taken off its queue.
+                            deliverFrame(l, payload)
+                            complete(ReadEnd.FRAME)
+                        }
+                    },
+                    onFail = { status ->
+                        Log.w(TAG, "fromRadio read failed: $status")
                         if (status == FailCallback.REASON_TIMEOUT && isCurrent(l)) {
-                            val bondState = runCatching { device.bondState }.getOrDefault(BluetoothDevice.BOND_NONE)
+                            val bondState = l.bondState()
                             failures.record(
                                 phase = BleFailure.Phase.READ_TIMEOUT,
                                 reason = status,
@@ -496,12 +645,17 @@ class MeshtasticBleClient(context: Context) {
                                 hint = sessionFailureHint(bondState, l.pairingSeen),
                             )
                         }
-                        Log.w(TAG, "fromRadio read failed: $status")
-                        complete(null)
+                        complete(ReadEnd.FAILED)
                     },
                 )
             }
         }
+
+    private fun deliverFrame(l: Link, payload: ByteArray) {
+        if (!isCurrent(l)) return
+        _bytesReceived.update { it + payload.size.toLong() }
+        _frames.tryEmit(payload)
+    }
 
     private fun startPollLoop(l: Link) {
         synchronized(jobLock) {
@@ -546,7 +700,11 @@ class MeshtasticBleClient(context: Context) {
      * One connect attempt and, if it succeeds, the session that follows.
      * Never reused: see the class comment.
      */
-    private inner class Link(val address: String, private val seq: Int) : BleManager(appContext) {
+    private inner class Link(
+        val address: String,
+        private val device: BluetoothDevice,
+        private val seq: Int,
+    ) : BleManager(appContext) {
 
         val awaits = BleLinkAwaits()
 
@@ -570,6 +728,12 @@ class MeshtasticBleClient(context: Context) {
          *  service or its characteristics; null when the last one had them. */
         @Volatile var servicesSeen: List<String>? = null
 
+        /** Status the fromNum notification subscribe failed with, if it did. */
+        @Volatile var notifyEnableStatus: Int? = null
+
+        /** fromRadio reads that failed in a row on this link. */
+        @Volatile var readFailures = 0
+
         @Volatile private var cacheRefreshRequested = false
 
         @Volatile private var rssiPending = false
@@ -582,6 +746,12 @@ class MeshtasticBleClient(context: Context) {
 
         /** Need toRadio to send and at least one of fromRadio/fromNum to receive. */
         val usable: Boolean get() = toRadio != null && (fromRadio != null || fromNum != null)
+
+        fun bondState(): Int = runCatching { device.bondState }.getOrDefault(BluetoothDevice.BOND_NONE)
+
+        /** Android is pairing with the radio right now. */
+        fun isBonding(): Boolean =
+            (bondState() == BluetoothDevice.BOND_BONDING).also { if (it) pairingSeen = true }
 
         init {
             setConnectionObserver(object : ConnectionObserver {
@@ -597,7 +767,7 @@ class MeshtasticBleClient(context: Context) {
                 override fun onDeviceDisconnecting(device: BluetoothDevice) = Unit
                 override fun onDeviceDisconnected(device: BluetoothDevice, reason: Int) {
                     observerReason = reason
-                    onLinkDown(this@Link, device, reason)
+                    onLinkDown(this@Link, reason)
                 }
             })
             setBondingObserver(object : BondingObserver {
@@ -613,11 +783,15 @@ class MeshtasticBleClient(context: Context) {
 
         // region requests
 
-        fun startConnect(device: BluetoothDevice, complete: (ConnectEnd) -> Unit) {
+        fun startConnect(complete: (ConnectEnd) -> Unit) {
+            // No Nordic retry: it re-runs the connect from a timer that nothing
+            // can cancel, so a retry scheduled just before retire() would open
+            // a new GATT client on a link that is already gone. A connect that
+            // fails on a stack error is tried again by the caller instead (see
+            // lastAttemptFailedBeforeLinkUp), on a link of its own.
             connect(device)
-                // Backstop only: awaitConnect's own deadline always fires first.
+                // Backstop only: connectToAddress's own deadline fires first.
                 .timeout(NORDIC_BACKSTOP_TIMEOUT_MS)
-                .retry(2, 200)
                 .useAutoConnect(false)
                 .done { complete(ConnectEnd.Ready) }
                 .fail { _, status -> complete(ConnectEnd.Failed(status)) }
@@ -649,12 +823,12 @@ class MeshtasticBleClient(context: Context) {
         fun startRead(
             ch: BluetoothGattCharacteristic,
             onData: (Data) -> Unit,
-            onFail: (BluetoothDevice, Int) -> Unit,
+            onFail: (Int) -> Unit,
         ) {
             beginAtomicRequestQueue()
                 .add(readCharacteristic(ch).with { _, data -> onData(data) })
                 .timeout(READ_TIMEOUT_MS)
-                .fail { device, status -> onFail(device, status) }
+                .fail { _, status -> onFail(status) }
                 .enqueue()
         }
 
@@ -717,8 +891,11 @@ class MeshtasticBleClient(context: Context) {
             // #203 — buffer every line (VERBOSE and up, per getMinLogPriority)
             // regardless of the toggle below, so "Copy diagnostics" has recent
             // BLE chatter even when verbose forwarding to Logcat was off when
-            // the failure happened. The prefix is the attempt number.
-            val line = "#$seq $message"
+            // the failure happened. The prefix is the attempt number. Nordic
+            // prints every value it reads and writes; those are radio traffic
+            // (channel keys, positions, messages) and this text gets pasted
+            // into bug reports, so only their sizes are kept.
+            val line = "#$seq ${redactPayload(message)}"
             appendLogLine(priority, line)
             if (priority >= Log.INFO) {
                 Log.println(priority, TAG, line)
@@ -795,18 +972,11 @@ class MeshtasticBleClient(context: Context) {
                     if (sessionUp) triggerDrain(this@Link)
                 }
                 enableNotifications(ch)
-                    .fail { device, status ->
+                    .fail { _, status ->
+                        // Recorded by onLinkReady if the session comes up
+                        // anyway; a connect that fails reports itself.
                         Log.w(TAG, "fromNum notify enable failed: $status")
-                        if (isCurrent(this@Link)) {
-                            failures.record(
-                                phase = BleFailure.Phase.INIT,
-                                reason = status,
-                                status = null,
-                                bondState = device.bondState,
-                                message = "fromNum notification enable failed: status=$status",
-                                hint = sessionFailureHint(device.bondState, pairingSeen),
-                            )
-                        }
+                        notifyEnableStatus = status
                     }
                     .enqueue()
             }
@@ -889,7 +1059,7 @@ class MeshtasticBleClient(context: Context) {
          *  message on the BLE pane. */
         val hint: String? = null,
     ) {
-        enum class Phase { CONNECT, SERVICE_DISCOVERY, INIT, LINK_LOSS, READ_TIMEOUT }
+        enum class Phase { CONNECT, SERVICE_DISCOVERY, INIT, LINK_LOSS, READ_TIMEOUT, WRITE_TIMEOUT }
 
         /** "Last failure: <phase> reason=<n> status=<n or ->, bond=<NONE/BONDING/BONDED>, <relative time>" */
         fun summaryLine(nowMs: Long = System.currentTimeMillis()): String {
@@ -1014,9 +1184,38 @@ class MeshtasticBleClient(context: Context) {
         }
     }
 
+    /**
+     * When to give up on something that should finish within [idleLimitMs]
+     * unless Android is pairing with the radio (#175, #203).
+     *
+     * The limit runs from the start, or from the last moment a pairing was
+     * seen: entering a PIN takes longer than the limit, and what follows a
+     * pairing (service discovery, setup, the request being sent again) needs
+     * the whole limit once more. A single pairing may take [pairingLimitMs].
+     */
+    internal class ProgressDeadline(
+        startedAtMs: Long,
+        private val idleLimitMs: Long,
+        private val pairingLimitMs: Long,
+    ) {
+        private var idleSinceMs = startedAtMs
+        private var pairingSinceMs: Long? = null
+
+        /** Feed one observation; true when it is time to give up. */
+        fun expired(nowMs: Long, pairing: Boolean): Boolean {
+            if (!pairing) {
+                pairingSinceMs = null
+                return nowMs - idleSinceMs >= idleLimitMs
+            }
+            val since = pairingSinceMs ?: nowMs.also { pairingSinceMs = it }
+            idleSinceMs = nowMs
+            return nowMs - since >= pairingLimitMs
+        }
+    }
+
     /** What a connect attempt knew when it ended without a session. */
     internal data class ConnectAttemptFacts(
-        /** Our own deadline passed (see [shouldAbandonConnect]). */
+        /** Our own deadline passed (see [ProgressDeadline]). */
         val timedOut: Boolean,
         /** Nordic `FailCallback` status, when Nordic reported the failure. */
         val failStatus: Int?,
@@ -1048,32 +1247,6 @@ class MeshtasticBleClient(context: Context) {
 
     companion object {
         private const val TAG = "MeshBle"
-
-        /**
-         * #175 — pure decision for the post-connect state when a connect attempt
-         * did NOT succeed. Lives in the companion so it is unit-testable without
-         * a live BLE stack.
-         *
-         * @param attemptResult `false` = the attempt failed (Nordic reported it,
-         *   or our own deadline passed); `null` = it ended with nothing to
-         *   report. Neither is a state that would leave the user pinned in
-         *   "Connecting": a failure surfaces its reason and the next connect
-         *   starts from a new link, and `null` resets to
-         *   [ConnectionState.Disconnected].
-         * @param failure #203 — the failure recorded for this attempt. Its
-         *   message wins over the generic placeholder below so the operator —
-         *   and the "Last failure" row on the BLE pane — see the real reason
-         *   instead of a bare "connect failed for $address".
-         */
-        internal fun resolveFailedConnectState(
-            address: String,
-            attemptResult: Boolean?,
-            failure: BleFailure? = null,
-        ): ConnectionState = when (attemptResult) {
-            null -> ConnectionState.Disconnected
-            false -> ConnectionState.Failed(failure?.message ?: "connect failed for $address")
-            true -> ConnectionState.Disconnected // not used on the failure path
-        }
 
         /**
          * #208 — resolves the human-readable name to show for a Meshtastic
@@ -1115,28 +1288,63 @@ class MeshtasticBleClient(context: Context) {
         const val REQUESTED_MTU: Int = 512
         const val CHUNK_SIZE_BYTES: Int = 500
 
-        /** How long a connect attempt may take when no pairing is going on. */
+        /** How long a connect attempt may go without getting anywhere when
+         *  no pairing is going on (#175: it must never sit on Connecting). */
         internal const val CONNECT_TIMEOUT_MS: Long = 15_000
 
-        /** #203 — how long a connect attempt may take while Android is pairing
-         *  with the radio. Reading a six-digit PIN off the radio and typing it
-         *  in does not fit in [CONNECT_TIMEOUT_MS]; the attempt used to be torn
-         *  down mid-entry, which also dismissed the pairing request. */
+        /** #203 — how long one pairing may take. Reading a six-digit PIN off
+         *  the radio and typing it in does not fit in [CONNECT_TIMEOUT_MS];
+         *  the attempt used to be torn down mid-entry, which also dismissed
+         *  the pairing request. */
         internal const val PAIRING_TIMEOUT_MS: Long = 60_000
 
-        /** Nordic's own connect timeout. Deliberately above both deadlines
-         *  above: [awaitConnect] decides when an attempt is over, and this
-         *  only matters if that loop is somehow not running. */
-        internal const val NORDIC_BACKSTOP_TIMEOUT_MS: Long = 75_000
+        /** Nordic's own connect timeout. Deliberately above a pairing plus the
+         *  setup after it: [connectToAddress] decides when an attempt is over,
+         *  and this only matters if that wait is somehow not running. */
+        internal const val NORDIC_BACKSTOP_TIMEOUT_MS: Long = 90_000
+
+        /** How long a toRadio write may go unanswered. */
+        internal const val WRITE_TIMEOUT_MS: Long = 15_000
 
         private const val WATCHDOG_TICK_MS: Long = 1_000
         private const val DISCONNECT_TIMEOUT_MS: Long = 3_000
+        private const val GATT_SETTLE_MS: Long = 300
 
-        /** #175/#203 — whether a connect attempt that is [elapsedMs] old and
-         *  not ready yet should be given up. Pure, so the deadline is
-         *  unit-testable. */
-        internal fun shouldAbandonConnect(elapsedMs: Long, bonding: Boolean): Boolean =
-            elapsedMs >= if (bonding) PAIRING_TIMEOUT_MS else CONNECT_TIMEOUT_MS
+        /** fromRadio reads that may fail in a row before the session is given up. */
+        internal const val MAX_READ_FAILURES: Int = 5
+
+        /** Whether a session whose reads keep failing should be ended. Not
+         *  while Android is pairing: reads fail until the request is answered. */
+        internal fun shouldDropAfterReadFailures(failuresInARow: Int, bonding: Boolean): Boolean =
+            !bonding && failuresInARow >= MAX_READ_FAILURES
+
+        /**
+         * #203 — whether a failed connect is worth trying again at once: an
+         * error from the Bluetooth stack before the link was up (status 133
+         * and its relatives), as opposed to no answer, a pairing, or a radio
+         * that is not Meshtastic.
+         */
+        internal fun isQuickRetryable(f: ConnectAttemptFacts): Boolean =
+            !f.timedOut && !f.linkCameUp && !f.serviceMissing && (f.failStatus ?: 0) > 0
+
+        // Nordic prints a value either as "(0x) AA-BB" (what it read or was
+        // notified of) or as "value=0xAABB" / "setValue(0xAABB)" (what it
+        // writes). Status codes are printed as "(0x85)" and are left alone.
+        private val PRINTED_VALUE = Regex("""\(0x\) ([0-9A-Fa-f]{2}(?:-[0-9A-Fa-f]{2})*)""")
+        private val WRITTEN_VALUE = Regex("""(value=|setValue\()0x([0-9A-Fa-f-]+)""")
+
+        /**
+         * Replaces the values in a Nordic log line with their sizes. On this
+         * link they are FromRadio and ToRadio traffic, which carries channel
+         * keys, positions and messages, and the log is what "Copy diagnostics"
+         * puts on the clipboard for a bug report.
+         */
+        internal fun redactPayload(message: String): String {
+            val printed = PRINTED_VALUE.replace(message) { m -> "${(m.groupValues[1].length + 1) / 3} bytes" }
+            return WRITTEN_VALUE.replace(printed) { m ->
+                "${m.groupValues[1]}${m.groupValues[2].count { it != '-' } / 2} bytes"
+            }
+        }
 
         internal const val HINT_NO_ANSWER =
             "Check that the radio is on, in range, and not connected to another phone."
@@ -1254,10 +1462,14 @@ class MeshtasticBleClient(context: Context) {
             }
         }
 
-        // #203 — was 5_000 as a coroutine-only (non-Nordic) timeout; now a
-        // real Nordic RequestQueue timeout (see readOnce), widened to 10s to
-        // give a slow/congested link room before we call it a READ_TIMEOUT.
+        // #203 — Nordic RequestQueue timeout on one fromRadio read (see
+        // readOnce): how long before a slow read is reported.
         private const val READ_TIMEOUT_MS: Long = 10_000
+
+        /** How long a fromRadio read may go without any answer at all, a
+         *  Nordic failure included, before the session is given up. Above
+         *  [READ_TIMEOUT_MS] so that Nordic reports a read it did start. */
+        internal const val READ_AWAIT_MS: Long = 15_000
         private const val POLL_INTERVAL_MS: Long = 1_000
 
         /** #203 — how often RSSI is sampled for the link-status row. */

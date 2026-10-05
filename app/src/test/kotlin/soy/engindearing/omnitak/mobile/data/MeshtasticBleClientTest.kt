@@ -11,7 +11,6 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
-import soy.engindearing.omnitak.mobile.domain.ConnectionState
 
 /**
  * JVM unit tests for the pure helpers on [MeshtasticBleClient]. The
@@ -182,80 +181,193 @@ class MeshtasticBleClientTest {
 
     // endregion
 
-    // region connect timeout state transition (#175) ----------------------
-    // Regression for issue #175 — "Meshtastic connection hangs on Connecting
-    // indefinitely". A connect attempt that never hears back must not leave the
-    // client in Connecting (app restart used to be the only way out).
-    // connectToAddress runs its own deadline and settles through this pure
-    // helper, so the UI stops spinning and the user can tap Connect again.
+    // region connect deadline (#175, #203) ---------------------------------
+    // #175 — "Meshtastic connection hangs on Connecting indefinitely": a
+    // connect attempt that never hears back must run out of time.
+    // #203 — but not while Android is pairing with the radio, and not in the
+    // moment right after a pairing either.
 
-    @Test fun attempt_with_nothing_to_report_resolves_to_retryable_disconnected() {
-        val state = MeshtasticBleClient.resolveFailedConnectState("AA:BB:CC:DD:EE:FF", null)
+    private fun deadline(idleLimitMs: Long = MeshtasticBleClient.CONNECT_TIMEOUT_MS) =
+        MeshtasticBleClient.ProgressDeadline(
+            startedAtMs = 0L,
+            idleLimitMs = idleLimitMs,
+            pairingLimitMs = MeshtasticBleClient.PAIRING_TIMEOUT_MS,
+        )
+
+    @Test fun attempt_runs_out_of_time_when_nothing_happens() {
+        val d = deadline()
+        assertFalse(d.expired(MeshtasticBleClient.CONNECT_TIMEOUT_MS - 1, pairing = false))
         assertTrue(
-            "an attempt that ended with nothing to report must reset to Disconnected, not stay Connecting",
-            state is ConnectionState.Disconnected,
+            "an attempt with no answer must end, not sit on Connecting",
+            d.expired(MeshtasticBleClient.CONNECT_TIMEOUT_MS, pairing = false),
         )
     }
 
-    @Test fun hard_failure_resolves_to_failed_not_connecting() {
-        // attemptResult == false models a hard failure reported by the stack.
-        val state = MeshtasticBleClient.resolveFailedConnectState("AA:BB:CC:DD:EE:FF", false)
-        assertTrue(
-            "a hard failure must surface Failed (still recoverable), never remain Connecting",
-            state is ConnectionState.Failed,
-        )
+    @Test fun attempt_is_not_cut_off_while_android_is_pairing() {
+        // The attempt used to be torn down 15 s in, mid PIN entry, which also
+        // dismissed the pairing request.
+        val d = deadline()
+        assertFalse(d.expired(3_000, pairing = true))
+        assertFalse(d.expired(15_000, pairing = true))
+        assertFalse(d.expired(40_000, pairing = true))
     }
 
-    @Test fun connect_is_abandoned_at_the_deadline_when_not_pairing() {
-        val deadline = MeshtasticBleClient.CONNECT_TIMEOUT_MS
-        assertFalse(MeshtasticBleClient.shouldAbandonConnect(deadline - 1, bonding = false))
-        assertTrue(MeshtasticBleClient.shouldAbandonConnect(deadline, bonding = false))
+    @Test fun attempt_gets_its_full_time_again_after_a_pairing() {
+        // PIN accepted 20 s in. Service discovery, the cache refresh, MTU and
+        // the notification subscribe all still have to happen: ending the
+        // attempt on the next tick ("pairing over, and we are past 15 s")
+        // would throw away a pairing that just succeeded.
+        val d = deadline()
+        assertFalse(d.expired(3_000, pairing = true))
+        assertFalse(d.expired(20_000, pairing = true))
+        assertFalse(d.expired(21_000, pairing = false))
+        assertFalse(d.expired(20_000 + MeshtasticBleClient.CONNECT_TIMEOUT_MS - 1, pairing = false))
+        assertTrue(d.expired(20_000 + MeshtasticBleClient.CONNECT_TIMEOUT_MS, pairing = false))
     }
 
-    @Test fun connect_is_given_longer_while_android_is_pairing() {
-        // #203 — the attempt used to be torn down 15 s in, mid PIN entry, which
-        // also dismissed the pairing request.
-        val connect = MeshtasticBleClient.CONNECT_TIMEOUT_MS
-        val pairing = MeshtasticBleClient.PAIRING_TIMEOUT_MS
-        assertFalse(MeshtasticBleClient.shouldAbandonConnect(connect, bonding = true))
-        assertFalse(MeshtasticBleClient.shouldAbandonConnect(pairing - 1, bonding = true))
-        assertTrue(MeshtasticBleClient.shouldAbandonConnect(pairing, bonding = true))
-        // Pairing over (or failed) with the normal deadline already behind us.
-        assertTrue(MeshtasticBleClient.shouldAbandonConnect(connect + 5_000, bonding = false))
+    @Test fun one_pairing_cannot_run_forever() {
+        val d = deadline()
+        assertFalse(d.expired(2_000, pairing = true))
+        assertFalse(d.expired(2_000 + MeshtasticBleClient.PAIRING_TIMEOUT_MS - 1, pairing = true))
+        assertTrue(d.expired(2_000 + MeshtasticBleClient.PAIRING_TIMEOUT_MS, pairing = true))
     }
 
-    @Test fun nordic_backstop_sits_above_both_of_our_deadlines() {
+    @Test fun a_second_pairing_gets_its_own_limit() {
+        val d = deadline()
+        assertFalse(d.expired(1_000, pairing = true))
+        assertFalse(d.expired(50_000, pairing = true))
+        assertFalse(d.expired(51_000, pairing = false)) // first pairing over
+        assertFalse(d.expired(55_000, pairing = true)) // asked again
+        assertFalse(d.expired(55_000 + MeshtasticBleClient.PAIRING_TIMEOUT_MS - 1, pairing = true))
+        assertTrue(d.expired(55_000 + MeshtasticBleClient.PAIRING_TIMEOUT_MS, pairing = true))
+    }
+
+    @Test fun write_deadline_uses_the_same_rules_with_its_own_limit() {
+        val d = deadline(idleLimitMs = MeshtasticBleClient.WRITE_TIMEOUT_MS)
+        assertFalse(d.expired(MeshtasticBleClient.WRITE_TIMEOUT_MS - 1, pairing = false))
+        assertTrue(d.expired(MeshtasticBleClient.WRITE_TIMEOUT_MS, pairing = false))
+    }
+
+    @Test fun nordic_backstop_sits_above_a_pairing_and_the_setup_after_it() {
         // Our own deadline decides when an attempt is over. If Nordic's timeout
-        // fired first it would end a pairing that is still within its window.
-        assertTrue(MeshtasticBleClient.PAIRING_TIMEOUT_MS > MeshtasticBleClient.CONNECT_TIMEOUT_MS)
-        assertTrue(MeshtasticBleClient.NORDIC_BACKSTOP_TIMEOUT_MS > MeshtasticBleClient.PAIRING_TIMEOUT_MS)
-    }
-
-    @Test fun hard_failure_uses_recorded_failure_message_when_present() {
-        // #203 — connectToAddress must not overwrite a reason-bearing Failed
-        // state (set by the ConnectionObserver's onDeviceFailedToConnect) with
-        // a generic reason-less placeholder.
-        val recorded = MeshtasticBleClient.BleFailure(
-            timestampMs = 1_000L,
-            phase = MeshtasticBleClient.BleFailure.Phase.CONNECT,
-            nordicReason = 133,
-            gattStatus = null,
-            bondState = BluetoothDevice.BOND_NONE,
-            consecutiveFailures = 1,
-            message = "connect failed: reason=133",
+        // fired first it would end a pairing that is still within its window,
+        // or the setup that follows it.
+        assertTrue(
+            MeshtasticBleClient.NORDIC_BACKSTOP_TIMEOUT_MS >
+                MeshtasticBleClient.PAIRING_TIMEOUT_MS + MeshtasticBleClient.CONNECT_TIMEOUT_MS,
         )
-        val state = MeshtasticBleClient.resolveFailedConnectState("AA:BB:CC:DD:EE:FF", false, recorded)
-        assertTrue(state is ConnectionState.Failed)
-        assertEquals("connect failed: reason=133", (state as ConnectionState.Failed).reason)
     }
 
-    @Test fun hard_failure_falls_back_to_generic_message_without_recorded_failure() {
-        // No BleFailure was recorded for this attempt (e.g. a code path that
-        // never reached the ConnectionObserver) — the old generic message is
-        // still the safety net, not a crash or a blank reason.
-        val state = MeshtasticBleClient.resolveFailedConnectState("AA:BB:CC:DD:EE:FF", false, null)
-        assertTrue(state is ConnectionState.Failed)
-        assertEquals("connect failed for AA:BB:CC:DD:EE:FF", (state as ConnectionState.Failed).reason)
+    @Test fun a_read_is_given_up_only_after_nordic_had_its_chance_to_report_it() {
+        // READ_AWAIT_MS ends a session whose read got no answer of any kind.
+        // It must sit above Nordic's own 10 s read timeout, or a read that is
+        // merely slow would take the session down with it.
+        assertTrue(MeshtasticBleClient.READ_AWAIT_MS > 10_000L)
+    }
+
+    // endregion
+
+    // region #203 — when a session or an attempt is given another go --------
+
+    @Test fun reads_that_keep_failing_end_the_session() {
+        val max = MeshtasticBleClient.MAX_READ_FAILURES
+        assertFalse(MeshtasticBleClient.shouldDropAfterReadFailures(max - 1, bonding = false))
+        assertTrue(MeshtasticBleClient.shouldDropAfterReadFailures(max, bonding = false))
+    }
+
+    @Test fun failing_reads_do_not_end_a_session_that_is_pairing() {
+        // Reads fail until the pairing request is answered; that is the first
+        // connect to every radio that wants a PIN.
+        assertFalse(
+            MeshtasticBleClient.shouldDropAfterReadFailures(MeshtasticBleClient.MAX_READ_FAILURES + 10, bonding = true),
+        )
+    }
+
+    @Test fun a_stack_error_before_the_link_is_up_is_retried_at_once() {
+        assertTrue(MeshtasticBleClient.isQuickRetryable(facts(failStatus = 133)))
+        assertTrue(MeshtasticBleClient.isQuickRetryable(facts(failStatus = 147)))
+    }
+
+    @Test fun other_failures_wait_for_the_reconnect_loop() {
+        // No answer at all: trying again at once changes nothing.
+        assertFalse(MeshtasticBleClient.isQuickRetryable(facts(timedOut = true)))
+        // The link was up: whatever went wrong is not the stack's connect.
+        assertFalse(MeshtasticBleClient.isQuickRetryable(facts(failStatus = 133, linkCameUp = true)))
+        // Nordic's own reason codes (negative) are not stack errors.
+        assertFalse(MeshtasticBleClient.isQuickRetryable(facts(failStatus = FailCallback.REASON_DEVICE_DISCONNECTED)))
+        assertFalse(MeshtasticBleClient.isQuickRetryable(facts(failStatus = FailCallback.REASON_BLUETOOTH_DISABLED)))
+        // Not a Meshtastic radio.
+        assertFalse(
+            MeshtasticBleClient.isQuickRetryable(
+                facts(failStatus = FailCallback.REASON_DEVICE_NOT_SUPPORTED, linkCameUp = true, serviceMissing = true),
+            ),
+        )
+    }
+
+    // endregion
+
+    // region #203 — what reaches the log -------------------------------------
+    // Nordic prints every value it reads, writes and is notified of. On this
+    // link those are FromRadio and ToRadio frames: channel keys, positions,
+    // messages. The log goes to Logcat and into "Copy diagnostics", which
+    // people are asked to paste into bug reports, so only sizes are kept.
+
+    @Test fun a_read_value_is_reduced_to_its_size() {
+        assertEquals(
+            "Read Response received from 2c55e69e-4993-11ed-b878-0242ac120002, value: 3 bytes",
+            MeshtasticBleClient.redactPayload(
+                "Read Response received from 2c55e69e-4993-11ed-b878-0242ac120002, value: (0x) 1A-2B-08",
+            ),
+        )
+    }
+
+    @Test fun a_notification_value_is_reduced_to_its_size() {
+        assertEquals(
+            "Notification received from ed9da18c-a800-4f66-a670-aa7547e34453, value: 4 bytes",
+            MeshtasticBleClient.redactPayload(
+                "Notification received from ed9da18c-a800-4f66-a670-aa7547e34453, value: (0x) 00-00-00-00",
+            ),
+        )
+    }
+
+    @Test fun a_written_value_is_reduced_to_its_size() {
+        assertEquals(
+            "gatt.writeCharacteristic(f75c76d2-129e-4dad-a1dd-7866124401e7, value=6 bytes, WRITE REQUEST)",
+            MeshtasticBleClient.redactPayload(
+                "gatt.writeCharacteristic(f75c76d2-129e-4dad-a1dd-7866124401e7, value=0x18EA9A8EE603, WRITE REQUEST)",
+            ),
+        )
+        assertEquals(
+            "gatt.writeDescriptor(00002902-0000-1000-8000-00805f9b34fb, value=2 bytes)",
+            MeshtasticBleClient.redactPayload("gatt.writeDescriptor(00002902-0000-1000-8000-00805f9b34fb, value=0x01-00)"),
+        )
+        // The form Nordic uses before Android 13.
+        assertEquals(
+            "characteristic.setValue(4 bytes)",
+            MeshtasticBleClient.redactPayload("characteristic.setValue(0x0A6315FF)"),
+        )
+    }
+
+    @Test fun no_hex_from_a_frame_survives_redaction() {
+        val frame = "0A-63-15-FF-FF-FF-FF-22-55-08-48-12-51"
+        val line = MeshtasticBleClient.redactPayload("Read Response received from 2c55e69e, value: (0x) $frame")
+        assertFalse(line.contains("0A-63"))
+        assertFalse(line.contains("FF-FF"))
+        assertTrue(line.endsWith("value: 13 bytes"))
+    }
+
+    @Test fun lines_without_a_value_are_left_as_they_are() {
+        for (line in listOf(
+            "Connected to AA:BB:CC:DD:EE:FF",
+            "Error (0x85): GATT ERROR",
+            "Error: (0x93): UNKNOWN (147)",
+            "Read Response received from 2c55e69e-4993-11ed-b878-0242ac120002, value: ",
+            "Data written to f75c76d2-129e-4dad-a1dd-7866124401e7",
+            "gatt.requestMtu(512)",
+            "Connection parameters updated (interval: 45.0ms, latency: 0, timeout: 5000ms)",
+        )) {
+            assertEquals(line, MeshtasticBleClient.redactPayload(line))
+        }
     }
 
     // endregion

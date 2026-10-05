@@ -531,7 +531,9 @@ private fun BlePane(
                 // automatic reconnect to this same address) can show it
                 // instead of the bare MAC.
                 mesh.rememberBleAdvertisedName(addr, results.find { it.address == addr }?.name)
-                coScope.launch { mesh.connectBle(addr) }
+                // On the manager's scope, not the screen's: leaving this
+                // pane must not cancel a connect that is under way.
+                mesh.connectBleInBackground(addr)
             },
         )
 
