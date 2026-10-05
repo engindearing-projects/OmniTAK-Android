@@ -39,15 +39,19 @@ import soy.engindearing.omnitak.mobile.data.TakPacketParser
 import soy.engindearing.omnitak.mobile.data.TakPacketSerializer
 import soy.engindearing.omnitak.mobile.data.TakPacketV2Codec
 import soy.engindearing.omnitak.mobile.data.MeshWire
+import soy.engindearing.omnitak.mobile.data.DeviceSettingsState
 import soy.engindearing.omnitak.mobile.data.FromRadioFrame
 import soy.engindearing.omnitak.mobile.data.MeshConnectionType
 import soy.engindearing.omnitak.mobile.data.MeshNode
 import soy.engindearing.omnitak.mobile.data.MeshtasticBleClient
 import soy.engindearing.omnitak.mobile.data.MeshtasticProtoParser
 import soy.engindearing.omnitak.mobile.data.MeshtasticTcpClient
+import soy.engindearing.omnitak.mobile.data.PositionFacts
 import soy.engindearing.omnitak.mobile.data.ProtoFields
+import soy.engindearing.omnitak.mobile.data.RadioSettings
 import soy.engindearing.omnitak.mobile.data.RadioSettingsCache
 import soy.engindearing.omnitak.mobile.data.SentLedger
+import soy.engindearing.omnitak.mobile.data.SentSettings
 
 /**
  * Application-scoped Meshtastic state holder. Owns the TCP and BLE
@@ -232,6 +236,24 @@ class MeshtasticManager(
      */
     internal val radioSettings = RadioSettingsCache()
 
+    private val positionFactsLock = Any()
+    private val _positionFacts = MutableStateFlow(PositionFacts.read(radioSettings))
+
+    /**
+     * What the radio reported about the settings that decide the firmware's position floor: its channels, its
+     * LoRa config and its role ([PositionFacts]). Read from [radioSettings] each time that changes, so it is
+     * what the radio said and never the app's own list of saved channels. Parts the radio has not reported are
+     * null, and the screen says nothing about the floor until they are in.
+     */
+    val positionFacts: StateFlow<PositionFacts> = _positionFacts.asStateFlow()
+
+    init {
+        // Under a lock, so the last change to the cache is the last one to be read into the flow.
+        radioSettings.onChange = {
+            synchronized(positionFactsLock) { _positionFacts.value = PositionFacts.read(radioSettings) }
+        }
+    }
+
     /** Test seam: when set, settings writes go here instead of the BLE/TCP transport. Null in the app. */
     @Volatile internal var adminSendOverride: (suspend (ByteArray) -> Boolean)? = null
 
@@ -260,8 +282,46 @@ class MeshtasticManager(
      */
     val lastPushResult: StateFlow<String?> = _lastPushResult.asStateFlow()
 
+    /**
+     * Forget what the last push said, what it sent and the note about what the radio did with it
+     * ([restartNote]). Called when the operator edits a field or pushes again: all of it was about the
+     * settings as they were before.
+     */
     fun clearLastPushResult() {
         _lastPushResult.value = null
+        lastPush = null
+        _restartNote.value = null
+    }
+
+    /** What the last Device settings push sent, and to which radio. Judged when that radio's download is in. */
+    @Volatile private var lastPush: SentSettings? = null
+
+    /**
+     * What the radio reported in this session, setting by setting, the way the settings screen reads it. Starts
+     * empty with every download; what [lastPush] is compared with.
+     */
+    @Volatile private var reported = RadioSettings()
+
+    private val _restartNote = MutableStateFlow<String?>(null)
+
+    /**
+     * Set when the radio is back after a push and reports a value other than the one that was sent: one sentence
+     * for each, with both values, and the reason when the firmware's position floor explains an interval
+     * ([PositionFloor]). Null while there is nothing to say. It stays through link drops and reconnects of the
+     * same radio, until the operator edits or pushes ([clearLastPushResult]) or a different radio connects. A value
+     * the radio kept says nothing.
+     */
+    val restartNote: StateFlow<String?> = _restartNote.asStateFlow()
+
+    /**
+     * The download of the radio that [lastPush] went to is in: compare what it reports with what was sent. Judged
+     * again at every download of that radio until the operator edits or pushes, so a download that came before
+     * the radio had restarted (and still held what it received) does not hide what the next one shows.
+     */
+    private fun judgeLastPush() {
+        val sent = lastPush ?: return
+        if (sent.node != _myNodeNum) return
+        _restartNote.value = sent.check(reported, PositionFacts.read(radioSettings))
     }
 
     /** True from the end of a config download (`config_complete_id`) until the next one starts or the link drops. */
@@ -320,6 +380,7 @@ class MeshtasticManager(
             // A read sent on this link cannot be answered on another one, or by another radio.
             adminReads.clear()
             downloadComplete = false
+            reported = RadioSettings()
             // Nothing may be addressed to the radio that was on this link: the next one reports its own number.
             _myNodeNum = null
             runCatching { linkDownSink?.invoke() }
@@ -524,12 +585,19 @@ class MeshtasticManager(
                 // and the download that follows is not finished.
                 adminReads.clear()
                 downloadComplete = false
+                // This download reports from nothing, and a note about a push is only for the radio it went to.
+                reported = RadioSettings()
+                if (lastPush?.node != parsed.nodeNum) {
+                    lastPush = null
+                    _restartNote.value = null
+                }
                 Log.i(TAG, "my_node_num=${parsed.nodeNum}")
             }
             is FromRadioFrame.ConfigComplete -> {
                 Log.i(TAG, "config complete id=${parsed.id}")
                 downloadCompletedNanos = System.nanoTime()
                 downloadComplete = true
+                judgeLastPush()
             }
             is FromRadioFrame.ConfigFrame -> {
                 Log.i(TAG, "RX FromRadio.config (post-want_config_id dump): ${parsed.response ?: "variant with no decoded value"}")
@@ -780,6 +848,7 @@ class MeshtasticManager(
         runCatching { adminResponseSink?.invoke(response) }
             .onFailure { Log.w(TAG, "adminResponseSink failed: ${it.message}") }
         val node = _myNodeNum ?: return
+        reported = DeviceSettingsState(radio = reported).withReport(response).radio ?: reported
         val kept = sentLedger.check(node, response)
         if (kept.isNotEmpty()) {
             _settingsNotice.value = "The radio did not take: ${kept.joinToString(", ") { it.label }}. It may be managed."
@@ -933,8 +1002,12 @@ class MeshtasticManager(
      * started it is left before it finishes (the writer runs a started
      * sequence to its commit, and its result still comes back).
      */
-    suspend fun pushDeviceConfig(edits: DeviceEdits): AdminWriteResult =
-        settingsWriter.pushDeviceConfig(edits).also { _lastPushResult.value = it.describe() }
+    suspend fun pushDeviceConfig(edits: DeviceEdits): AdminWriteResult {
+        // A new push replaces what the last one sent and what was said about it.
+        lastPush = null
+        _restartNote.value = null
+        return settingsWriter.pushDeviceConfig(edits) { lastPush = it }.also { _lastPushResult.value = it.describe() }
+    }
 
     /**
      * #172: import a [MeshChannel] (from a scanned/pasted

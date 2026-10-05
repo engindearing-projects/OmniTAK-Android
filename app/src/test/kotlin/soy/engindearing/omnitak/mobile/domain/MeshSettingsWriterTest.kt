@@ -39,6 +39,7 @@ import soy.engindearing.omnitak.mobile.data.RadioSettingsCache.Key
 import soy.engindearing.omnitak.mobile.data.RebroadcastMode
 import soy.engindearing.omnitak.mobile.data.RefusalReason
 import soy.engindearing.omnitak.mobile.data.SentLedger
+import soy.engindearing.omnitak.mobile.data.SentSettings
 
 /**
  * [MeshSettingsWriter] against a [FakeRadio] that answers reads and replaces
@@ -654,6 +655,63 @@ class MeshSettingsWriterTest {
         val result = AdminWriteResult.Incomplete(emptyList(), listOf(AdminSetting.ROLE), Cause.LINK_LOST, committed = false)
         assertTrue(result.describe(), result.describe().contains("Nothing was changed"))
         assertFalse(result.reachedRadio)
+    }
+
+    // endregion
+
+    // region what a push sent, for the check after the radio restarts -----------------------------------------------------
+
+    @Test fun `a push tells onSent which radio and the values as they went out`() = runTest {
+        val rig = Rig(this)
+        var seen: SentSettings? = null
+
+        val result = rig.writer.pushDeviceConfig(
+            DeviceEdits(role = MeshRole.TAK, longName = "L".repeat(60), positionBroadcastSecs = 100_000, channelName = "Alpha"),
+        ) { seen = it }
+
+        assertEquals(
+            listOf(AdminSetting.ROLE, AdminSetting.LONG_NAME, AdminSetting.POSITION_INTERVAL, AdminSetting.CHANNEL_NAME),
+            (result as AdminWriteResult.Sent).written,
+        )
+        val sent = seen!!
+        assertEquals(node, sent.node)
+        assertEquals(MeshRole.TAK, sent.values[AdminSetting.ROLE])
+        assertEquals("the interval in range, as it was written", 86_400, sent.values[AdminSetting.POSITION_INTERVAL])
+        assertEquals("the name cut to the firmware's limit, as it was written", "L".repeat(39), sent.values[AdminSetting.LONG_NAME])
+        assertEquals("Alpha", sent.values[AdminSetting.CHANNEL_NAME])
+        assertEquals(setOf(AdminSetting.ROLE, AdminSetting.LONG_NAME, AdminSetting.POSITION_INTERVAL, AdminSetting.CHANNEL_NAME), sent.values.keys)
+    }
+
+    @Test fun `a setting the radio already holds was not sent, so it is not remembered as sent`() = runTest {
+        val rig = Rig(this)
+        var seen: SentSettings? = null
+        // The factory radio holds 900 s already; the role is the one that changes.
+        val result = rig.writer.pushDeviceConfig(DeviceEdits(role = MeshRole.TAK, positionBroadcastSecs = 900)) { seen = it }
+
+        assertEquals(AdminWriteResult.Sent(listOf(AdminSetting.ROLE)), result)
+        assertEquals(setOf(AdminSetting.ROLE), seen!!.values.keys)
+    }
+
+    @Test fun `onSent is not called when nothing went out`() = runTest {
+        var calls = 0
+        val offline = Rig(this, destination = null)
+        assertEquals(AdminWriteResult.Refused(RefusalReason.NO_RADIO), offline.writer.pushDeviceConfig(DeviceEdits(positionBroadcastSecs = 300)) { calls++ })
+
+        val silent = Rig(this).also { it.radio.answers = false }
+        assertEquals(AdminWriteResult.Refused(RefusalReason.NO_ANSWER), silent.writer.pushDeviceConfig(DeviceEdits(positionBroadcastSecs = 300)) { calls++ })
+
+        assertEquals(AdminWriteResult.NothingToChange, Rig(this).writer.pushDeviceConfig(DeviceEdits()) { calls++ })
+        assertEquals(0, calls)
+    }
+
+    @Test fun `a push that stops part way tells onSent only what was written`() = runTest {
+        // Frames: get_config:1, begin, set_config:1 (role), get_config:2 ... the link refuses the fifth, the position write.
+        val rig = Rig(this, failAt = mutableSetOf(5))
+        var seen: SentSettings? = null
+        val result = rig.writer.pushDeviceConfig(DeviceEdits(role = MeshRole.TAK, positionBroadcastSecs = 300)) { seen = it }
+
+        assertTrue(result.toString(), result is AdminWriteResult.Incomplete)
+        assertEquals(setOf(AdminSetting.ROLE), seen!!.values.keys)
     }
 
     // endregion

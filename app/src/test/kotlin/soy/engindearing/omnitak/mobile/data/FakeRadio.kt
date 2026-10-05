@@ -17,6 +17,11 @@ import soy.engindearing.omnitak.mobile.data.AdminTestFrames.single
  * - [onSetConfig] runs after a `set_config`, to play what the firmware does as
  *   a side effect (a role change installing role defaults).
  *
+ * - [restart] plays what firmware 2.7.26 does when it loads its config at start and
+ *   the position channel is its default channel (NodeDB.cpp, "Enforce position
+ *   broadcast minimums"): the position interval is raised to at least one hour,
+ *   twelve for a router, and 0 is left alone.
+ *
  * Every admin frame it sees is added to [log] by name, so a test can say
  * exactly what the app sent and in what order. All values are made up.
  */
@@ -76,6 +81,73 @@ internal class FakeRadio(
         }
     }
 
+    /**
+     * What a restart does to the settings (the firmware loads its config again, and the app's link drops).
+     *
+     * Written from the firmware source, not from the app's own reading of it: the position channel is the first
+     * channel whose module settings carry a position precision other than 0; it is the default channel when its key
+     * is exactly one byte with the value 1 and its name is the modem preset's display name (an empty name is that
+     * name); then `position_broadcast_secs` becomes at least 3600, or 43200 for the roles 2 (ROUTER) and 11
+     * (ROUTER_LATE), unless it is 0, and `broadcast_smart_minimum_interval_secs` at least 300, unless it is 0.
+     */
+    fun restart() {
+        val lora = AdminTestFrames.fields(config[6] ?: ByteArray(0))
+        val usePreset = lora.lastOrNull { it.number == 1 }?.varint == 1uL
+        val preset = lora.lastOrNull { it.number == 2 }?.varint?.toInt() ?: 0
+        val presetName = when {
+            !usePreset -> "Custom"
+            preset == 0 -> "LongFast"
+            preset == 1 -> "LongSlow"
+            preset == 3 -> "MediumSlow"
+            preset == 4 -> "MediumFast"
+            preset == 5 -> "ShortSlow"
+            preset == 6 -> "ShortFast"
+            preset == 7 -> "LongMod"
+            preset == 8 -> "ShortTurbo"
+            preset == 9 -> "LongTurbo"
+            else -> "Invalid"
+        }
+        val role = AdminTestFrames.fields(config[1] ?: ByteArray(0)).lastOrNull { it.number == 1 }?.varint?.toInt() ?: 0
+        var onDefaultChannel = false
+        for (i in 0..7) {
+            val settings = AdminTestFrames.fields(channels[i] ?: ByteArray(0)).lastOrNull { it.number == 2 }
+                ?.let { AdminTestFrames.fields(it.bytes) } ?: emptyList()
+            val module = settings.lastOrNull { it.number == 7 }?.let { AdminTestFrames.fields(it.bytes) } ?: emptyList()
+            if ((module.lastOrNull { it.number == 1 }?.varint ?: 0uL) == 0uL) continue
+            val key = settings.lastOrNull { it.number == 2 }?.bytes
+            val name = settings.lastOrNull { it.number == 3 }?.bytes?.toString(Charsets.UTF_8) ?: ""
+            onDefaultChannel = key != null && key.size == 1 && key[0] == 1.toByte() && (name.ifEmpty { presetName } == presetName)
+            break
+        }
+        if (!onDefaultChannel) return
+        val floor = if (role == 2 || role == 11) 43_200 else 3_600
+        config[2]?.let { config[2] = raised(raised(it, 1, floor), 11, 300) }
+    }
+
+    /** [message] with the varint field [number] raised to at least [minimum]; a field that is 0 or absent stays as it is. */
+    private fun raised(message: ByteArray, number: Int, minimum: Int): ByteArray {
+        val out = ProtoMsg()
+        for (f in AdminTestFrames.fields(message)) when {
+            f.number == number && f.varint != 0uL -> out.varint(number, maxOf(f.varint.toLong(), minimum.toLong()))
+            f.wire == 0 -> out.varint(f.number, f.varint.toLong())
+            f.wire == 5 -> out.fixed32(f.number, f.fixed32.toInt())
+            else -> out.bytes(f.number, f.bytes)
+        }
+        return reorder(out.build())
+    }
+
+    /**
+     * What the radio sends when an app connects: my_info, its own node info, the eight channels, the configs,
+     * and config_complete_id last. [me] is its node number.
+     */
+    fun download(me: Int): List<ByteArray> = buildList {
+        add(AdminTestFrames.myInfoFrame(me))
+        add(AdminTestFrames.nodeInfoFrame(me, owner))
+        for (i in 0..7) add(AdminTestFrames.channelFrame(channels.getValue(i)))
+        for (variant in 1..10) add(AdminTestFrames.configFrame(variant, config[variant] ?: ByteArray(0)))
+        add(AdminTestFrames.configCompleteFrame())
+    }
+
     /** What the firmware does with a set_owner: names and the licensed flag come from the message, the rest stays. */
     private fun applyOwner(current: ByteArray, message: ByteArray): ByteArray {
         val have = AdminTestFrames.fields(current)
@@ -111,6 +183,25 @@ internal class FakeRadio(
     }
 
     companion object {
+        /**
+         * The radio as the stock image comes: the primary channel on the default key (one byte, 1), unnamed, with
+         * position precision 13, LONG_FAST, region US and a position interval of one hour. Everything else as in
+         * [factory].
+         */
+        fun stock(): FakeRadio = factory().also { radio ->
+            radio.channels[0] = defaultChannel()
+            radio.config[2] = ProtoMsg().varint(1, 3_600).varint(7, 811).varint(11, 300).varint(13, 1).build()
+            radio.config[6] = ProtoMsg().bool(1, true).varint(7, 1).varint(8, 5).bool(9, true).build()
+        }
+
+        /** Channel 0 on the default key, named [name] (empty: the preset's name), with position precision [precision]. */
+        fun defaultChannel(name: String = "", precision: Int = 13): ByteArray {
+            val settings = ProtoMsg().bytes(2, byteArrayOf(1))
+            if (name.isNotEmpty()) settings.string(3, name)
+            if (precision != 0) settings.msg(7, ProtoMsg().varint(1, precision.toLong()))
+            return ProtoMsg().msg(2, settings).varint(3, 1).build()
+        }
+
         /**
          * A radio with nothing set up: role CLIENT (absent on the wire), the primary channel unnamed with a
          * 32 byte key and position precision 13, region US, hop limit 5, position interval 900, a time zone

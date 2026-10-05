@@ -56,6 +56,16 @@ class RadioSettingsCache {
     private val lock = Any()
     private val entries = HashMap<Key, ByteArray>()
 
+    /**
+     * Called, outside the lock, after the cache has changed: an entry stored, one removed, or all of them
+     * dropped. Whoever derives something from what the radio reported (the manager does) sets it once.
+     */
+    @Volatile var onChange: (() -> Unit)? = null
+
+    private fun changed() {
+        runCatching { onChange?.invoke() }
+    }
+
     /** The stored bytes (a copy), or null when the radio has not told us. */
     fun get(key: Key): ByteArray? = synchronized(lock) { entries[key]?.copyOf() }
 
@@ -73,16 +83,19 @@ class RadioSettingsCache {
         if (key is Key.Config && key.variant !in PATCHED_CONFIGS) return false
         if (ProtoFields.parse(bytes) == null) return false
         synchronized(lock) { entries[key] = bytes.copyOf() }
+        changed()
         return true
     }
 
     /** Forget one entry, so the next one that arrives is known to be newer than the moment of this call. */
     fun remove(key: Key) {
-        synchronized(lock) { entries.remove(key) }
+        val had = synchronized(lock) { entries.remove(key) != null }
+        if (had) changed()
     }
 
     fun clear() {
-        synchronized(lock) { entries.clear() }
+        val had = synchronized(lock) { entries.isNotEmpty().also { entries.clear() } }
+        if (had) changed()
     }
 
     val size: Int get() = synchronized(lock) { entries.size }

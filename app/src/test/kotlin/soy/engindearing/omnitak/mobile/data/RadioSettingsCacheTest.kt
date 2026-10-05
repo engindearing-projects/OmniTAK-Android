@@ -229,4 +229,55 @@ class RadioSettingsCacheTest {
     }
 
     // endregion
+
+    // region a change is announced -------------------------------------------------------------------------
+
+    @Test fun `onChange is called after an entry is stored, removed or dropped, and only then`() {
+        val cache = RadioSettingsCache()
+        var calls = 0
+        cache.onChange = { calls++ }
+
+        assertTrue(cache.put(RadioSettingsCache.Key.Config(1), deviceConfig()))
+        assertEquals("stored", 1, calls)
+
+        assertFalse(cache.put(RadioSettingsCache.Key.Config(1), byteArrayOf(0x0a, 0x7f, 0x01)))
+        assertFalse(cache.put(RadioSettingsCache.Key.Config(4), deviceConfig()))
+        assertEquals("a message that is refused changes nothing", 1, calls)
+
+        cache.remove(RadioSettingsCache.Key.Channel(3))
+        assertEquals("removing what is not there changes nothing", 1, calls)
+        cache.remove(RadioSettingsCache.Key.Config(1))
+        assertEquals("removed", 2, calls)
+
+        cache.clear()
+        assertEquals("clearing an empty cache changes nothing", 2, calls)
+        cache.put(RadioSettingsCache.Key.Owner, userMessage())
+        cache.clear()
+        assertEquals("stored, then dropped", 4, calls)
+    }
+
+    @Test fun `onChange sees the change already made, and a listener that throws does not break the cache`() {
+        val cache = RadioSettingsCache()
+        var seen: Int? = null
+        cache.onChange = { seen = cache.size }
+        cache.put(RadioSettingsCache.Key.Config(1), deviceConfig())
+        assertEquals(1, seen)
+
+        cache.onChange = { error("a listener that fails") }
+        assertTrue(cache.put(RadioSettingsCache.Key.Config(2), positionConfig()))
+        cache.remove(RadioSettingsCache.Key.Config(1))
+        cache.clear()
+        assertEquals(0, cache.size)
+    }
+
+    @Test fun `a config download frame announces the change like any other way in`() {
+        val cache = RadioSettingsCache()
+        var calls = 0
+        cache.onChange = { calls++ }
+        feed(cache, configFrame(6, loraConfig()))
+        feed(cache, channelFrame(channelMessage(name = "Alpha")))
+        assertEquals(2, calls)
+    }
+
+    // endregion
 }

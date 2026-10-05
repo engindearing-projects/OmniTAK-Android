@@ -23,6 +23,7 @@ import soy.engindearing.omnitak.mobile.data.RadioSettingsCache.Key
 import soy.engindearing.omnitak.mobile.data.RebroadcastMode
 import soy.engindearing.omnitak.mobile.data.RefusalReason
 import soy.engindearing.omnitak.mobile.data.SentLedger
+import soy.engindearing.omnitak.mobile.data.SentSettings
 
 /**
  * Writes settings to the attached radio, one setting at a time, each patched
@@ -85,10 +86,15 @@ class MeshSettingsWriter(
 ) {
     private val turn = Mutex()
 
-    /** The settings the operator edited, role first. Only these are written, each patched onto a fresh read. */
-    suspend fun pushDeviceConfig(edits: DeviceEdits): AdminWriteResult {
+    /**
+     * The settings the operator edited, role first. Only these are written, each patched onto a fresh read.
+     *
+     * [onSent] is told what went out, when something did: the radio's node number and the values as sent, for
+     * the settings that were written. It runs before the result is returned, even if the caller has gone away.
+     */
+    suspend fun pushDeviceConfig(edits: DeviceEdits, onSent: ((SentSettings) -> Unit)? = null): AdminWriteResult {
         if (edits.isEmpty) return AdminWriteResult.NothingToChange
-        return runSequence(edits.settings) {
+        return runSequence(edits.settings, onSent) {
             edits.role?.let { role ->
                 patch(Key.Config(RadioSettingsCache.CONFIG_DEVICE), listOf(AdminSetting.ROLE), mapOf(AdminSetting.ROLE to role)) { dest, current ->
                     AdminMessageSerializer.buildSetDeviceRole(dest, role, current)
@@ -218,6 +224,7 @@ class MeshSettingsWriter(
 
     private suspend fun runSequence(
         all: List<AdminSetting>,
+        onSent: ((SentSettings) -> Unit)? = null,
         body: suspend Run.() -> Unit,
     ): AdminWriteResult = turn.withLock {
         // Once the sequence starts it runs to its commit even if the caller goes away (a screen that is left
@@ -230,7 +237,11 @@ class MeshSettingsWriter(
             }
             val run = Run(dest, all)
             run.body()
-            run.finish()
+            val result = run.finish()
+            if (onSent != null && result.reachedRadio && run.sentValues.isNotEmpty()) {
+                onSent(SentSettings(dest, run.sentValues.toMap()))
+            }
+            result
         }
     }
 
@@ -242,6 +253,9 @@ class MeshSettingsWriter(
         private var stop: Stop? = null
         private val written = ArrayList<AdminSetting>()
         private val alreadySet = ArrayList<AdminSetting>()
+
+        /** The values of the written settings, as they went out (what the ledger expects the radio to report). */
+        val sentValues = LinkedHashMap<AdminSetting, Any>()
 
         /** Read [key] from the radio, patch it with [build], and write the result unless the radio already holds it. False when the sequence must stop. */
         suspend fun patch(
@@ -291,7 +305,10 @@ class MeshSettingsWriter(
             // Not stored as what the radio holds: the next report says what it kept.
             cache.remove(key)
             written += settings
-            expected.forEach { (setting, value) -> ledger.expect(dest, setting, value) }
+            expected.forEach { (setting, value) ->
+                ledger.expect(dest, setting, value)
+                sentValues[setting] = value
+            }
             return true
         }
 
