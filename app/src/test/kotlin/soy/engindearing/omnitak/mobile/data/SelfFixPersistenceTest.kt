@@ -58,6 +58,38 @@ class SelfFixPersistenceTest {
         assertEquals(t0, restored.timeMs)
     }
 
+    // ── #205: provenance flag ───────────────────────────────────────────
+
+    @Test fun restore_flags_the_fix_as_restored() {
+        // The flag is what lets the PPLI broadcaster tell the seed from a
+        // live fix; NaN accuracy and zero speed alone cannot (a live fix
+        // without accuracy is NaN too).
+        val restored = SelfFixPersistence.restoredFixOrNull(
+            UserPrefs(selfLat = 47.6, selfLon = -117.4, selfFixTimeMs = t0),
+        )!!
+        assertTrue("seed must carry restored = true", restored.restored)
+    }
+
+    @Test fun live_fix_is_not_flagged_restored() {
+        assertFalse("a fix built without the flag is live", fix(t0).restored)
+    }
+
+    @Test fun persist_then_restore_round_trips_through_the_flag() {
+        // Write side (setLastSelfFix stores lat/lon/hae/time, nothing about
+        // provenance) -> read side (restoredFixOrNull) marks it restored.
+        // A live fix that was persisted must come back flagged restored.
+        val live = fix(t0)
+        assertFalse(live.restored)
+        val written = UserPrefs().copy(
+            selfLat = live.lat, selfLon = live.lon, selfHae = live.altitudeM, selfFixTimeMs = live.timeMs,
+        )
+        val restored = SelfFixPersistence.restoredFixOrNull(written)!!
+        assertTrue(restored.restored)
+        assertEquals(live.lat, restored.lat, 0.0)
+        assertEquals(live.lon, restored.lon, 0.0)
+        assertEquals(live.timeMs, restored.timeMs)
+    }
+
     @Test fun restored_fix_never_claims_live_confidence() {
         val restored = SelfFixPersistence.restoredFixOrNull(
             UserPrefs(selfLat = 47.6, selfLon = -117.4, selfHae = 562.0, selfFixTimeMs = t0),
@@ -178,5 +210,34 @@ class SelfFixPersistenceTest {
         val a = fix(t0, lat = 1.0)
         val b = fix(t0, lat = 2.0)
         assertSame(b, SelfFixPersistence.newerOf(a, b))
+    }
+
+    // ── #205: provenance beats the clock ────────────────────────────────
+
+    @Test fun live_fix_replaces_restored_seed() {
+        val seed = fix(t0).copy(restored = true)
+        val live = fix(t0 + 5_000L)
+        assertSame(live, SelfFixPersistence.newerOf(seed, live))
+    }
+
+    @Test fun live_fix_replaces_restored_seed_even_when_seed_is_stamped_later() {
+        // Device clock moved back since the seed was written: the seed is
+        // "newer" by timestamp. It must still lose to the first live fix,
+        // otherwise it would pin itself as the current fix and PPLI would
+        // stay held for as long as GPS kept delivering.
+        val seed = fix(t0 + 3_600_000L).copy(restored = true)
+        val live = fix(t0)
+        assertSame(live, SelfFixPersistence.newerOf(seed, live))
+    }
+
+    @Test fun restored_seed_never_displaces_live_fix_even_when_stamped_later() {
+        val live = fix(t0)
+        val seed = fix(t0 + 3_600_000L).copy(restored = true)
+        assertSame(live, SelfFixPersistence.newerOf(live, seed))
+    }
+
+    @Test fun restored_seed_lands_when_nothing_else_is_known() {
+        val seed = fix(t0).copy(restored = true)
+        assertSame(seed, SelfFixPersistence.newerOf(null, seed))
     }
 }

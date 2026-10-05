@@ -1,6 +1,8 @@
 package soy.engindearing.omnitak.mobile.data
 
 import android.content.Context
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
@@ -47,10 +49,13 @@ data class UserPrefs(
     // that it never changes so TAK servers see a stable contact across
     // restarts. iOS uses the same convention with an `IOS-` prefix.
     val selfUid: String = "",
-    // Self-position used for PPLI broadcast. NaN sentinels mean "no fix
-    // yet" — GAP-030b wires real GPS via FusedLocationProviderClient
-    // (LocationProvider) and the broadcaster suppresses PPLI until a
-    // real fix arrives, fixing issue #10 (HUD showing San Francisco).
+    // Last persisted GPS fix (lat/lon here, hae + time below). NaN sentinels
+    // mean "never persisted" — GAP-030b wires real GPS via
+    // FusedLocationProviderClient (LocationProvider). #205 - this is ONLY the
+    // store the map's restored seed is rebuilt from
+    // (SelfFixPersistence.restoredFixOrNull): PPLI never reads it and holds
+    // until a live fix arrives (issue #10: HUD showing San Francisco; #205:
+    // a stale position broadcast after a restart).
     val selfLat: Double = Double.NaN,
     val selfLon: Double = Double.NaN,
     // Issue #75 — the rest of the persisted self-fix. Together with
@@ -109,6 +114,12 @@ data class UserPrefs(
      *  Meshtastic radio (portnum-72 TAKMessage). Allows two OmniTAK
      *  operators with radios to see each other and chat with NO server. */
     val broadcastOverMesh: Boolean = true,
+    /** #211 - master "Report my position" switch. When false the app sends no
+     *  PPLI at all: not to TAK servers, not over the mesh. The map still shows
+     *  where I am. Default on, which is how every install behaved before the
+     *  switch existed. Deliberately not part of ConfigProfile: a shared team
+     *  profile must not be able to switch an operator's reporting back on. */
+    val positionReportingEnabled: Boolean = true,
     /** How often (seconds) PPLI is sent over the mesh. Coerced to 30..60
      *  so LoRa bandwidth is respected. */
     val meshBroadcastIntervalSecs: Int = 30,
@@ -176,7 +187,12 @@ data class UserPrefs(
     val relayGatewayEnabled: Boolean = false,
 )
 
-class UserPrefsStore(private val context: Context) {
+class UserPrefsStore internal constructor(private val dataStore: DataStore<Preferences>) {
+    // The public entry point stays `UserPrefsStore(context)`; the DataStore
+    // constructor exists so unit tests can run the store against a
+    // file-backed DataStore on the JVM (no Context needed).
+    constructor(context: Context) : this(context.userPrefsDataStore)
+
     private val KEY_CALLSIGN = stringPreferencesKey("callsign")
     private val KEY_TEAM = stringPreferencesKey("team")
     private val KEY_ECHELON = stringPreferencesKey("echelon")
@@ -205,6 +221,7 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_GYB_DETECTOR = booleanPreferencesKey("gyb_detector_enabled")
     private val KEY_GYB_LAST_DEVICE = stringPreferencesKey("gyb_last_device_address")
     private val KEY_BROADCAST_OVER_MESH = booleanPreferencesKey("broadcast_over_mesh")
+    private val KEY_POSITION_REPORTING = booleanPreferencesKey("position_reporting_enabled")
     private val KEY_MESH_BROADCAST_INTERVAL = intPreferencesKey("mesh_broadcast_interval_secs")
     private val KEY_VERBOSE_BLE_LOGGING = booleanPreferencesKey("verbose_ble_logging")
     private val KEY_MESH_FRAMEWORK = stringPreferencesKey("selected_mesh_framework")
@@ -225,10 +242,10 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_STALENESS_OVERLAY = booleanPreferencesKey("staleness_overlay_enabled")
     private val KEY_RELAY_GATEWAY = booleanPreferencesKey("relay_gateway_enabled")
 
-    val prefs: Flow<UserPrefs> = context.userPrefsDataStore.data.map { p -> readFrom(p) }
+    val prefs: Flow<UserPrefs> = dataStore.data.map { p -> readFrom(p) }
 
     suspend fun update(block: (UserPrefs) -> UserPrefs) {
-        context.userPrefsDataStore.edit { p ->
+        dataStore.edit { p ->
             val next = block(readFrom(p))
             p[KEY_CALLSIGN] = next.callsign
             p[KEY_TEAM] = next.team
@@ -256,6 +273,7 @@ class UserPrefsStore(private val context: Context) {
             p[KEY_GYB_DETECTOR] = next.gybDetectorEnabled
             p[KEY_GYB_LAST_DEVICE] = next.gybLastDeviceAddress
             p[KEY_BROADCAST_OVER_MESH] = next.broadcastOverMesh
+            p[KEY_POSITION_REPORTING] = next.positionReportingEnabled
             p[KEY_MESH_BROADCAST_INTERVAL] = next.meshBroadcastIntervalSecs.coerceIn(30, 60)
             p[KEY_VERBOSE_BLE_LOGGING] = next.verboseBleLogging
             p[KEY_MESH_FRAMEWORK] = next.selectedMeshFramework.name
@@ -325,6 +343,11 @@ class UserPrefsStore(private val context: Context) {
         update { it.copy(broadcastOverMesh = value) }
     }
 
+    /** #211 - persist the master "Report my position" switch. */
+    suspend fun setPositionReportingEnabled(value: Boolean) {
+        update { it.copy(positionReportingEnabled = value) }
+    }
+
     /** Persist the mesh PPLI broadcast interval (coerced to 30..60 seconds). */
     suspend fun setMeshBroadcastIntervalSecs(value: Int) {
         update { it.copy(meshBroadcastIntervalSecs = value.coerceIn(30, 60)) }
@@ -356,11 +379,25 @@ class UserPrefsStore(private val context: Context) {
      * been minting since 0.1; existing installs keep their value.
      */
     suspend fun ensureSelfUid(): String {
-        val current = prefs.first()
-        if (current.selfUid.isNotBlank()) return current.selfUid
-        val generated = "ANDROID-${java.util.UUID.randomUUID()}"
-        update { it.copy(selfUid = generated) }
-        return generated
+        // Fast path: once a uid exists it never changes, a plain read is enough.
+        prefs.first().selfUid.takeIf { it.isNotBlank() }?.let { return it }
+        // #205 - read AND write inside ONE DataStore edit. Several first-run
+        // callers can ask at the same moment (the PPLI broadcaster when a link
+        // comes up, the chat screen, a marker drop, mission sync). Reading
+        // outside the edit let each of them see "blank", mint its own uuid and
+        // return it, while only the last writer's uid stayed on disk. edit{}
+        // calls are serialized, so the second caller finds the first one's uid.
+        var uid = ""
+        dataStore.edit { p ->
+            val existing = p[KEY_SELF_UID].orEmpty()
+            if (existing.isNotBlank()) {
+                uid = existing
+            } else {
+                uid = "ANDROID-${java.util.UUID.randomUUID()}"
+                p[KEY_SELF_UID] = uid
+            }
+        }
+        return uid
     }
 
     private fun readFrom(p: androidx.datastore.preferences.core.Preferences): UserPrefs = UserPrefs(
@@ -393,6 +430,7 @@ class UserPrefsStore(private val context: Context) {
         gybDetectorEnabled = p[KEY_GYB_DETECTOR] ?: false,
         gybLastDeviceAddress = p[KEY_GYB_LAST_DEVICE] ?: "",
         broadcastOverMesh = p[KEY_BROADCAST_OVER_MESH] ?: true,
+        positionReportingEnabled = p[KEY_POSITION_REPORTING] ?: true,
         meshBroadcastIntervalSecs = p[KEY_MESH_BROADCAST_INTERVAL]?.coerceIn(30, 60) ?: 30,
         verboseBleLogging = p[KEY_VERBOSE_BLE_LOGGING] ?: false,
         selectedMeshFramework = p[KEY_MESH_FRAMEWORK]

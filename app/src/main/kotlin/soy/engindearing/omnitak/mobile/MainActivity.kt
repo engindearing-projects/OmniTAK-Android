@@ -89,6 +89,11 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    override fun onResume() {
+        super.onResume()
+        (application as? OmniTAKApp)?.refreshConnectionService()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleImportIntent(intent)

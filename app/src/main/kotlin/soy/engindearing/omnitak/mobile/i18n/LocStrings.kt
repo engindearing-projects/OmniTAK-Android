@@ -89,6 +89,8 @@ internal object LocStrings {
         "settings.customTile.help" to "Must be an XYZ-style URL with {z}, {x}, {y} placeholders (ATAK-style {\$z}/{\$x}/{\$y} also works). WMTS endpoints from agency / private servers usually expose this. Falls back to OSM if invalid.",
 
         // Self position
+        "settings.reportPosition" to "Report my position",
+        "settings.reportPosition.desc" to "Send your position to TAK servers and over the mesh. While this is off, nothing is sent to servers or the mesh, so teammates stop receiving updates from you. You still see yourself on the map.",
         "settings.milStdSymbol" to "MIL-STD-2525 symbol",
         "settings.milStdSymbol.desc" to "Render your own pip as a friendly-combat ground frame (a-f-G-U-C) instead of the legacy tactical disc. Affects only the map; PPLI broadcast is unchanged.",
         "settings.triangleSelfMarker" to "Triangle self-marker",
@@ -99,6 +101,7 @@ internal object LocStrings {
         "marker.selfLon" to "Longitude",
         "map.manualPositionActive" to "Manual position active",
         "map.tapToResumeGps" to "Tap to resume GPS",
+        "map.pplioff" to "PPLI OFF",
 
         // Drone detection
         "settings.faaRemoteIdScanner" to "FAA Remote ID scanner",
@@ -255,6 +258,8 @@ internal object LocStrings {
         "settings.tileUrl" to "圖磚網址",
         "settings.customTile.help" to "必須是包含 {z}、{x}、{y} 預留位置的 XYZ 樣式網址（ATAK 樣式的 {\$z}/{\$x}/{\$y} 亦可）。機關／私人伺服器的 WMTS 端點通常會提供此格式。若無效則回退至 OSM。",
 
+        "settings.reportPosition" to "回報我的位置",
+        "settings.reportPosition.desc" to "將您的位置傳送至 TAK 伺服器與 Mesh。關閉時，不會向伺服器或 Mesh 傳送任何位置，隊友也不再收到您的更新，但您仍可在地圖上看到自己。",
         "settings.milStdSymbol" to "MIL-STD-2525 符號",
         "settings.milStdSymbol.desc" to "將您自身的標記繪製為友軍地面戰鬥框架（a-f-G-U-C），取代舊版戰術圓點。僅影響地圖；PPLI 廣播維持不變。",
         "settings.triangleSelfMarker" to "三角形自我標記",
@@ -265,6 +270,7 @@ internal object LocStrings {
         "marker.selfLon" to "經度",
         "map.manualPositionActive" to "手動定位啟用中",
         "map.tapToResumeGps" to "點擊以恢復 GPS",
+        "map.pplioff" to "PPLI 關閉",
 
         "settings.faaRemoteIdScanner" to "FAA Remote ID 掃描器",
         "settings.faaRemoteId.desc" to "監聽附近無人機（DJI Mavic、Skydio、Autel）透過藍芽廣播的 FAA Remote ID。偵測到的無人機將以未知空域 UAS 目標顯示在地圖上。可接收藍芽廣播的 Remote ID 子集；WiFi 訊號廣播需搭配 gy6 感測器。藍芽掃描會消耗電池。",

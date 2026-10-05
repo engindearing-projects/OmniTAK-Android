@@ -9,12 +9,15 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -163,7 +166,18 @@ fun OnboardingFlow(onComplete: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0A0A0A)),
+            // Draw the dark fill first so it still runs edge to edge behind
+            // the system bars...
+            .background(Color(0xFF0A0A0A))
+            // ...then inset the children. #221 — MainActivity uses
+            // enableEdgeToEdge and this root sits outside AppNav's Scaffold,
+            // so nothing consumed the system-bar insets: Skip was laid out
+            // under the status bar and did not take taps. safeDrawing keeps
+            // Skip clear of the status bar / cutout and the bottom controls
+            // clear of the navigation bar or taskbar (and the side cutout in
+            // landscape). The fixed paddings below stay as they were, so
+            // everything shifts only by the inset sizes.
+            .windowInsetsPadding(WindowInsets.safeDrawing),
     ) {
         // Skip — always visible at top-right
         TextButton(
