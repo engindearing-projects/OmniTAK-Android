@@ -1455,6 +1455,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 onServerTap = { onOpenTab("servers") },
                 onMenuTap = { onOpenTab("settings") },
                 showDetails = userPrefs.topInfoBarVisible,
+                // #211 - amber "PPLI OFF" chip while "Report my position" is off.
+                positionReportingOff = !userPrefs.positionReportingEnabled,
                 // One flag per enabled server → "N/M ●●●" multi-server badge.
                 serverConnectedFlags = allServers
                     .filter { it.enabled }

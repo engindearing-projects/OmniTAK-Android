@@ -73,6 +73,11 @@ class SelfPositionBroadcaster internal constructor(
     // broadcaster — a Long parameter froze whatever value was cached at
     // construction time (usually the 30 s default, before DataStore emitted).
     private val meshThrottleMs: () -> Long = { 30_000L },
+    // #211 - master "Report my position" switch. Checked first thing in every
+    // tick, so ONE gate covers the server send and the mesh send, and a toggle
+    // applies to the running broadcaster on the next tick (a lambda, like
+    // meshBroadcastEnabled) without a restart.
+    private val positionReportingEnabled: () -> Boolean = { true },
     // Single source of wire identity (#9): production routes through
     // UserPrefsStore.ensureSelfUid via the secondary constructor so
     // exactly one code path mints the ANDROID-<uuid>. The default here
@@ -105,6 +110,7 @@ class SelfPositionBroadcaster internal constructor(
         meshConnected: () -> Boolean = { false },
         meshBroadcastEnabled: () -> Boolean = { true },
         meshThrottleMs: () -> Long = { 30_000L },
+        positionReportingEnabled: () -> Boolean = { true },
     ) : this(
         scope = scope,
         prefsFlow = prefsStore.prefs,
@@ -119,6 +125,7 @@ class SelfPositionBroadcaster internal constructor(
         meshConnected = meshConnected,
         meshBroadcastEnabled = meshBroadcastEnabled,
         meshThrottleMs = meshThrottleMs,
+        positionReportingEnabled = positionReportingEnabled,
         mintSelfUid = { prefsStore.ensureSelfUid() },
     )
 
@@ -180,6 +187,12 @@ class SelfPositionBroadcaster internal constructor(
     private suspend fun currentPrefs(): UserPrefs = prefsFlow.first()
 
     internal suspend fun broadcastOnce(prefs: UserPrefs) {
+        // #211 - "Report my position" off: nothing goes out, to servers or the
+        // mesh. Checked before anything else so no path can slip past it.
+        if (!positionReportingEnabled()) {
+            Log.d(TAG, "PPLI off - position reporting disabled")
+            return
+        }
         // #82 — a manual self-position override wins over live GPS so PPLI
         // reports where the operator placed themselves. It carries no real
         // accuracy (Float.NaN → unknown CE), so peers don't read a manual

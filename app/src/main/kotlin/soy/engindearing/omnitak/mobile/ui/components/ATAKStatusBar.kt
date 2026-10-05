@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Storage
@@ -24,8 +25,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import soy.engindearing.omnitak.mobile.i18n.Loc
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalBackground
 
@@ -55,6 +58,10 @@ fun ATAKStatusBar(
     // connection dot — the dot itself is never hidden by the toggle, only
     // the server name / counters / GPS / clock / menu around it.
     showDetails: Boolean = true,
+    // #211 - true while "Report my position" is switched off. Shown in BOTH
+    // layouts (the full bar and the collapsed dot-only one): it is a state the
+    // operator should not be able to miss, whatever the top-bar toggle says.
+    positionReportingOff: Boolean = false,
 ) {
     if (!showDetails) {
         Row(
@@ -65,6 +72,10 @@ fun ATAKStatusBar(
                 MultiServerIndicator(flags = serverConnectedFlags)
             } else {
                 ConnectionDot(isConnected = isConnected)
+            }
+            if (positionReportingOff) {
+                Spacer(Modifier.width(6.dp))
+                PpliOffChip()
             }
         }
         return
@@ -109,7 +120,12 @@ fun ATAKStatusBar(
         CounterChip(label = "↑", count = messagesSent, tint = Color(0xFFFFA000))
 
         Spacer(Modifier.width(12.dp))
-        Box(modifier = Modifier.weight(1f))
+        // The flexible gap. The "PPLI OFF" chip (#211) lives in it, so on a
+        // narrow phone it can only squeeze itself and never pushes the
+        // GPS / clock / menu off the end of the bar.
+        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+            if (positionReportingOff) PpliOffChip()
+        }
 
         if (gpsAccuracyMeters != null) {
             Text(
@@ -136,6 +152,29 @@ fun ATAKStatusBar(
                 .clickable(onClick = onMenuTap),
         )
     }
+}
+
+/**
+ * #211 - amber "PPLI OFF" chip: the operator has switched "Report my position"
+ * off, so nothing is being sent to servers or the mesh. Single line, clipped
+ * (never wrapped) when the gap it sits in is too narrow.
+ */
+@Composable
+private fun PpliOffChip() {
+    Text(
+        Loc.t("map.pplioff"),
+        color = Color.Black,
+        fontWeight = FontWeight.Bold,
+        fontFamily = FontFamily.Monospace,
+        fontSize = 10.sp,
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Clip,
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(Color(0xFFFFA000))
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+    )
 }
 
 @Composable

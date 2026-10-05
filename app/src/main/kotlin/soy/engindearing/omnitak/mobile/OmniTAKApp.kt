@@ -631,7 +631,10 @@ class OmniTAKApp : Application() {
     // hundreds, all re-running on every prefs write).
     @Volatile private var broadcasterPrefsJob: kotlinx.coroutines.Job? = null
 
-    private fun startAppBroadcaster() {
+    // suspend (#211): it reads the stored "Report my position" value before the
+    // broadcaster starts. Its only caller is a collect{} block, which is a
+    // suspend context and runs one emission at a time.
+    private suspend fun startAppBroadcaster() {
         if (appBroadcaster != null) return
         val fixFlow = locationProvider.fix
         // Eagerly cache the mesh-broadcast prefs as StateFlows so the
@@ -639,11 +642,20 @@ class OmniTAKApp : Application() {
         // without suspending — they're called inside a non-suspending context.
         val broadcastOverMeshFlow = kotlinx.coroutines.flow.MutableStateFlow(true)
         val meshIntervalMsFlow = kotlinx.coroutines.flow.MutableStateFlow(30_000L)
+        // #211 - the master "Report my position" switch. Seeded from the STORED
+        // value, not from a default like the two flows above: the collector
+        // below only catches up a moment later and the broadcaster's first tick
+        // races it, so starting at `true` could let that tick send a PPLI after
+        // the operator had switched reporting off.
+        val positionReportingFlow = kotlinx.coroutines.flow.MutableStateFlow(
+            userPrefsStore.prefs.first().positionReportingEnabled,
+        )
         broadcasterPrefsJob?.cancel()
         broadcasterPrefsJob = appScope.launch {
             userPrefsStore.prefs.collect { p ->
                 broadcastOverMeshFlow.value = p.broadcastOverMesh
                 meshIntervalMsFlow.value = p.meshBroadcastIntervalSecs.coerceIn(30, 60).toLong() * 1000L
+                positionReportingFlow.value = p.positionReportingEnabled
             }
         }
         appBroadcaster = SelfPositionBroadcaster(
@@ -665,6 +677,8 @@ class OmniTAKApp : Application() {
             // applies to a running broadcaster instead of freezing at the
             // pre-DataStore 30 s default.
             meshThrottleMs = { meshIntervalMsFlow.value },
+            // #211 - one gate for server AND mesh PPLI, live on a running broadcaster.
+            positionReportingEnabled = { positionReportingFlow.value },
         ).also { it.start() }
     }
 
