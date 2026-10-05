@@ -161,6 +161,55 @@ class DeviceSettingsStateTest {
 
     // endregion
 
+    // region an interval above the app's limit ---------------------------------------------
+
+    @Test fun `an interval above the app's limit is shown as the radio has it and is not an edit`() {
+        // Another client set the radio to three days. The app lets the operator type up to a day.
+        val state = factory().report(AdminResponse.PositionConfig(broadcastSecs = 259_200))
+
+        assertEquals("the screen shows the radio's real value", 259_200, state.draft.positionBroadcastSecs)
+        assertTrue("nothing the operator did not change is edited", state.edits().isEmpty)
+        assertNull(state.edits().positionBroadcastSecs)
+    }
+
+    @Test fun `a push of another setting leaves the interval of such a radio alone`() {
+        val state = factory().report(AdminResponse.PositionConfig(broadcastSecs = 259_200))
+
+        val edits = state.edits(state.draft.copy(role = MeshRole.CLIENT_MUTE))
+
+        assertEquals(DeviceEdits(role = MeshRole.CLIENT_MUTE), edits)
+        assertEquals(listOf(AdminSetting.ROLE), edits.settings)
+    }
+
+    @Test fun `an interval the operator changes is sent in range`() {
+        val state = factory().report(AdminResponse.PositionConfig(broadcastSecs = 259_200))
+
+        assertEquals(DeviceEdits(positionBroadcastSecs = 300), state.edits(state.draft.copy(positionBroadcastSecs = 300)))
+        assertEquals("never past a day", DeviceEdits(positionBroadcastSecs = 86_400), state.edits(state.draft.copy(positionBroadcastSecs = 100_000)))
+    }
+
+    @Test fun `an out of range interval follows the radio while it is not edited`() {
+        var state = factory().report(AdminResponse.PositionConfig(broadcastSecs = 259_200))
+        state = state.report(AdminResponse.PositionConfig(broadcastSecs = 600_000)) // changed elsewhere again
+        assertEquals(600_000, state.draft.positionBroadcastSecs)
+        assertTrue(state.edits().isEmpty)
+
+        state = state.report(AdminResponse.PositionConfig(broadcastSecs = 300)) // and back in range
+        assertEquals(300, state.draft.positionBroadcastSecs)
+        assertTrue(state.edits().isEmpty)
+    }
+
+    @Test fun `an edit on a radio above the limit stays an edit through later reports`() {
+        var state = factory().report(AdminResponse.PositionConfig(broadcastSecs = 259_200))
+        state = state.copy(draft = state.draft.copy(positionBroadcastSecs = 120))
+        state = state.report(AdminResponse.PositionConfig(broadcastSecs = 259_200))
+
+        assertEquals(120, state.draft.positionBroadcastSecs)
+        assertEquals(DeviceEdits(positionBroadcastSecs = 120), state.edits())
+    }
+
+    // endregion
+
     // region values with no name ----------------------------------------------------------
 
     @Test fun `a role or preset this app has no name for is unknown and never edited`() {

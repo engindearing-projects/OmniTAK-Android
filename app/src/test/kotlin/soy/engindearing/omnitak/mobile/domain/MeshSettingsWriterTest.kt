@@ -144,6 +144,23 @@ class MeshSettingsWriterTest {
         sameBytes("primary channel (still unnamed, same key)", channelBefore, rig.radio.channels[0])
     }
 
+    @Test fun `a role-only push leaves the interval of a radio above the app's limit alone`() = runTest {
+        val rig = Rig(this)
+        // Another client set the interval to three days: more than the app lets the operator type.
+        val threeDays = ProtoMsg().varint(1, 259_200).varint(7, 811).varint(13, 1).build()
+        rig.radio.config[2] = threeDays.copyOf()
+        var state = DeviceSettingsState()
+        for (report in reportsFrom(rig.radio)) state = state.withReport(report)
+
+        val edits = state.edits(state.draft.copy(role = MeshRole.CLIENT_MUTE))
+        assertEquals(listOf(AdminSetting.ROLE), edits.settings)
+        val result = rig.writer.pushDeviceConfig(edits)
+
+        assertEquals(AdminWriteResult.Sent(listOf(AdminSetting.ROLE)), result)
+        assertEquals("the position config was neither read nor written", listOf("get_config:1", "begin", "set_config:1", "commit"), rig.radio.log)
+        sameBytes("position config (still three days)", threeDays, rig.radio.config[2])
+    }
+
     @Test fun `nothing edited is nothing sent`() = runTest {
         val rig = Rig(this)
         assertEquals(AdminWriteResult.NothingToChange, rig.writer.pushDeviceConfig(DeviceEdits()))

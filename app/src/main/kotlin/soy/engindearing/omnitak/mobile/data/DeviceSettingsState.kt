@@ -92,9 +92,11 @@ data class DeviceSettingsState(
             longName = c.longName.takeIf { it.isNotBlank() && r.longName != null && it != r.longName },
             shortName = c.shortName.takeIf { it.isNotBlank() && r.shortName != null && it != r.shortName },
             role = c.role.takeIf { r.role != null && it != r.role },
-            positionBroadcastSecs = c.positionBroadcastSecs.takeIf {
-                r.positionBroadcastSecs != null && it != r.positionBroadcastSecs
-            },
+            // Compared as it is, not clamped: another client can set the interval above the app's limit, the screen
+            // shows the radio's real value, and that is not an edit. What is sent once it does change is in range.
+            positionBroadcastSecs = candidate.positionBroadcastSecs
+                .takeIf { r.positionBroadcastSecs != null && it != r.positionBroadcastSecs }
+                ?.coerceIn(0, MAX_INTERVAL_SECS),
             channelName = c.channelName.takeIf { r.channelName != null && it != r.channelName },
             channelPreset = c.channelPreset.takeIf { r.channelPreset != null && it != r.channelPreset },
         )
@@ -117,9 +119,8 @@ data class DeviceSettingsState(
             )
             is AdminResponse.PositionConfig -> copy(
                 draft = draft.copy(
-                    positionBroadcastSecs = sync(draft.positionBroadcastSecs, old.positionBroadcastSecs, report.broadcastSecs) {
-                        it.coerceIn(0, MAX_INTERVAL_SECS)
-                    },
+                    // As the radio has it, even above the limit the screen lets the operator type.
+                    positionBroadcastSecs = sync(draft.positionBroadcastSecs, old.positionBroadcastSecs, report.broadcastSecs),
                 ),
                 radio = old.copy(positionBroadcastSecs = report.broadcastSecs),
             )
@@ -160,11 +161,13 @@ data class DeviceSettingsState(
     }
 }
 
-/** The draft as it would be sent: names cut to the firmware's byte limits, the interval kept in range. */
+/**
+ * The draft's names as they would be sent, cut to the firmware's byte limits. The interval is left as it is: it is
+ * compared with the radio's own value, and clamped only when it is sent.
+ */
 internal fun MeshDeviceConfig.forWire(): MeshDeviceConfig = copy(
     longName = AdminMessageSerializer.clampLongName(longName),
     shortName = AdminMessageSerializer.clampShortName(shortName),
-    positionBroadcastSecs = positionBroadcastSecs.coerceIn(0, 24 * 60 * 60),
     channelName = AdminMessageSerializer.clampChannelName(channelName),
 )
 

@@ -50,7 +50,11 @@ import java.util.Random
  *     primary channel) change only the position interval, and assert the role
  *     and the channel name are untouched;
  *  3. ask for the settings with get_*_request and check the answers reach the
- *     cache (so admin responses are accepted from the radio);
+ *     cache (so the read-back rule accepts the radio's own answers: each read
+ *     has its own packet id, and the radio's answer quotes it);
+ *  3b. an interval above the app's limit, as another client can leave it: the
+ *     screen shows the radio's own value, it is not an edit, and a push of the
+ *     role alone leaves it as it is;
  *  4. arrange a radio that has something to lose: write values into the fields
  *     the old partial writes used to reset (region, hop limit, transmit switch,
  *     GPS mode, position flags, channel key and precision, time zone, ...). The
@@ -487,6 +491,33 @@ class SimRadioSettingsIT {
                 )
                 log("admin responses refilled the cache: ${s.cache}")
             }
+
+            // 3b. an interval above the app's limit, as another client can leave it: the screen shows the radio's own
+            // value and does not count it as an edit, and a push of another setting leaves it alone.
+            val threeDays = 259_200L
+            send(s, listOf(
+                beginFrame(s.node),
+                setConfigFrame(s.node, RadioSettingsCache.CONFIG_POSITION, rebuild(found.position, at(1) { varint(1, threeDays) })),
+                commitFrame(s.node),
+            ))
+            s.awaitRebootAndForget()
+            s.close()
+            s = connect()
+            val aboveLimit = view(s.cache)
+            assertEquals("the radio holds an interval above the app's limit", threeDays, aboveLimit["position.position_broadcast_secs"])
+            assertEquals("the screen shows the radio's own value", threeDays.toInt(), app.state.draft.positionBroadcastSecs)
+            assertTrue("and it is not an edit", app.state.edits().isEmpty)
+            val roleOnly = stepThroughApp("role only, interval above the limit", s, AdminWriteResult.Sent(listOf(AdminSetting.ROLE))) { sess ->
+                runBlocking { sess.mgr.pushDeviceConfig(app.edits { copy(role = MeshRole.CLIENT_MUTE) }) }
+            }
+            s = roleOnly.first
+            val roleChanged = diff(aboveLimit, roleOnly.second)
+            log("role only, interval above the limit: $roleChanged")
+            assertEquals(
+                "only the role may change: the interval must not be rewritten to the app's limit",
+                mapOf("device.role" to (null to 1L)),
+                roleChanged,
+            )
 
             // 4. arrange a radio that has something to lose
             arrange(s, found)

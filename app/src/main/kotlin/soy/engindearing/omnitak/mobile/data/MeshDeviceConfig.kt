@@ -202,8 +202,8 @@ class MeshDeviceConfigStore(private val context: Context) {
 
     suspend fun update(block: (MeshDeviceConfig) -> MeshDeviceConfig) {
         _state.update { current ->
-            val next = block(current.draft)
-            current.copy(draft = next.copy(positionBroadcastSecs = next.positionBroadcastSecs.coerceIn(0, 24 * 60 * 60)))
+            // Not clamped here: the draft can hold the radio's own value, above the limit the operator can type.
+            current.copy(draft = block(current.draft))
         }
         persist()
     }
@@ -222,7 +222,7 @@ class MeshDeviceConfigStore(private val context: Context) {
             p[KEY_LONG_NAME] = draft.longName
             p[KEY_SHORT_NAME] = draft.shortName
             p[KEY_ROLE] = draft.role.name
-            p[KEY_PLI] = draft.positionBroadcastSecs.coerceIn(0, 24 * 60 * 60)
+            p[KEY_PLI] = draft.positionBroadcastSecs
             p[KEY_CH_NAME] = draft.channelName
             p[KEY_CH_PRESET] = draft.channelPreset.name
         }
