@@ -574,8 +574,10 @@ private fun BlePane(
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                 style = MaterialTheme.typography.labelSmall,
             )
-            // What the operator can do about it, when the client knows.
-            failure.hint?.let { hint ->
+            // What the operator can do about it, when the client knows. Not
+            // on a link that is up again: the failure stays as a record, but
+            // "Bluetooth is off" next to "Connected" reads as a contradiction.
+            failure.hint?.takeIf { !connected }?.let { hint ->
                 Text(
                     hint,
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
