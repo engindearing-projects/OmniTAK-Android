@@ -31,9 +31,18 @@ object KmlShapeRenderer {
     private var polylines: List<Polyline> = emptyList()
     private var polygons: List<Polygon> = emptyList()
     private var boundMap: MapLibreMap? = null
+    // What is drawn on [boundMap] right now, as it was asked for.
+    private var applied: List<KmlVectorOverlay>? = null
 
     fun apply(map: MapLibreMap, overlays: List<KmlVectorOverlay>, store: KmlVectorOverlayStore) {
+        // The map view is kept across visits to other tabs and its annotations
+        // with it. The map screen asks again every time it is composed; reading
+        // and parsing every overlay file on the main thread for shapes that
+        // are already drawn would make each return to the map as slow as the
+        // first load.
+        if (!needsApply(sameMap = boundMap === map, applied = applied, wanted = overlays)) return
         boundMap = map
+        applied = null
         clearAnnotations(map)
         val newLines = ArrayList<Polyline>()
         val newPolys = ArrayList<Polygon>()
@@ -69,11 +78,21 @@ object KmlShapeRenderer {
         }
         polylines = newLines
         polygons = newPolys
+        applied = overlays.toList()
     }
+
+    /**
+     * Whether the shapes have to be drawn again: not when the same map already
+     * shows exactly these overlays (same files, visibility, colour, width and
+     * opacity). Pure so it tests on the JVM.
+     */
+    internal fun needsApply(sameMap: Boolean, applied: List<KmlVectorOverlay>?, wanted: List<KmlVectorOverlay>): Boolean =
+        !sameMap || applied != wanted
 
     fun clear(map: MapLibreMap) {
         clearAnnotations(map)
         boundMap = null
+        applied = null
     }
 
     private fun clearAnnotations(map: MapLibreMap) {
