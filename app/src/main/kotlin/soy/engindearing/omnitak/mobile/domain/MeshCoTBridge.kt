@@ -64,7 +64,7 @@ class MeshCoTBridge(
     private data class NodeFingerprint(
         val lat: Double?, val lon: Double?, val alt: Int?,
         val snr: Double?, val battery: Int?, val hops: Int?,
-        val lastHeard: Long, val short: String, val long: String,
+        val lastHeard: Long?, val short: String, val long: String,
     ) {
         companion object {
             fun of(node: MeshNode): NodeFingerprint = NodeFingerprint(

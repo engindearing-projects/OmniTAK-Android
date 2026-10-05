@@ -981,7 +981,7 @@ private fun NodeRow(node: MeshNode, onClick: () -> Unit = {}) {
                 fontFamily = FontFamily.Monospace,
             )
         }
-        node.batteryLevel?.let { Text("$it%", color = TacticalAccent) }
+        node.batteryLabel?.let { Text(it, color = TacticalAccent) }
     }
 }
 
