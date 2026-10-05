@@ -10,6 +10,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -21,6 +22,7 @@ import java.net.Socket
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
 /**
@@ -28,6 +30,8 @@ import kotlin.concurrent.thread
  * noticed and reported, and one that is only quiet must be left alone.
  *
  * These run against real sockets on the loopback interface with short windows.
+ * Waits are long (they cost nothing when a test passes) and windows that a slow
+ * machine could overrun are wide.
  */
 class TAKConnectionLivenessTest {
 
@@ -50,10 +54,15 @@ class TAKConnectionLivenessTest {
         val port: Int get() = listener.localPort
         val accepted = AtomicInteger(0)
         val pings = AtomicInteger(0)
-        val frames = CopyOnWriteArrayList<String>()
+
+        /** The type of every frame, in the order it arrived. */
+        val types = CopyOnWriteArrayList<String>()
 
         /** While true the server keeps its sockets open and says nothing: the path is gone. */
         @Volatile var silent = false
+
+        /** While true the server does not even read: the client's writes back up. */
+        @Volatile var stalled = false
         @Volatile private var closed = false
 
         init {
@@ -78,6 +87,7 @@ class TAKConnectionLivenessTest {
             val sb = StringBuilder()
             try {
                 while (true) {
+                    while (stalled && !closed) Thread.sleep(10)
                     val c = reader.read()
                     if (c == -1) break
                     sb.append(c.toChar())
@@ -85,15 +95,15 @@ class TAKConnectionLivenessTest {
                     val xml = sb.toString()
                     sb.clear()
                     if (silent) continue
-                    if (TAKConnection.eventType(xml) == TAKConnection.PING_TYPE) {
+                    val type = TAKConnection.eventType(xml) ?: "?"
+                    types += type
+                    if (type == TAKConnection.PING_TYPE) {
                         pings.incrementAndGet()
                         when (answer) {
                             Answer.PONG -> send(s, PONG)
                             Answer.ECHO -> send(s, xml) // what OpenTAKServer does
                             Answer.NONE -> Unit
                         }
-                    } else {
-                        frames += xml
                     }
                 }
             } catch (_: Exception) {
@@ -146,12 +156,17 @@ class TAKConnectionLivenessTest {
         }
     }
 
-    private fun fakeServer(answerPings: Boolean) =
-        fakeServer(if (answerPings) Answer.PONG else Answer.NONE)
-
     private fun fakeServer(answer: Answer) = FakeTakServer(answer).also { closeables += it }
 
-    private fun connection(port: Int, timing: TAKConnection.Timing, tls: Boolean = false): TAKConnection {
+    private fun timing(pingIdleMs: Long, pongWaitMs: Long, tickMs: Long = 20, connectTimeoutMs: Long = 5_000) =
+        TAKConnection.Timing(connectTimeoutMs = connectTimeoutMs, pingIdleMs = pingIdleMs, pongWaitMs = pongWaitMs, tickMs = tickMs)
+
+    private fun connection(
+        port: Int,
+        timing: TAKConnection.Timing,
+        tls: Boolean = false,
+        nanoTime: () -> Long = System::nanoTime,
+    ): TAKConnection {
         val server = TAKServer(
             name = "test",
             host = "127.0.0.1",
@@ -159,7 +174,7 @@ class TAKConnectionLivenessTest {
             useTLS = tls,
             allowUntrustedTls = tls,
         )
-        val conn = TAKConnection(server, certVault = null, timing = timing, pingUid = { "TEST-UID-ping" })
+        val conn = TAKConnection(server, certVault = null, timing = timing, pingUid = { "TEST-UID-ping" }, nanoTime = nanoTime)
         closeables += AutoCloseable { conn.disconnect() }
         return conn
     }
@@ -189,26 +204,78 @@ class TAKConnectionLivenessTest {
         fail("expected $what within $timeoutMs ms")
     }
 
-    @Test
-    fun aQuietServerThatAnswersPingsStaysConnected() {
-        val server = fakeServer(answerPings = true)
-        // The drop window is far away: this test is about pings going out and coming back.
-        val conn = connection(server.port, TAKConnection.Timing(3_000, pingIdleMs = 100, deadIdleMs = 30_000, tickMs = 25))
+    private fun connectAndArm(conn: TAKConnection) {
         conn.connect()
         awaitState(conn, what = "Connected") { it is ConnectionState.Connected }
-        awaitTrue(what = "four pings at the server") { server.pings.get() >= 4 }
-        assertTrue("the server's pong must be recognised", conn.answersPings)
-        assertTrue(conn.state.value is ConnectionState.Connected)
-        assertEquals(1, server.accepted.get())
+        awaitTrue(what = "the server's first answer") { conn.answersPings }
+    }
+
+    // MARK: when to ping
+
+    @Test
+    fun theAppsOwnFirstEventReachesTheServerBeforeAnyPing() {
+        val server = fakeServer(Answer.PONG)
+        val conn = connection(server.port, timing(pingIdleMs = 1_500, pongWaitMs = 30_000))
+        conn.connect()
+        awaitState(conn, what = "Connected") { it is ConnectionState.Connected }
+        assertTrue(runBlocking { conn.send(CONTACT) })
+
+        awaitTrue(what = "a ping, later") { server.pings.get() >= 1 }
+        assertEquals("the first frame on the wire is the app's", "a-f-G-U-C", server.types.first())
+    }
+
+    @Test
+    fun aBusyStreamIsPingedUntilTheServerHasAnsweredOnceAndNotAfter() {
+        val server = fakeServer(Answer.PONG)
+        val conn = connection(server.port, timing(pingIdleMs = 300, pongWaitMs = 30_000))
+        conn.connect()
+        awaitState(conn, what = "Connected") { it is ConnectionState.Connected }
+        // Traffic every 20 ms: the stream is never idle for 300 ms.
+        val flooding = AtomicBoolean(true)
+        val flood = thread(isDaemon = true) {
+            while (flooding.get()) {
+                server.sendToAll(CONTACT)
+                Thread.sleep(20)
+            }
+        }
+        try {
+            awaitTrue(what = "the server to have answered a ping despite the traffic") { conn.answersPings }
+            val pingsWhenArmed = server.pings.get()
+            Thread.sleep(1_500) // five ping intervals
+            // On a schedule there would be five more by now. One or two are allowed
+            // for a moment when this machine did not get to run the traffic.
+            assertTrue(
+                "a stream that is not idle needs no more pings: ${server.pings.get()} after $pingsWhenArmed",
+                server.pings.get() <= pingsWhenArmed + 2,
+            )
+            assertTrue(conn.state.value is ConnectionState.Connected)
+        } finally {
+            flooding.set(false)
+            flood.join(2_000)
+        }
+    }
+
+    // MARK: quiet versus dead
+
+    @Test
+    fun aQuietServerThatAnswersPingsStaysConnectedAcrossManyDropWindows() {
+        val server = fakeServer(Answer.PONG)
+        // One ping and its wait are 1.15 s; watch four of them go by.
+        val conn = connection(server.port, timing(pingIdleMs = 150, pongWaitMs = 1_000))
+        connectAndArm(conn)
+
+        Thread.sleep(4_600)
+
+        assertTrue("still connected, state is ${conn.state.value}", conn.state.value is ConnectionState.Connected)
+        assertEquals("one connection, never re-dialed", 1, server.accepted.get())
+        assertTrue("pinged throughout, pings = ${server.pings.get()}", server.pings.get() >= 10)
     }
 
     @Test
     fun aServerThatStopsAnsweringIsReportedFailed() {
-        val server = fakeServer(answerPings = true)
-        val conn = connection(server.port, TAKConnection.Timing(3_000, pingIdleMs = 100, deadIdleMs = 500, tickMs = 25))
-        conn.connect()
-        awaitState(conn, what = "Connected") { it is ConnectionState.Connected }
-        awaitTrue(what = "a first pong") { conn.answersPings }
+        val server = fakeServer(Answer.PONG)
+        val conn = connection(server.port, timing(pingIdleMs = 100, pongWaitMs = 300))
+        connectAndArm(conn)
 
         server.silent = true
 
@@ -220,7 +287,7 @@ class TAKConnectionLivenessTest {
     @Test
     fun aServerThatSendsThePingBackCountsAsAnsweringAndIsDroppedWhenItStops() {
         val server = fakeServer(Answer.ECHO)
-        val conn = connection(server.port, TAKConnection.Timing(3_000, pingIdleMs = 100, deadIdleMs = 500, tickMs = 25))
+        val conn = connection(server.port, timing(pingIdleMs = 100, pongWaitMs = 300))
         val delivered = CopyOnWriteArrayList<String>()
         val subscribed = AtomicBoolean(false)
         scope.launch {
@@ -228,9 +295,7 @@ class TAKConnectionLivenessTest {
         }
         awaitTrue(what = "a subscriber on received") { subscribed.get() }
 
-        conn.connect()
-        awaitState(conn, what = "Connected") { it is ConnectionState.Connected }
-        awaitTrue(what = "the echo to be taken as an answer") { conn.answersPings }
+        connectAndArm(conn)
         assertTrue("an echoed ping is not CoT for the app: $delivered", delivered.isEmpty())
 
         server.silent = true
@@ -241,13 +306,13 @@ class TAKConnectionLivenessTest {
     @Test
     fun anotherClientsPingRelayedByTheServerIsNotAnAnswer() {
         val server = fakeServer(Answer.NONE)
-        val conn = connection(server.port, TAKConnection.Timing(3_000, pingIdleMs = 80, deadIdleMs = 250, tickMs = 20))
+        val conn = connection(server.port, timing(pingIdleMs = 80, pongWaitMs = 200))
         conn.connect()
         awaitState(conn, what = "Connected") { it is ConnectionState.Connected }
         awaitTrue(what = "a ping at the server") { server.pings.get() >= 1 }
 
         server.sendToAll(PING_FROM_ANOTHER_CLIENT)
-        Thread.sleep(1_000) // four drop windows
+        Thread.sleep(1_000) // several drop windows
 
         assertFalse(conn.answersPings)
         assertTrue("still connected, state is ${conn.state.value}", conn.state.value is ConnectionState.Connected)
@@ -255,12 +320,12 @@ class TAKConnectionLivenessTest {
 
     @Test
     fun aQuietServerThatNeverAnsweredAPingIsNotDropped() {
-        val server = fakeServer(answerPings = false)
-        val conn = connection(server.port, TAKConnection.Timing(3_000, pingIdleMs = 80, deadIdleMs = 250, tickMs = 20))
+        val server = fakeServer(Answer.NONE)
+        val conn = connection(server.port, timing(pingIdleMs = 80, pongWaitMs = 200))
         conn.connect()
         awaitState(conn, what = "Connected") { it is ConnectionState.Connected }
 
-        Thread.sleep(1_500) // six drop windows
+        Thread.sleep(1_500) // five drop windows
 
         assertTrue("still connected, state is ${conn.state.value}", conn.state.value is ConnectionState.Connected)
         assertFalse(conn.answersPings)
@@ -269,9 +334,55 @@ class TAKConnectionLivenessTest {
     }
 
     @Test
+    fun aLongSilenceOnTheClockAloneDoesNotDropTheLink() {
+        // A process that was stalled wakes up to a clock that has moved on, with
+        // nothing received in between. The server was never asked: it must be
+        // asked before it is given up on.
+        val skew = AtomicLong(0)
+        val server = fakeServer(Answer.PONG)
+        val conn = connection(
+            server.port,
+            timing(pingIdleMs = 100, pongWaitMs = 300),
+            nanoTime = { System.nanoTime() + skew.get() },
+        )
+        connectAndArm(conn)
+        val pingsBefore = server.pings.get()
+
+        skew.addAndGet(10L * 60 * 1_000_000_000) // ten minutes pass at once
+
+        awaitTrue(what = "a ping after the jump") { server.pings.get() > pingsBefore }
+        Thread.sleep(1_000)
+        assertTrue("still connected, state is ${conn.state.value}", conn.state.value is ConnectionState.Connected)
+        assertEquals("never re-dialed", 1, server.accepted.get())
+    }
+
+    @Test
+    fun aWriteStuckOnADeadPathDoesNotStopTheCheck() {
+        val server = fakeServer(Answer.PONG)
+        val conn = connection(server.port, timing(pingIdleMs = 100, pongWaitMs = 400))
+        connectAndArm(conn)
+
+        // The path dies: nothing is read at the far end and nothing comes back.
+        server.silent = true
+        server.stalled = true
+        // A large send fills the socket buffers and blocks, holding the write lock.
+        val megabyte = CONTACT.replace("<detail/>", "<detail><remarks>" + "x".repeat(1_000_000) + "</remarks></detail>")
+        val writer = thread(isDaemon = true) {
+            runBlocking { while (conn.send(megabyte)) Unit }
+        }
+
+        val failed = awaitState(conn, what = "Failed") { it is ConnectionState.Failed } as ConnectionState.Failed
+        assertEquals("No response from server", failed.reason)
+        writer.join(5_000)
+        assertFalse("the blocked write was released when the socket closed", writer.isAlive)
+    }
+
+    // MARK: what the app sees
+
+    @Test
     fun thePingExchangeIsNotDeliveredAsCot() {
-        val server = fakeServer(answerPings = true)
-        val conn = connection(server.port, TAKConnection.Timing(3_000, pingIdleMs = 80, deadIdleMs = 30_000, tickMs = 20))
+        val server = fakeServer(Answer.PONG)
+        val conn = connection(server.port, timing(pingIdleMs = 80, pongWaitMs = 30_000))
         val delivered = CopyOnWriteArrayList<String>()
         val subscribed = AtomicBoolean(false)
         scope.launch {
@@ -279,9 +390,8 @@ class TAKConnectionLivenessTest {
         }
         awaitTrue(what = "a subscriber on received") { subscribed.get() }
 
-        conn.connect()
-        awaitState(conn, what = "Connected") { it is ConnectionState.Connected }
-        awaitTrue(what = "a few pongs") { server.pings.get() >= 3 && conn.answersPings }
+        connectAndArm(conn)
+        awaitTrue(what = "a few pongs") { server.pings.get() >= 3 }
         server.sendToAll(PING_FROM_ANOTHER_CLIENT)
         server.sendToAll(CONTACT)
         awaitTrue(what = "the contact event") { delivered.isNotEmpty() }
@@ -292,8 +402,8 @@ class TAKConnectionLivenessTest {
 
     @Test
     fun aFailedSendEndsTheConnection() {
-        val server = fakeServer(answerPings = false)
-        val conn = connection(server.port, TAKConnection.Timing(3_000, pingIdleMs = 60_000, deadIdleMs = 120_000, tickMs = 50))
+        val server = fakeServer(Answer.NONE)
+        val conn = connection(server.port, timing(pingIdleMs = 60_000, pongWaitMs = 60_000))
         conn.connect()
         awaitState(conn, what = "Connected") { it is ConnectionState.Connected }
 
@@ -307,23 +417,34 @@ class TAKConnectionLivenessTest {
     }
 
     @Test
+    fun aServerThatClosesTheStreamIsReportedDisconnected() {
+        val server = fakeServer(Answer.PONG)
+        // No ping for a minute, so no write of ours can race the close.
+        val conn = connection(server.port, timing(pingIdleMs = 60_000, pongWaitMs = 60_000))
+        conn.connect()
+        awaitState(conn, what = "Connected") { it is ConnectionState.Connected }
+
+        server.close()
+
+        awaitState(conn, what = "Disconnected") { it is ConnectionState.Disconnected }
+    }
+
+    // MARK: dialing
+
+    @Test
     fun aRedialTheMomentItFailsIsNotLost() {
-        val server = fakeServer(answerPings = true)
-        val conn = connection(
-            server.port,
-            TAKConnection.Timing(3_000, pingIdleMs = 100, deadIdleMs = 600, tickMs = 20, firstReplyMs = 600),
-        )
-        // What ServerManager's supervisor does on its first retry: dial again at once.
+        val server = fakeServer(Answer.PONG)
+        val conn = connection(server.port, timing(pingIdleMs = 100, pongWaitMs = 300))
+        // The supervisor's first retry is immediate: dial again the moment it is down.
         scope.launch {
             conn.state.collect {
                 if (it is ConnectionState.Failed || it is ConnectionState.Disconnected) conn.connect()
             }
         }
         repeat(5) { round ->
-            // Up, and this session has heard from the server a moment ago.
-            awaitTrue(what = "a live connection in round ${round + 1}") {
+            awaitTrue(what = "a live, answered connection in round ${round + 1}") {
                 conn.state.value is ConnectionState.Connected && conn.answersPings &&
-                    (conn.idleMs ?: Long.MAX_VALUE) < 300
+                    (conn.idleMs ?: Long.MAX_VALUE) < 250
             }
             val dialsBefore = server.accepted.get()
             server.silent = true
@@ -334,56 +455,9 @@ class TAKConnectionLivenessTest {
     }
 
     @Test
-    fun aKnownServerThatAcceptsButSaysNothingIsNotReportedConnected() {
-        val server = fakeServer(answerPings = true)
-        val conn = connection(
-            server.port,
-            TAKConnection.Timing(3_000, pingIdleMs = 60, deadIdleMs = 300, tickMs = 15, firstReplyMs = 2_500),
-        )
-        conn.connect()
-        awaitState(conn, what = "Connected") { it is ConnectionState.Connected }
-        awaitTrue(what = "a first pong") { conn.answersPings }
-        server.silent = true
-        awaitState(conn, what = "Failed") { it is ConnectionState.Failed }
-
-        // The path now accepts TCP connections and answers nothing.
-        val seen = CopyOnWriteArrayList<ConnectionState>()
-        val watcher = scope.launch { conn.state.collect { seen += it } }
-        val dialsBefore = server.accepted.get()
-        conn.connect()
-        awaitTrue(what = "the dial reaching the server") { server.accepted.get() > dialsBefore }
-        Thread.sleep(150)
-        assertTrue("still proving, state is ${conn.state.value}", conn.state.value is ConnectionState.Connecting)
-        assertFalse("nothing can be sent before the link is proven", runBlocking { conn.send(CONTACT) })
-        awaitState(conn, what = "Failed again") { it is ConnectionState.Failed }
-        watcher.cancel()
-        assertTrue("states were $seen", seen.none { it is ConnectionState.Connected })
-
-        // And when the path answers again, the next dial comes up.
-        server.silent = false
-        conn.connect()
-        awaitState(conn, what = "Connected once the server answers") { it is ConnectionState.Connected }
-    }
-
-    @Test
-    fun aServerThatClosesTheStreamIsReportedDisconnected() {
-        val server = fakeServer(answerPings = true)
-        val conn = connection(server.port, TAKConnection.Timing(3_000, pingIdleMs = 60_000, deadIdleMs = 120_000, tickMs = 50))
-        conn.connect()
-        awaitState(conn, what = "Connected") { it is ConnectionState.Connected }
-        // Let the first exchange finish: with a write still in flight the end could
-        // as well be reported as a failed send, which is a different test.
-        awaitTrue(what = "the first pong") { conn.answersPings }
-
-        server.close()
-
-        awaitState(conn, what = "Disconnected") { it is ConnectionState.Disconnected }
-    }
-
-    @Test
     fun aStalledTlsHandshakeFailsInsteadOfStayingOnConnecting() {
         val stall = StallServer().also { closeables += it }
-        val conn = connection(stall.port, TAKConnection.Timing(connectTimeoutMs = 400), tls = true)
+        val conn = connection(stall.port, timing(pingIdleMs = 60_000, pongWaitMs = 60_000, connectTimeoutMs = 400), tls = true)
         conn.connect()
         awaitState(conn, what = "Failed") { it is ConnectionState.Failed }
     }
@@ -391,9 +465,10 @@ class TAKConnectionLivenessTest {
     @Test
     fun disconnectDuringADialStaysDisconnectedAndADialAfterItStillRuns() {
         val stall = StallServer().also { closeables += it }
-        val conn = connection(stall.port, TAKConnection.Timing(connectTimeoutMs = 20_000), tls = true)
+        val conn = connection(stall.port, timing(pingIdleMs = 60_000, pongWaitMs = 60_000, connectTimeoutMs = 30_000), tls = true)
         conn.connect()
-        awaitState(conn, what = "Connecting") { it is ConnectionState.Connecting }
+        awaitTrue(what = "the first dial reaching the server") { stall.accepted.get() == 1 }
+        assertTrue(conn.state.value is ConnectionState.Connecting)
         Thread.sleep(150) // let it block in the handshake
 
         conn.disconnect()
@@ -407,6 +482,8 @@ class TAKConnectionLivenessTest {
         conn.disconnect()
         assertEquals(ConnectionState.Disconnected, conn.state.value)
     }
+
+    // MARK: frames
 
     @Test
     fun eventTypeReadsTheStartTagOnly() {
@@ -431,6 +508,7 @@ class TAKConnectionLivenessTest {
     fun pingIsTheCotEveryTakServerAnswers() {
         val xml = TAKConnection.pingXml("ANDROID-<1>&2-ping", nowMs = 1_790_000_000_000L)
         assertEquals(TAKConnection.PING_TYPE, TAKConnection.eventType(xml))
+        assertNotEquals(TAKConnection.PONG_TYPE, TAKConnection.eventType(xml))
         assertTrue(xml, xml.contains("uid=\"ANDROID-&lt;1&gt;&amp;2-ping\""))
         assertTrue(xml, xml.startsWith("<event version=\"2.0\""))
         assertTrue(xml, xml.endsWith("</event>"))
