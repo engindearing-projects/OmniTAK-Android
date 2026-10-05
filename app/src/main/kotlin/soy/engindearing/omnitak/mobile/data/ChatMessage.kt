@@ -49,7 +49,17 @@ data class ChatConversation(
      * their origin server (multi-server parity with iOS).
      */
     val serverId: String? = null,
-)
+) {
+    /**
+     * Whether a message sent in this conversation is also sent over the mesh
+     * radio. Only the broadcast room is. The mesh copy is a broadcast to
+     * everyone on the radio channel, written as an "All Chat Rooms" message,
+     * so a direct message must never get one: it would be read by the whole
+     * channel. Mesh conversations (MESH-..., MESHCORE-...) have their own send
+     * path and are not mirrored either.
+     */
+    val mirrorsToMesh: Boolean get() = id == ChatRoom.ALL_USERS
+}
 
 object ChatRoom {
     // ATAK's canonical broadcast chatroom name — interop with ATAK/iTAK.
