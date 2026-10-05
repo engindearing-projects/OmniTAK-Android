@@ -142,8 +142,9 @@ object AdminMessageSerializer {
             if (channel.psk.isNotEmpty()) {
                 MeshWire.appendLenField(this, field = SETTINGS_PSK, bytes = channel.psk)
             }
-            if (channel.name.isNotEmpty()) {
-                MeshWire.appendString(this, field = SETTINGS_NAME, value = channel.name)
+            // Cut to the firmware's 11 bytes like a rename: a longer name makes the radio drop the message.
+            clampChannelName(channel.name).takeIf { it.isNotEmpty() }?.let {
+                MeshWire.appendString(this, field = SETTINGS_NAME, value = it)
             }
             if (channel.uplinkEnabled) MeshWire.appendVarintField(this, field = SETTINGS_UPLINK, value = 1UL)
             if (channel.downlinkEnabled) MeshWire.appendVarintField(this, field = SETTINGS_DOWNLINK, value = 1UL)
@@ -350,20 +351,24 @@ object AdminMessageSerializer {
      * [usePreset] defaults true (the only mode OmniTAK exposes — raw
      * bandwidth/spread-factor tuning is out of scope). When [region] is
      * [MeshRegion.UNSET] the radio's region is left alone, never cleared: a
-     * preset change must not take a radio off its band.
+     * preset change must not take a radio off its band. A null [modemPreset]
+     * leaves the preset (and use_preset) alone the same way, so a region can be
+     * set without touching the preset.
      */
     fun buildSetLoRaConfig(
         myNodeNum: UInt,
         region: MeshRegion,
-        modemPreset: MeshChannelPreset,
+        modemPreset: MeshChannelPreset?,
         currentLora: ByteArray,
         usePreset: Boolean = true,
     ): AdminWrite? {
         val edits = LinkedHashMap<Int, ByteArray?>()
-        // use_preset = field 1 (bool); modem_preset = field 2 (enum). proto3 omits
-        // the defaults (false, LONG_FAST = 0), so those fields are removed.
-        edits[LORA_USE_PRESET] = ProtoFields.boolOrClear(LORA_USE_PRESET, usePreset)
-        edits[LORA_MODEM_PRESET] = ProtoFields.varintOrClear(LORA_MODEM_PRESET, presetProtoOrdinal(modemPreset).toULong())
+        if (modemPreset != null) {
+            // use_preset = field 1 (bool); modem_preset = field 2 (enum). proto3 omits
+            // the defaults (false, LONG_FAST = 0), so those fields are removed.
+            edits[LORA_USE_PRESET] = ProtoFields.boolOrClear(LORA_USE_PRESET, usePreset)
+            edits[LORA_MODEM_PRESET] = ProtoFields.varintOrClear(LORA_MODEM_PRESET, presetProtoOrdinal(modemPreset).toULong())
+        }
         // region = field 7 (enum). UNSET is "leave it": it is not an edit.
         if (region != MeshRegion.UNSET) {
             edits[LORA_REGION] = ProtoFields.varint(LORA_REGION, region.wire.toULong())
@@ -447,6 +452,12 @@ object AdminMessageSerializer {
     // endregion
 
     // region Wire helpers — see [MeshWire] ------------------------------
+
+    internal fun clampLongName(value: String): String = clampUtf8(value, MAX_LONG_NAME_BYTES)
+
+    internal fun clampShortName(value: String): String = clampUtf8(value, MAX_SHORT_NAME_BYTES)
+
+    internal fun clampChannelName(value: String): String = clampUtf8(value, MAX_CHANNEL_NAME_BYTES)
 
     /**
      * Clamp [value] to [maxBytes] of UTF-8, cutting only on a character

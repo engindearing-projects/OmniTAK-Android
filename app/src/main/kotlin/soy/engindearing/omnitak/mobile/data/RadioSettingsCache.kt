@@ -13,9 +13,9 @@ package soy.engindearing.omnitak.mobile.data
  * kept whole and edited with [ProtoFields].
  *
  * Entries, by [Key]:
- *  - a `Config` variant by its oneof field number (device 1, position 2,
- *    power 3, network 4, display 5, lora 6, bluetooth 7, security 8, ...):
- *    the variant's message without the Config wrapper;
+ *  - a `Config` variant by its oneof field number: only the three the app
+ *    patches (device 1, position 2, lora 6), as the variant's own message
+ *    without the Config wrapper;
  *  - a channel slot by index: the whole Channel message;
  *  - the radio's own User record.
  *
@@ -23,13 +23,17 @@ package soy.engindearing.omnitak.mobile.data
  * and the `FromRadio.node_info` that carries our own node number) and from the
  * admin responses to `get_*_request`. Emptied when the link drops and when a
  * new download starts, so a write can never start from another session's, or
- * another radio's, settings. After a write goes out the app stores what it
- * sent, so a second edit builds on the first.
+ * another radio's, settings. It holds what the radio said and nothing else:
+ * what the app sent is not put here as if the radio had accepted it. A write
+ * asks the radio for the entry it is about to patch (removing the old copy
+ * first) and takes the answer, so what it patches is current.
  *
- * Some entries are secrets (the security config holds the radio's private
- * key, the network config its Wi-Fi password, a channel its key). They live
- * in memory only. Nothing here logs or prints their contents, and
- * [toString] shows counts, not bytes.
+ * Only what the app patches is kept. Everything else in the download is
+ * dropped as it arrives, the security config (the radio's private key) and the
+ * network config (its Wi-Fi password) among it: nothing in the app writes them,
+ * so they have no reason to sit in memory. A channel does hold its key, because
+ * a rename has to carry it back unchanged. [toString] shows counts, never
+ * contents.
  *
  * Pure Kotlin, safe to call from any thread.
  */
@@ -37,7 +41,7 @@ class RadioSettingsCache {
 
     /** What an entry is. */
     sealed interface Key {
-        /** A Config variant by its oneof field number. The value is that variant's own message. */
+        /** A Config variant by its oneof field number: device, position or lora. The value is that variant's own message. */
         data class Config(val variant: Int) : Key
 
         /** A channel slot, 0 to 7. The value is the whole Channel message. */
@@ -59,11 +63,20 @@ class RadioSettingsCache {
 
     fun owner(): ByteArray? = get(Key.Owner)
 
-    /** Store [bytes] under [key], or ignore them when they are not a well-formed message. Returns whether they were stored. */
+    /**
+     * Store [bytes] under [key], or ignore them when they are not a well-formed message or when [key] is a
+     * Config variant the app does not patch. Returns whether they were stored.
+     */
     fun put(key: Key, bytes: ByteArray): Boolean {
+        if (key is Key.Config && key.variant !in PATCHED_CONFIGS) return false
         if (ProtoFields.parse(bytes) == null) return false
         synchronized(lock) { entries[key] = bytes.copyOf() }
         return true
+    }
+
+    /** Forget one entry, so the next one that arrives is known to be newer than the moment of this call. */
+    fun remove(key: Key) {
+        synchronized(lock) { entries.remove(key) }
     }
 
     fun clear() {
@@ -105,7 +118,10 @@ class RadioSettingsCache {
         }
     }
 
-    /** A `Config` message (from `FromRadio.config` or an admin `get_config_response`): store its variant. */
+    /**
+     * A `Config` message (from `FromRadio.config` or an admin `get_config_response`): store its variant if the
+     * app patches it. Returns whether anything was stored.
+     */
     fun ingestConfig(config: ByteArray): Boolean {
         val fields = ProtoFields.parse(config) ?: return false
         var stored = false
@@ -152,6 +168,9 @@ class RadioSettingsCache {
         const val CONFIG_DEVICE = 1
         const val CONFIG_POSITION = 2
         const val CONFIG_LORA = 6
+
+        /** The only Config variants the cache keeps: the ones the app patches. */
+        private val PATCHED_CONFIGS = setOf(CONFIG_DEVICE, CONFIG_POSITION, CONFIG_LORA)
 
         /** Firmware slot count; a Channel index past it is not a real channel. */
         const val MAX_CHANNELS = 8

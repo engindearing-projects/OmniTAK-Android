@@ -36,20 +36,22 @@ class MeshtasticProtoParserRawBytesTest {
     @Test fun `a lora config frame keeps its decoded value and carries the raw Config message`() {
         val frame = parse(configFrame(6, loraConfig(preset = 6, region = 1))) as FromRadioFrame.ConfigFrame
 
-        assertEquals(AdminResponse.LoraConfig(preset = MeshChannelPreset.SHORT_FAST), frame.response)
+        assertEquals(AdminResponse.LoraConfig(preset = MeshChannelPreset.SHORT_FAST, region = MeshRegion.US), frame.response)
         assertSame("raw", ProtoMsg().bytes(6, loraConfig(preset = 6, region = 1)).build(), frame.raw)
     }
 
     @Test fun `device and position config frames still decode`() {
         val device = parse(configFrame(1, deviceConfig(role = 7))) as FromRadioFrame.ConfigFrame
-        assertEquals(AdminResponse.DeviceConfig(role = MeshRole.TAK), device.response)
+        assertEquals(AdminResponse.DeviceConfig(role = MeshRole.TAK, rebroadcastMode = RebroadcastMode.LOCAL_ONLY), device.response)
 
         val position = parse(configFrame(2, positionConfig(secs = 900))) as FromRadioFrame.ConfigFrame
         assertEquals(AdminResponse.PositionConfig(broadcastSecs = 900), position.response)
     }
 
-    @Test fun `a config variant the screen does not decode is no longer dropped`() {
+    @Test fun `a config variant the screen does not decode still reaches the dispatcher with its raw bytes`() {
         // Power, network, display, bluetooth, security: before, each of these became Unknown and its bytes were gone.
+        // The frame carries them only for as long as it is being dispatched: RadioSettingsCache keeps the three
+        // variants the app patches and drops these (see RadioSettingsCacheTest).
         for (variant in listOf(3, 4, 5, 7, 8)) {
             val message = ProtoMsg().varint(1, variant).bytes(2, keyBytes(variant)).build()
             val frame = parse(configFrame(variant, message))

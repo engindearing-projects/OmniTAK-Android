@@ -2,12 +2,18 @@ package soy.engindearing.omnitak.mobile.domain
 
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
+import soy.engindearing.omnitak.mobile.data.AdminResponse
+import soy.engindearing.omnitak.mobile.data.AdminSetting
 import soy.engindearing.omnitak.mobile.data.AdminTestFrames
 import soy.engindearing.omnitak.mobile.data.AdminTestFrames.Field
 import soy.engindearing.omnitak.mobile.data.AdminWriteResult
+import soy.engindearing.omnitak.mobile.data.DeviceEdits
+import soy.engindearing.omnitak.mobile.data.DeviceSettingsState
+import soy.engindearing.omnitak.mobile.data.MeshChannel
 import soy.engindearing.omnitak.mobile.data.MeshChannelPreset
 import soy.engindearing.omnitak.mobile.data.MeshDeviceConfig
 import soy.engindearing.omnitak.mobile.data.MeshRole
@@ -19,7 +25,7 @@ import java.util.Random
 
 /**
  * Settings writes against a real firmware: the app's own transport, parser,
- * cache and builders talking to a simulated radio (meshtasticd).
+ * cache, state, builders and writer talking to a simulated radio (meshtasticd).
  *
  * Opt in with `MESHSIM_HOST=<host>` (the radio's TCP API is on port 4403).
  * Without it this test is skipped, so CI and a plain `testDebugUnitTest` never
@@ -28,23 +34,37 @@ import java.util.Random
  *     MESHSIM_HOST=127.0.0.1 ./gradlew :app:cleanTestDebugUnitTest :app:testDebugUnitTest \
  *         --tests '*SimRadioSettingsIT*'
  *
- * It takes a few minutes: every write ends in a reboot of the radio (about
+ * It takes several minutes: every write ends in a reboot of the radio (about
  * 15 s) and the test reconnects and downloads the config again each time.
  *
+ * The test refuses to write to anything that is not a simulator: before its
+ * first write it checks that the radio's hardware model is PORTDUINO and skips
+ * otherwise.
+ *
  * What it does, in order:
- *  1. connect, run the config download through the app's parser and cache;
- *  2. ask for the settings with get_*_request and check the answers reach the
+ *  1. connect, run the config download through the app's parser and cache, and
+ *     check the peer is a simulator;
+ *  2. the case that was reported from the app: the settings state starts at a
+ *     fresh install's defaults (TAK, "OmniTAK") like the app's does and is
+ *     synced from the radio; on a factory-like radio (role CLIENT, unnamed
+ *     primary channel) change only the position interval, and assert the role
+ *     and the channel name are untouched;
+ *  3. ask for the settings with get_*_request and check the answers reach the
  *     cache (so admin responses are accepted from the radio);
- *  3. arrange a radio that has something to lose: write values into the fields
+ *  4. arrange a radio that has something to lose: write values into the fields
  *     the old partial writes used to reset (region, hop limit, transmit switch,
  *     GPS mode, position flags, channel key and precision, time zone, ...). The
  *     arranging writes are built here from the official field numbers, not by
  *     the app's builders;
- *  4. make each change through the app's own paths (a position interval, a
- *     LoRa preset, a channel 0 rename, a rebroadcast mode, an owner rename),
- *     let the radio reboot, download again, and assert that exactly the
- *     intended field changed and every other field read the same as before;
- *  5. put back what the test changed, and assert the radio reads as it did when the test started.
+ *  5. make each change through the app, deciding what to send from the state
+ *     the way the screen does (a position interval, a LoRa preset, a channel 0
+ *     rename, a rebroadcast mode, an owner rename, one push of four settings,
+ *     an imported channel), let the radio reboot, download again, and assert that
+ *     exactly the intended fields changed and every other field read the same as
+ *     before. Right after each write the app reads the radio again and must have
+ *     nothing to report about a value the radio kept;
+ *  6. put back what the test changed, and assert the radio reads as it did when
+ *     the test started.
  *
  * Never prints or logs key bytes: channel keys are only ever compared by length.
  */
@@ -76,6 +96,7 @@ class SimRadioSettingsIT {
         val settings = channel.sub(2)
         val module = settings?.sub(7)
         val owner = Msg(cache.owner()!!)
+        val slot1 = cache.channel(1)?.let { Msg(it) }
         return linkedMapOf(
             "device.role" to device.varint(1),
             "device.rebroadcast_mode" to device.varint(6),
@@ -102,6 +123,8 @@ class SimRadioSettingsIT {
             "channel0.position_precision" to module?.varint(1),
             "channel0.uplink_enabled" to settings?.varint(5),
             "channel0.id" to settings?.fixed32(4),
+            "channel1.role" to slot1?.varint(3),
+            "channel1.name" to slot1?.sub(2)?.string(3),
             "owner.long_name" to owner.string(2),
             "owner.short_name" to owner.string(3),
             "owner.is_licensed" to owner.varint(6),
@@ -117,17 +140,56 @@ class SimRadioSettingsIT {
 
     // endregion
 
+    // region The app's settings state, across connections --------------------------------------
+
+    /**
+     * What the app's device settings store holds: a draft that starts at a fresh install's defaults, and what
+     * the radio last reported. The sessions below feed it the way the app wires it (reports in, link drops).
+     */
+    private class AppState {
+        private var current = DeviceSettingsState()
+        val state: DeviceSettingsState @Synchronized get() = current
+
+        @Synchronized fun report(response: AdminResponse) {
+            current = current.withReport(response)
+        }
+
+        @Synchronized fun linkDown() {
+            current = current.withLinkDown()
+        }
+
+        /** What the screen would send if the operator changed the draft as [change] says, judged against the radio. */
+        fun edits(change: MeshDeviceConfig.() -> MeshDeviceConfig): DeviceEdits {
+            val s = state
+            return s.edits(s.draft.change())
+        }
+    }
+
+    private val app = AppState()
+
+    // endregion
+
     // region One connection to the radio ------------------------------------------------------
 
     /** A session: a fresh app-side manager (its own TCP client, parser and cache) connected to the radio. */
     private inner class Session(private val host: String) : AutoCloseable {
-        val mgr = MeshtasticManager()
+        val mgr = MeshtasticManager().also {
+            it.adminResponseSink = { response -> app.report(response) }
+            it.linkDownSink = { app.linkDown() }
+        }
 
-        /** The config download is in once the last Config variant (device_ui, 10) and the pieces we use are cached. */
+        /**
+         * The part of the config download the app uses is in once the three configs it patches, channel 0 and the
+         * owner are cached, and the settings state has been told everything the screen shows. The rest of the
+         * stream (configs the app does not keep, module configs, node entries) is waited out by [awaitQuiet].
+         */
         private fun downloaded(): Boolean = mgr.radioSettings.run {
-            config(10) != null && config(RadioSettingsCache.CONFIG_DEVICE) != null &&
+            config(RadioSettingsCache.CONFIG_DEVICE) != null &&
                 config(RadioSettingsCache.CONFIG_POSITION) != null && config(RadioSettingsCache.CONFIG_LORA) != null &&
                 channel(0) != null && owner() != null
+        } && app.state.radio.let { r ->
+            r != null && r.longName != null && r.role != null && r.positionBroadcastSecs != null &&
+                r.channelName != null && r.channelPreset != null && r.loraLoaded
         }
 
         fun open(timeoutMs: Long): Boolean {
@@ -172,6 +234,11 @@ class SimRadioSettingsIT {
                 "the app must forget the radio's settings when the link drops",
                 waitUntil(5_000) { cache.size == 0 },
             )
+            assertTrue(
+                "and the settings state must stop counting the old report as the radio's",
+                waitUntil(5_000) { app.state.radio == null },
+            )
+            assertNull("and the node number, so nothing is addressed to the old link", mgr.myNodeNum)
         }
 
         override fun close() {
@@ -247,11 +314,14 @@ class SimRadioSettingsIT {
     private fun setOwnerFrame(dest: UInt, user: ByteArray) = adminFrame(dest, ProtoMsg().bytes(32, user).build())
 
     /** What the radio held when the test started, as the bytes it sent. Used to put everything back. */
-    private class AsFound(val device: ByteArray, val position: ByteArray, val lora: ByteArray, val channel0: ByteArray, val owner: ByteArray) {
+    private class AsFound(
+        val device: ByteArray, val position: ByteArray, val lora: ByteArray,
+        val channel0: ByteArray, val channel1: ByteArray, val owner: ByteArray,
+    ) {
         companion object {
             fun of(cache: RadioSettingsCache) = AsFound(
                 cache.config(RadioSettingsCache.CONFIG_DEVICE)!!, cache.config(RadioSettingsCache.CONFIG_POSITION)!!,
-                cache.config(RadioSettingsCache.CONFIG_LORA)!!, cache.channel(0)!!, cache.owner()!!,
+                cache.config(RadioSettingsCache.CONFIG_LORA)!!, cache.channel(0)!!, cache.channel(1)!!, cache.owner()!!,
             )
         }
     }
@@ -317,6 +387,7 @@ class SimRadioSettingsIT {
             setConfigFrame(s.node, RadioSettingsCache.CONFIG_POSITION, found.position),
             setConfigFrame(s.node, RadioSettingsCache.CONFIG_LORA, found.lora),
             setChannelFrame(s.node, found.channel0),
+            setChannelFrame(s.node, found.channel1),
             setOwnerFrame(s.node, found.owner),
             commitFrame(s.node),
         ))
@@ -330,51 +401,26 @@ class SimRadioSettingsIT {
 
     // endregion
 
-    /** The draft the Device Settings screen would hold if the operator had changed nothing. */
-    private fun draftFrom(cache: RadioSettingsCache): MeshDeviceConfig {
-        val owner = Msg(cache.owner()!!)
-        val device = Msg(cache.config(RadioSettingsCache.CONFIG_DEVICE)!!)
-        val position = Msg(cache.config(RadioSettingsCache.CONFIG_POSITION)!!)
-        val lora = Msg(cache.config(RadioSettingsCache.CONFIG_LORA)!!)
-        val channel = Msg(cache.channel(0)!!)
-        val role = MeshRole.entries.first { roleOrdinal(it) == (device.varint(1) ?: 0L).toInt() }
-        val preset = MeshChannelPreset.entries.first { presetOrdinal(it) == (lora.varint(2) ?: 0L).toInt() }
-        return MeshDeviceConfig(
-            longName = owner.string(2) ?: "",
-            shortName = owner.string(3) ?: "",
-            role = role,
-            positionBroadcastSecs = (position.varint(1) ?: 0L).toInt(),
-            channelName = channel.sub(2)?.string(3) ?: "",
-            channelPreset = preset,
-        )
-    }
-
-    // Enum ordinals from config.proto, written out here so the test does not lean on the app's own tables.
-    private fun roleOrdinal(role: MeshRole) = when (role) {
-        MeshRole.CLIENT -> 0; MeshRole.CLIENT_MUTE -> 1; MeshRole.ROUTER -> 2; MeshRole.ROUTER_CLIENT -> 3
-        MeshRole.REPEATER -> 4; MeshRole.TRACKER -> 5; MeshRole.SENSOR -> 6; MeshRole.TAK -> 7
-        MeshRole.CLIENT_HIDDEN -> 8; MeshRole.LOST_AND_FOUND -> 9; MeshRole.TAK_TRACKER -> 10
-    }
-
-    private fun presetOrdinal(preset: MeshChannelPreset) = when (preset) {
-        MeshChannelPreset.LONG_FAST -> 0; MeshChannelPreset.LONG_SLOW -> 1; MeshChannelPreset.VERY_LONG_SLOW -> 2
-        MeshChannelPreset.MEDIUM_SLOW -> 3; MeshChannelPreset.MEDIUM_FAST -> 4; MeshChannelPreset.SHORT_SLOW -> 5
-        MeshChannelPreset.SHORT_FAST -> 6; MeshChannelPreset.SHORT_TURBO -> 8
-    }
-
     /**
-     * Make one change through the app, let the radio reboot, download again, and return what the radio now says.
-     * [change] runs against the live session and returns the result of the app call.
+     * Make one change through the app, check the app has nothing to report about it, let the radio reboot,
+     * download again, and return what the radio now says. [change] runs against the live session and returns
+     * the result of the app call.
      */
     private fun stepThroughApp(
         name: String,
         s: Session,
-        expect: AdminWriteResult = AdminWriteResult.Sent(1),
+        expect: AdminWriteResult,
         change: (Session) -> AdminWriteResult,
     ): Pair<Session, Map<String, Any?>> {
+        s.mgr.clearSettingsNotice()
         val result = change(s)
         log("$name: the app reported $result")
         assertEquals("$name: every write must go out", expect, result)
+        // The radio is still up for about five seconds after the commit. Ask it what it holds: the app compares
+        // the answers with what it sent and says something only when the radio kept a value of its own.
+        runBlocking { s.mgr.requestDeviceConfig() }
+        Thread.sleep(1_500)
+        assertNull("$name: the radio took what was sent, so there is nothing to report", s.mgr.settingsNotice.value)
         s.awaitRebootAndForget()
         s.close()
         val next = connect()
@@ -388,10 +434,41 @@ class SimRadioSettingsIT {
         val found = AsFound.of(s.cache)
         val asFound = view(s.cache)
         log("as found: $asFound")
+        // Nothing is written to a radio that is not a simulator. PORTDUINO is hardware model 37 in mesh.proto.
+        assumeTrue("the peer is not a simulator (hardware model ${asFound["owner.hw_model"]}), nothing was written", asFound["owner.hw_model"] == PORTDUINO)
         var readsAfterRestore: Map<String, Pair<Any?, Any?>>? = null
 
         try {
-            // 2. admin responses reach the cache
+            // 2. the reported case: a fresh install's draft, a factory-like radio, one edit.
+            val factoryLike = asFound["device.role"] == null && asFound["channel0.name"] == null
+            if (factoryLike) {
+                val draft = app.state.draft
+                assertEquals("the draft's TAK is replaced by the radio's role (CLIENT, not on the wire)", MeshRole.CLIENT, draft.role)
+                assertEquals("the draft's leftover name is replaced by the radio's unnamed primary", "", draft.channelName)
+                assertTrue("a draft synced from the radio edits nothing", app.state.edits().isEmpty)
+
+                val secs = if ((asFound["position.position_broadcast_secs"] as Long) == 400L) 500 else 400
+                val before = asFound
+                val step = stepThroughApp("factory radio, interval only", s, AdminWriteResult.Sent(listOf(AdminSetting.POSITION_INTERVAL))) { sess ->
+                    val edits = app.edits { copy(positionBroadcastSecs = secs) }
+                    assertEquals("one setting is edited", listOf(AdminSetting.POSITION_INTERVAL), edits.settings)
+                    runBlocking { sess.mgr.pushDeviceConfig(edits) }
+                }
+                s = step.first
+                val changed = diff(before, step.second)
+                log("factory radio, interval only: $changed")
+                assertEquals(
+                    "only the interval may change: the role must stay CLIENT and the primary channel unnamed",
+                    mapOf("position.position_broadcast_secs" to (before["position.position_broadcast_secs"] to secs.toLong())),
+                    changed,
+                )
+                assertEquals("role untouched", asFound["device.role"], step.second["device.role"])
+                assertEquals("channel name untouched", asFound["channel0.name"], step.second["channel0.name"])
+            } else {
+                log("the radio is not factory-like (role ${asFound["device.role"]}, primary '${asFound["channel0.name"]}'): skipping the fresh-install step")
+            }
+
+            // 3. admin responses reach the cache
             run {
                 val fromDownload = s.cache.config(RadioSettingsCache.CONFIG_LORA)!!
                 s.cache.clear()
@@ -411,7 +488,7 @@ class SimRadioSettingsIT {
                 log("admin responses refilled the cache: ${s.cache}")
             }
 
-            // 3. arrange a radio that has something to lose
+            // 4. arrange a radio that has something to lose
             arrange(s, found)
             s.awaitRebootAndForget()
             s.close()
@@ -426,11 +503,12 @@ class SimRadioSettingsIT {
             assertEquals("arranged: channel key length", 32, seeded["channel0.key_length"])
             assertEquals("arranged: position precision", 13L, seeded["channel0.position_precision"])
             assertEquals("arranged: time zone", "PST8PDT,M3.2.0,M11.1.0", seeded["device.tzdef"])
+            assertTrue("the screen's draft follows the radio, so nothing is edited", app.state.edits().isEmpty)
 
-            // 4a. a position interval change, through pushDeviceConfig (one edit transaction)
+            // 5a. a position interval change, through pushDeviceConfig (one edit transaction)
             var before: Map<String, Any?> = seeded
-            var step = stepThroughApp("position interval", s) { sess ->
-                runBlocking { sess.mgr.pushDeviceConfig(draftFrom(sess.cache).copy(positionBroadcastSecs = 321)) }
+            var step = stepThroughApp("position interval", s, AdminWriteResult.Sent(listOf(AdminSetting.POSITION_INTERVAL))) { sess ->
+                runBlocking { sess.mgr.pushDeviceConfig(app.edits { copy(positionBroadcastSecs = 321) }) }
             }
             s = step.first
             var changed = diff(before, step.second)
@@ -441,10 +519,10 @@ class SimRadioSettingsIT {
                 changed,
             )
 
-            // 4b. a LoRa preset change
+            // 5b. a LoRa preset change
             before = step.second
-            step = stepThroughApp("LoRa preset", s) { sess ->
-                runBlocking { sess.mgr.pushDeviceConfig(draftFrom(sess.cache).copy(channelPreset = MeshChannelPreset.MEDIUM_FAST)) }
+            step = stepThroughApp("LoRa preset", s, AdminWriteResult.Sent(listOf(AdminSetting.MODEM_PRESET))) { sess ->
+                runBlocking { sess.mgr.pushDeviceConfig(app.edits { copy(channelPreset = MeshChannelPreset.MEDIUM_FAST) }) }
             }
             s = step.first
             changed = diff(before, step.second)
@@ -455,10 +533,10 @@ class SimRadioSettingsIT {
                 changed,
             )
 
-            // 4c. a channel 0 rename
+            // 5c. a channel 0 rename
             before = step.second
-            step = stepThroughApp("channel 0 rename", s) { sess ->
-                runBlocking { sess.mgr.pushDeviceConfig(draftFrom(sess.cache).copy(channelName = "simren")) }
+            step = stepThroughApp("channel 0 rename", s, AdminWriteResult.Sent(listOf(AdminSetting.CHANNEL_NAME))) { sess ->
+                runBlocking { sess.mgr.pushDeviceConfig(app.edits { copy(channelName = "simren") }) }
             }
             s = step.first
             changed = diff(before, step.second)
@@ -469,9 +547,9 @@ class SimRadioSettingsIT {
                 changed,
             )
 
-            // 4d. a rebroadcast mode change, a single write outside a transaction
+            // 5d. a rebroadcast mode change, a single write (inside its own transaction)
             before = step.second
-            step = stepThroughApp("rebroadcast mode", s) { sess ->
+            step = stepThroughApp("rebroadcast mode", s, AdminWriteResult.Sent(listOf(AdminSetting.REBROADCAST_MODE))) { sess ->
                 runBlocking { sess.mgr.applyRebroadcastMode(RebroadcastMode.KNOWN_ONLY) }
             }
             s = step.first
@@ -483,9 +561,9 @@ class SimRadioSettingsIT {
                 changed,
             )
 
-            // 4e. an owner rename, a single write outside a transaction
+            // 5e. an owner rename, a single write (inside its own transaction)
             before = step.second
-            step = stepThroughApp("owner rename", s) { sess ->
+            step = stepThroughApp("owner rename", s, AdminWriteResult.Sent(listOf(AdminSetting.LONG_NAME, AdminSetting.SHORT_NAME))) { sess ->
                 runBlocking { sess.mgr.applyOwner("Sim Renamed", "SRN") }
             }
             s = step.first
@@ -499,15 +577,21 @@ class SimRadioSettingsIT {
             assertEquals("Sim Renamed", step.second["owner.long_name"])
             assertEquals("SRN", step.second["owner.short_name"])
 
-            // 4f. one push that changes four settings at once: begin, four writes, commit
+            // 5f. one push that changes four settings at once: owner names, interval, channel name, preset
             before = step.second
-            step = stepThroughApp("four changes in one push", s, expect = AdminWriteResult.Sent(4)) { sess ->
+            val four = listOf(
+                AdminSetting.LONG_NAME, AdminSetting.SHORT_NAME, AdminSetting.POSITION_INTERVAL,
+                AdminSetting.CHANNEL_NAME, AdminSetting.MODEM_PRESET,
+            )
+            step = stepThroughApp("four changes in one push", s, AdminWriteResult.Sent(four)) { sess ->
                 runBlocking {
                     sess.mgr.pushDeviceConfig(
-                        draftFrom(sess.cache).copy(
-                            longName = "Sim Four", shortName = "SF4", positionBroadcastSecs = 123,
-                            channelName = "simfour", channelPreset = MeshChannelPreset.SHORT_FAST,
-                        ),
+                        app.edits {
+                            copy(
+                                longName = "Sim Four", shortName = "SF4", positionBroadcastSecs = 123,
+                                channelName = "simfour", channelPreset = MeshChannelPreset.SHORT_FAST,
+                            )
+                        },
                     )
                 }
             }
@@ -515,7 +599,7 @@ class SimRadioSettingsIT {
             changed = diff(before, step.second)
             log("four changes in one push: $changed")
             assertEquals(
-                "exactly the four settings that were edited may change, and every write of the batch must land",
+                "exactly the settings that were edited may change, and every write of the batch must land",
                 setOf(
                     "owner.long_name", "owner.short_name", "position.position_broadcast_secs",
                     "channel0.name", "lora.modem_preset",
@@ -528,11 +612,27 @@ class SimRadioSettingsIT {
             assertEquals("region and hop limit survive the batch", 1L, step.second["lora.region"])
             assertEquals(32, step.second["channel0.key_length"])
 
-            // A push with nothing changed sends nothing.
-            val quiet = runBlocking { s.mgr.pushDeviceConfig(draftFrom(s.cache)) }
-            assertEquals("an unchanged draft is a no-op on a real radio too", AdminWriteResult.NothingToChange, quiet)
+            // 5g. an imported channel goes into the first free secondary slot, and the primary is left alone
+            before = step.second
+            val importedKey = ByteArray(32).also { Random().nextBytes(it) } // never printed
+            step = stepThroughApp("channel import", s, AdminWriteResult.Sent(listOf(AdminSetting.CHANNEL))) { sess ->
+                runBlocking { sess.mgr.applyChannel(MeshChannel(name = "simimp", psk = importedKey)) }
+            }
+            s = step.first
+            changed = diff(before, step.second)
+            log("channel imported: $changed")
+            assertEquals(
+                "only slot 1 may change: the primary channel (name, key, precision) must stay",
+                mapOf("channel1.role" to (null to 2L), "channel1.name" to (null to "simimp")),
+                changed,
+            )
+
+            // A push with nothing edited sends nothing, and the screen's draft follows the radio.
+            assertTrue("the draft follows the radio: nothing is edited", app.state.edits().isEmpty)
+            val quiet = runBlocking { s.mgr.pushDeviceConfig(app.state.edits()) }
+            assertEquals("nothing edited is a no-op on a real radio too", AdminWriteResult.NothingToChange, quiet)
         } finally {
-            // 5. put back what the test changed (best effort, even when an assertion failed above)
+            // 6. put back what the test changed (best effort, even when an assertion failed above)
             runCatching {
                 s.close()
                 val back = connect()
@@ -555,6 +655,8 @@ class SimRadioSettingsIT {
     }
 
     private companion object {
+        /** HardwareModel.PORTDUINO in mesh.proto: the simulator's. */
+        const val PORTDUINO = 37L
         const val PORT = 4403
         const val REBOOT_WAIT_MS = 45_000L
     }

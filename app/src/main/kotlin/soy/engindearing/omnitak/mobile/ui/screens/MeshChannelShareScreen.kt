@@ -1,6 +1,7 @@
 package soy.engindearing.omnitak.mobile.ui.screens
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,6 +15,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenuItem
@@ -29,6 +31,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -47,6 +50,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.OmniTAKApp
+import soy.engindearing.omnitak.mobile.data.AdminWriteResult
+import soy.engindearing.omnitak.mobile.data.LoraPicks
 import soy.engindearing.omnitak.mobile.data.MeshChannel
 import soy.engindearing.omnitak.mobile.data.MeshChannelImport
 import soy.engindearing.omnitak.mobile.data.MeshChannelPreset
@@ -83,10 +88,20 @@ fun MeshChannelShareScreen(onBack: () -> Unit = {}) {
     var joinText by remember { mutableStateOf("") }
     var shareUrl by remember { mutableStateOf<String?>(null) }
 
+    // What the connected radio last reported. The LoRa controls start from it and send only what the operator
+    // changes; nothing is sent for a setting the operator did not pick.
+    val deviceState by app.meshDeviceConfigStore.state.collectAsState()
+    val radio = deviceState.radio
+    val loraLoaded = radio?.loraLoaded == true
+    val notice by app.meshtastic.settingsNotice.collectAsState()
+
     // #181 — LoRa region/preset + device-name edit buffers (screen-local; the
     // operator picks, taps Apply, and the admin write goes straight to radio).
-    var region by remember { mutableStateOf(MeshRegion.US) }
-    var preset by remember { mutableStateOf(MeshChannelPreset.LONG_FAST) }
+    // A null pick means "as the radio has it".
+    var picks by remember { mutableStateOf(LoraPicks()) }
+    val loraToSend = picks.toSend(radio)
+    // A channel waiting for the operator to confirm that it replaces the primary.
+    var confirmPrimary by remember { mutableStateOf<MeshChannel?>(null) }
     var longName by remember { mutableStateOf("") }
     var shortName by remember { mutableStateOf("") }
 
@@ -121,10 +136,12 @@ fun MeshChannelShareScreen(onBack: () -> Unit = {}) {
         shareUrl = MeshChannelShare.shareURL(MeshShareTransport.MESHCORE, meshcore = ch)
     }
 
-    fun applyMeshtastic(ch: MeshChannel, index: Int) {
+    // Into the first free secondary slot, or over the primary when the operator asked for that.
+    fun applyMeshtastic(ch: MeshChannel, replacePrimary: Boolean = false) {
         scope.launch {
-            val result = app.meshtastic.applyChannel(ch, index)
-            status = result.describe(success = "Applied \"${ch.name}\" to radio")
+            app.meshtastic.clearSettingsNotice()
+            val result = app.meshtastic.applyChannel(ch, replacePrimary)
+            status = result.describe()
         }
     }
 
@@ -137,23 +154,46 @@ fun MeshChannelShareScreen(onBack: () -> Unit = {}) {
 
     fun applyRebroadcast(mode: RebroadcastMode) {
         scope.launch {
+            app.meshtastic.clearSettingsNotice()
             val result = app.meshtastic.applyRebroadcastMode(mode)
-            status = result.describe(success = "Rebroadcast set to ${mode.label}")
+            status = result.describe()
         }
     }
 
     fun applyLoRa() {
+        // Only what was picked and differs from the radio: a region the operator did not pick is never written.
+        val send = loraToSend ?: return
         scope.launch {
-            val result = app.meshtastic.applyLoRaConfig(region, preset)
-            status = result.describe(success = "Set ${region.label} / ${preset.label} on radio")
+            app.meshtastic.clearSettingsNotice()
+            val result = app.meshtastic.applyLoRaConfig(send.region, send.preset)
+            status = result.describe()
+            if (result is AdminWriteResult.Sent) picks = LoraPicks()
         }
     }
 
     fun applyOwner() {
         scope.launch {
+            app.meshtastic.clearSettingsNotice()
             val result = app.meshtastic.applyOwner(longName.trim(), shortName.trim())
-            status = result.describe(success = "Set device name to \"${longName.trim()}\" (${shortName.trim()})")
+            status = result.describe()
         }
+    }
+
+    confirmPrimary?.let { ch ->
+        AlertDialog(
+            onDismissRequest = { confirmPrimary = null },
+            title = { Text("Replace the primary channel?") },
+            text = {
+                Text(
+                    "The radio's primary channel, its name and key, is replaced by \"${ch.name.ifEmpty { "(unnamed)" }}\". " +
+                        "The radio moves to that channel's frequency, and radios that are not on it will no longer hear this one.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { confirmPrimary = null; applyMeshtastic(ch, replacePrimary = true) }) { Text("Replace") }
+            },
+            dismissButton = { TextButton(onClick = { confirmPrimary = null }) { Text("Cancel") } },
+        )
     }
 
     Scaffold(
@@ -204,12 +244,13 @@ fun MeshChannelShareScreen(onBack: () -> Unit = {}) {
                 if (meshtasticChannels.isEmpty()) {
                     Text("No channels yet — join or create one above.", color = MaterialTheme.colorScheme.outline)
                 }
-                meshtasticChannels.forEachIndexed { index, ch ->
+                meshtasticChannels.forEach { ch ->
                     ChannelRow(
                         name = ch.name.ifEmpty { "(unnamed)" },
-                        subtitle = "${ch.psk.size}-byte PSK · index $index",
+                        subtitle = "${ch.psk.size}-byte PSK · goes into the first free secondary slot",
                         onShare = { shareMeshtastic(ch) },
-                        onApply = { applyMeshtastic(ch, index) },
+                        onApply = { applyMeshtastic(ch) },
+                        onReplacePrimary = { confirmPrimary = ch },
                     )
                 }
             } else {
@@ -273,21 +314,37 @@ fun MeshChannelShareScreen(onBack: () -> Unit = {}) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.outline,
                 )
+                if (!loraLoaded) {
+                    Text(
+                        "The radio has not reported its LoRa settings yet. Connect a radio and wait for it.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
                 EnumDropdown(
                     label = "Region",
-                    selectedLabel = region.label,
+                    selectedLabel = picks.shownRegion(radio)?.label ?: when {
+                        !loraLoaded -> "Not loaded"
+                        radio?.region == MeshRegion.UNSET -> "Not set"
+                        else -> "Not one of the listed regions"
+                    },
                     options = MeshRegion.entries.filter { it != MeshRegion.UNSET },
                     optionLabel = { it.label },
-                    onSelect = { region = it },
+                    onSelect = { picks = picks.copy(region = it) },
                 )
                 EnumDropdown(
                     label = "Modem preset",
-                    selectedLabel = preset.label,
+                    selectedLabel = picks.shownPreset(radio)?.label
+                        ?: if (loraLoaded) "Not one of the listed presets" else "Not loaded",
                     options = MeshChannelPreset.entries.toList(),
                     optionLabel = { it.label },
-                    onSelect = { preset = it },
+                    onSelect = { picks = picks.copy(preset = it) },
                 )
-                Button(onClick = { applyLoRa() }, modifier = Modifier.fillMaxWidth()) {
+                Button(
+                    onClick = { applyLoRa() },
+                    enabled = loraToSend != null,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
                     Text("Apply LoRa config")
                 }
 
@@ -326,6 +383,14 @@ fun MeshChannelShareScreen(onBack: () -> Unit = {}) {
                 HorizontalDivider()
                 Text(it, color = MaterialTheme.colorScheme.primary)
             }
+            // The radio reported a setting we sent and had kept its own value. Tap to dismiss.
+            notice?.let {
+                Text(
+                    it,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.clickable { app.meshtastic.clearSettingsNotice() },
+                )
+            }
         }
     }
 }
@@ -336,6 +401,7 @@ private fun ChannelRow(
     subtitle: String,
     onShare: () -> Unit,
     onApply: () -> Unit,
+    onReplacePrimary: (() -> Unit)? = null,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -348,6 +414,7 @@ private fun ChannelRow(
                 Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
             }
             OutlinedButton(onClick = onShare) { Text("Share") }
+            if (onReplacePrimary != null) OutlinedButton(onClick = onReplacePrimary) { Text("Replace primary") }
             Button(onClick = onApply) { Text("Apply") }
         }
     }

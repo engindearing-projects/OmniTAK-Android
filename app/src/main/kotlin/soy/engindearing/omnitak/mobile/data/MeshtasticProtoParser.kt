@@ -67,9 +67,10 @@ object MeshtasticProtoParser {
                     val sub = readLengthDelimited(bytes, idx) ?: return null
                     // The decoded value covers the variants the settings screen shows
                     // (device, position, lora); every other variant (power, network,
-                    // display, bluetooth, security, ...) has none. The raw bytes are
-                    // handed on for all of them: a settings write starts from what the
-                    // radio reported, so it needs the whole message, not a summary.
+                    // display, bluetooth, security, ...) has none. The raw bytes ride
+                    // along with every frame and last only as long as the frame does:
+                    // RadioSettingsCache keeps the three variants the app patches and
+                    // drops the rest, the security and network configs included.
                     val response = AdminMessageParser.parseConfigPublic(sub.first)
                     return FromRadioFrame.ConfigFrame(response, raw = sub.first)
                 }
@@ -539,7 +540,7 @@ sealed interface FromRadioFrame {
      *  response produces, so the downstream sink treats radio-pushed and
      *  requested config alike). It is null for a variant the settings screen
      *  does not show. [raw] is the Config message as the radio sent it, for
-     *  every variant, and is what [RadioSettingsCache] keeps. */
+     *  every variant; [RadioSettingsCache] keeps only the variants the app patches. */
     class ConfigFrame(val response: AdminResponse?, val raw: ByteArray) : FromRadioFrame {
         override fun equals(other: Any?): Boolean =
             other is ConfigFrame && response == other.response && raw.contentEquals(other.raw)

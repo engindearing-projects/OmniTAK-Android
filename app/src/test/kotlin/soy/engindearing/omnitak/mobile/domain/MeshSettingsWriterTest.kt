@@ -1,31 +1,33 @@
 package soy.engindearing.omnitak.mobile.domain
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import soy.engindearing.omnitak.mobile.data.AdminMessageParser
+import soy.engindearing.omnitak.mobile.data.AdminResponse
+import soy.engindearing.omnitak.mobile.data.AdminSetting
 import soy.engindearing.omnitak.mobile.data.AdminTestFrames
-import soy.engindearing.omnitak.mobile.data.AdminTestFrames.channelMessage
-import soy.engindearing.omnitak.mobile.data.AdminTestFrames.decode
-import soy.engindearing.omnitak.mobile.data.AdminTestFrames.deviceConfig
 import soy.engindearing.omnitak.mobile.data.AdminTestFrames.fields
-import soy.engindearing.omnitak.mobile.data.AdminTestFrames.has
 import soy.engindearing.omnitak.mobile.data.AdminTestFrames.keyBytes
-import soy.engindearing.omnitak.mobile.data.AdminTestFrames.loraConfig
-import soy.engindearing.omnitak.mobile.data.AdminTestFrames.positionConfig
 import soy.engindearing.omnitak.mobile.data.AdminTestFrames.single
-import soy.engindearing.omnitak.mobile.data.AdminTestFrames.userMessage
 import soy.engindearing.omnitak.mobile.data.AdminWriteResult
+import soy.engindearing.omnitak.mobile.data.AdminWriteResult.Incomplete.Cause
+import soy.engindearing.omnitak.mobile.data.DeviceEdits
+import soy.engindearing.omnitak.mobile.data.DeviceSettingsState
+import soy.engindearing.omnitak.mobile.data.FakeRadio
 import soy.engindearing.omnitak.mobile.data.MeshChannel
 import soy.engindearing.omnitak.mobile.data.MeshChannelPreset
-import soy.engindearing.omnitak.mobile.data.MeshDeviceConfig
 import soy.engindearing.omnitak.mobile.data.MeshRegion
 import soy.engindearing.omnitak.mobile.data.MeshRole
 import soy.engindearing.omnitak.mobile.data.ProtoMsg
@@ -33,471 +35,562 @@ import soy.engindearing.omnitak.mobile.data.RadioSettingsCache
 import soy.engindearing.omnitak.mobile.data.RadioSettingsCache.Key
 import soy.engindearing.omnitak.mobile.data.RebroadcastMode
 import soy.engindearing.omnitak.mobile.data.RefusalReason
+import soy.engindearing.omnitak.mobile.data.SentLedger
 
 /**
- * [MeshSettingsWriter]: what gets sent, and what does not.
+ * [MeshSettingsWriter] against a [FakeRadio] that answers reads and replaces
+ * whole messages on writes, the way the firmware does.
  *
- * The writer is handed a fake link, so every test can say exactly which frames
- * left the app. Settings the radio "reported" are loaded into a
- * [RadioSettingsCache] with the fixtures from [AdminTestFrames]; names, node
- * numbers and key bytes are made up.
+ * What is pinned here: only the edited settings are written; each is patched
+ * onto what the radio holds when it is about to be written, never onto an older
+ * copy; the role goes first and what follows is read after it; every sequence
+ * is inside begin and commit; a radio that does not answer is left alone; and
+ * the result says what was and was not sent.
+ *
+ * Names, node numbers and key bytes are made up.
  */
 class MeshSettingsWriterTest {
 
     private val node = 0x0A0B0C0Du
+    private val otherNode = 0x01020304u
 
-    /** The link: records every frame, and can be told to fail from the Nth frame on (1-based). */
-    private class Link(private val failFrom: Int = Int.MAX_VALUE) {
-        val frames = mutableListOf<ByteArray>()
+    /** A writer, a radio and the cache the radio's answers land in. Times are virtual. */
+    private class Rig(
+        scope: TestScope,
+        val radio: FakeRadio = FakeRadio.factory(),
+        destination: UInt? = 0x0A0B0C0Du,
+        frameSpacingMs: Long = 0,
+        readTimeoutMs: Long = 3_000,
+        private val latencyMs: Long = 0,
+        val ledger: SentLedger = SentLedger(),
+        /** 1-based numbers of the frames the link refuses. */
+        val failAt: MutableSet<Int> = mutableSetOf(),
+    ) {
+        val cache = RadioSettingsCache()
+        val frameTimes = mutableListOf<Long>()
         private var attempts = 0
+        private val clock = scope
+        private val answers: CoroutineScope = scope
 
-        suspend fun send(frame: ByteArray): Boolean {
+        val writer = MeshSettingsWriter(
+            cache, { destination }, { frame -> send(frame) },
+            ledger = ledger, frameSpacingMs = frameSpacingMs, readTimeoutMs = readTimeoutMs,
+        )
+
+        private suspend fun send(frame: ByteArray): Boolean {
             attempts++
-            if (attempts >= failFrom) return false
-            frames += frame
+            if (attempts in failAt) return false
+            frameTimes += clock.currentTime
+            radio.handle(frame) { admin ->
+                if (latencyMs > 0) answers.launch { delay(latencyMs); cache.ingestAdminMessage(admin) } else cache.ingestAdminMessage(admin)
+            }
             return true
         }
     }
 
-    private fun loadedCache(
-        device: ByteArray? = deviceConfig(),
-        position: ByteArray? = positionConfig(),
-        lora: ByteArray? = loraConfig(),
-        channel0: ByteArray? = channelMessage(name = "Alpha"),
-        owner: ByteArray? = userMessage(longName = "Test Node One", shortName = "TNO"),
-    ) = RadioSettingsCache().apply {
-        device?.let { put(Key.Config(1), it) }
-        position?.let { put(Key.Config(2), it) }
-        lora?.let { put(Key.Config(6), it) }
-        channel0?.let { put(Key.Channel(0), it) }
-        owner?.let { put(Key.Owner, it) }
+    private fun sameBytes(what: String, expected: ByteArray, actual: ByteArray?) {
+        // Not assertArrayEquals: its failure message would print key bytes.
+        assertTrue("$what is missing", actual != null)
+        assertEquals("$what (length)", expected.size, actual!!.size)
+        assertTrue("$what (bytes differ)", expected.contentEquals(actual))
     }
 
-    private fun writer(cache: RadioSettingsCache, link: Link, destination: UInt? = node) =
-        MeshSettingsWriter(cache, destination = { destination }, send = { link.send(it) }, frameSpacingMs = 0)
+    private val key = keyBytes(0x61)
 
-    /** The draft that matches [loadedCache]'s defaults exactly: nothing to push. */
-    private val matchingDraft = MeshDeviceConfig(
-        longName = "Test Node One",
-        shortName = "TNO",
-        role = MeshRole.TAK,
-        positionBroadcastSecs = 900,
-        channelName = "Alpha",
-        channelPreset = MeshChannelPreset.SHORT_FAST,
-    )
+    // region only what was edited is written ----------------------------------------------
 
-    private fun adminFieldNumbers(frame: ByteArray): List<Int> = decode(frame).admin.map { it.number }
+    @Test fun `one edited setting is one write, inside a transaction, patched onto a fresh read`() = runTest {
+        val rig = Rig(this)
+        val result = rig.writer.pushDeviceConfig(DeviceEdits(positionBroadcastSecs = 300))
 
-    // region refusals: nothing is sent --------------------------------------
-
-    private fun everyWrite(w: MeshSettingsWriter): Map<String, suspend () -> AdminWriteResult> = mapOf(
-        "rebroadcast" to { w.applyRebroadcastMode(RebroadcastMode.KNOWN_ONLY) },
-        "lora config" to { w.applyLoRaConfig(MeshRegion.US, MeshChannelPreset.MEDIUM_FAST) },
-        "lora preset only" to { w.applyLoRaConfig(MeshRegion.UNSET, MeshChannelPreset.MEDIUM_FAST) },
-        "owner" to { w.applyOwner("New Long", "NEW") },
-        "push, role changed" to { w.pushDeviceConfig(matchingDraft.copy(role = MeshRole.ROUTER)) },
-        "push, nothing changed" to { w.pushDeviceConfig(matchingDraft) },
-    )
-
-    @Test fun `with no cached settings no write is sent and the result says the settings are not loaded`() = runBlocking {
-        val link = Link()
-        for ((name, write) in everyWrite(writer(RadioSettingsCache(), link))) {
-            assertEquals(name, AdminWriteResult.Refused(RefusalReason.NOT_LOADED), write())
-        }
-        assertTrue("nothing may be sent: ${link.frames.size} frames went out", link.frames.isEmpty())
+        assertEquals(AdminWriteResult.Sent(listOf(AdminSetting.POSITION_INTERVAL)), result)
+        assertEquals(listOf("get_config:2", "begin", "set_config:2", "commit"), rig.radio.log)
+        sameBytes("position config", ProtoMsg().varint(1, 300).varint(7, 811).varint(13, 1).build(), rig.radio.config[2])
+        assertFalse("the transaction is closed", rig.radio.inTransaction)
     }
 
-    @Test fun `the refusal text is the one the operator reads`() {
-        assertEquals(
-            "Radio settings are not loaded yet. Reconnect and try again.",
-            AdminWriteResult.Refused(RefusalReason.NOT_LOADED).describe("done"),
-        )
+    @Test fun `a factory radio and a fresh install draft, edit one field and exactly one write goes out`() = runTest {
+        val rig = Rig(this)
+        // The screen's state: fresh-install defaults (TAK, "OmniTAK", 30 s), then what the radio reports.
+        var state = DeviceSettingsState()
+        for (report in reportsFrom(rig.radio)) state = state.withReport(report)
+
+        val edits = state.edits(state.draft.copy(positionBroadcastSecs = 300))
+        assertEquals(listOf(AdminSetting.POSITION_INTERVAL), edits.settings)
+
+        val roleBefore = rig.radio.config[1]!!.copyOf()
+        val channelBefore = rig.radio.channels[0]!!.copyOf()
+        val result = rig.writer.pushDeviceConfig(edits)
+
+        assertEquals(AdminWriteResult.Sent(listOf(AdminSetting.POSITION_INTERVAL)), result)
+        assertEquals("one write, and it is the position config", 1, rig.radio.log.count { it.startsWith("set_") })
+        assertEquals(listOf("get_config:2", "begin", "set_config:2", "commit"), rig.radio.log)
+        sameBytes("device config (the role is still CLIENT, still not on the wire)", roleBefore, rig.radio.config[1])
+        sameBytes("primary channel (still unnamed, same key)", channelBefore, rig.radio.channels[0])
     }
 
-    private suspend fun assertRefusedNotLoaded(name: String, cache: RadioSettingsCache, write: suspend (MeshSettingsWriter) -> AdminWriteResult) {
-        val link = Link()
-        assertEquals(name, AdminWriteResult.Refused(RefusalReason.NOT_LOADED), write(writer(cache, link)))
-        assertTrue("$name: nothing may be sent", link.frames.isEmpty())
+    @Test fun `nothing edited is nothing sent`() = runTest {
+        val rig = Rig(this)
+        assertEquals(AdminWriteResult.NothingToChange, rig.writer.pushDeviceConfig(DeviceEdits()))
+        assertTrue(rig.radio.log.isEmpty())
     }
 
-    @Test fun `each write refuses when the one entry it needs is missing, even if the others are there`() = runBlocking {
-        assertRefusedNotLoaded("rebroadcast needs the device config", loadedCache(device = null)) {
-            it.applyRebroadcastMode(RebroadcastMode.KNOWN_ONLY)
-        }
-        assertRefusedNotLoaded("lora needs the lora config", loadedCache(lora = null)) {
-            it.applyLoRaConfig(MeshRegion.US, MeshChannelPreset.SHORT_FAST)
-        }
-        assertRefusedNotLoaded("owner needs the owner", loadedCache(owner = null)) {
-            it.applyOwner("New Long", "NEW")
-        }
-    }
-
-    @Test fun `a push that has to change a setting whose entry is missing sends nothing at all`() = runBlocking {
-        // The role differs and the device config is there; the preset differs and the lora config is not.
-        val link = Link()
-        val w = writer(loadedCache(lora = null), link)
-        val result = w.pushDeviceConfig(matchingDraft.copy(role = MeshRole.ROUTER, channelPreset = MeshChannelPreset.LONG_SLOW))
-        assertEquals(AdminWriteResult.Refused(RefusalReason.NOT_LOADED), result)
-        assertTrue("no begin, no partial write: ${link.frames.size} frames went out", link.frames.isEmpty())
-    }
-
-    @Test fun `a push with the channel missing is refused as well`() = runBlocking {
-        val link = Link()
-        val result = writer(loadedCache(channel0 = null), link).pushDeviceConfig(matchingDraft)
-        assertEquals(AdminWriteResult.Refused(RefusalReason.NOT_LOADED), result)
-        assertTrue(link.frames.isEmpty())
-    }
-
-    @Test fun `a setting too big to re-send in one admin message is refused, not trimmed`() = runBlocking {
-        // The radio drops an AdminMessage longer than 233 bytes, and cutting fields off it would reset them.
-        val link = Link()
-        val huge = ProtoMsg().varint(1, 1).bytes(99, ByteArray(240) { 1 }).build()
-        val oversize = loadedCache(device = huge, lora = huge, owner = huge)
-        for ((name, write) in everyWrite(writer(oversize, link))) {
-            assertEquals(name, AdminWriteResult.Refused(RefusalReason.UNREADABLE), write())
-        }
-        assertTrue(link.frames.isEmpty())
-    }
-
-    @Test fun `with no radio to address nothing is sent`() = runBlocking {
-        val link = Link()
-        for ((name, write) in everyWrite(writer(loadedCache(), link, destination = null))) {
-            assertEquals(name, AdminWriteResult.Refused(RefusalReason.NO_RADIO), write())
-        }
-        assertEquals(
-            AdminWriteResult.Refused(RefusalReason.NO_RADIO),
-            writer(loadedCache(), link, destination = null).applyChannel(MeshChannel(name = "Shared", psk = keyBytes()), 1),
-        )
-        assertTrue(link.frames.isEmpty())
-    }
-
-    @Test fun `a refusal never touches what the cache holds`() = runBlocking {
-        val cache = loadedCache(lora = null)
-        val before = cache.get(Key.Config(1))
-        writer(cache, Link()).pushDeviceConfig(matchingDraft.copy(role = MeshRole.ROUTER, channelPreset = MeshChannelPreset.LONG_SLOW))
-        assertTrue("device config still as reported", before!!.contentEquals(cache.get(Key.Config(1))))
+    @Test fun `a value the radio already holds is not written, and no transaction is opened for it`() = runTest {
+        val rig = Rig(this) // interval 900
+        val result = rig.writer.pushDeviceConfig(DeviceEdits(positionBroadcastSecs = 900))
+        assertEquals(AdminWriteResult.NothingToChange, result)
+        assertEquals("only the read", listOf("get_config:2"), rig.radio.log)
     }
 
     // endregion
 
-    // region one write -------------------------------------------------------
+    // region role first, then a fresh read -----------------------------------------------------
 
-    @Test fun `a preset change sends the radio's own lora config with only the preset different`() = runBlocking {
-        val link = Link()
-        val result = writer(loadedCache(lora = loraConfig(preset = 6, region = 1)), link)
-            .applyLoRaConfig(MeshRegion.UNSET, MeshChannelPreset.MEDIUM_FAST)
+    @Test fun `the role goes first, and the position write is patched onto bytes read after the role defaults went in`() = runTest {
+        val rig = Rig(this)
+        // The firmware installs role defaults when the role changes: position flags 999 and interval 60.
+        rig.radio.onSetConfig = { variant, radio ->
+            if (variant == 1) radio.config[2] = ProtoMsg().varint(1, 60).varint(7, 999).varint(13, 1).build()
+        }
 
-        assertEquals(AdminWriteResult.Sent(1), result)
-        assertEquals("one frame", 1, link.frames.size)
-        val (variant, message) = decode(link.frames.single()).setConfig()
-        assertEquals(6, variant)
-        assertTrue("region, hop limit, transmit switch all carried over", loraConfig(preset = 4, region = 1).contentEquals(message))
-    }
+        val result = rig.writer.pushDeviceConfig(DeviceEdits(role = MeshRole.TRACKER, positionBroadcastSecs = 300))
 
-    @Test fun `a rebroadcast change sends the radio's own device config with only the mode different`() = runBlocking {
-        val link = Link()
-        assertEquals(AdminWriteResult.Sent(1), writer(loadedCache(), link).applyRebroadcastMode(RebroadcastMode.KNOWN_ONLY))
-        val (variant, message) = decode(link.frames.single()).setConfig()
-        assertEquals(1, variant)
-        assertTrue(deviceConfig(role = 7, rebroadcast = 3).contentEquals(message))
-    }
-
-    @Test fun `an owner rename keeps the licensed flag on the way to the radio`() = runBlocking {
-        val link = Link()
-        val w = writer(loadedCache(owner = userMessage(licensed = true)), link)
-        assertEquals(AdminWriteResult.Sent(1), w.applyOwner("New Long", "NEW"))
-        val user = fields(decode(link.frames.single()).setOwner())
-        assertEquals(1uL, user.single(6).varint)
-        assertEquals("New Long", user.single(2).bytes.toString(Charsets.UTF_8))
-    }
-
-    @Test fun `an owner write with both names blank has nothing to say`() = runBlocking {
-        val link = Link()
-        assertEquals(AdminWriteResult.NothingToChange, writer(loadedCache(), link).applyOwner("", "  "))
-        assertTrue(link.frames.isEmpty())
-    }
-
-    @Test fun `a second edit builds on the first`() = runBlocking {
-        val link = Link()
-        val w = writer(loadedCache(lora = loraConfig(preset = 6, region = 1)), link)
-
-        // First the region, then the preset, with no download in between.
-        assertEquals(AdminWriteResult.Sent(1), w.applyLoRaConfig(MeshRegion.EU_868, MeshChannelPreset.SHORT_FAST))
-        assertEquals(AdminWriteResult.Sent(1), w.applyLoRaConfig(MeshRegion.UNSET, MeshChannelPreset.MEDIUM_FAST))
-
-        val second = decode(link.frames[1]).setConfig().second
-        assertTrue(
-            "the second write still has the region the first one set",
-            loraConfig(preset = 4, region = 3).contentEquals(second),
+        assertEquals(AdminWriteResult.Sent(listOf(AdminSetting.ROLE, AdminSetting.POSITION_INTERVAL)), result)
+        assertEquals(
+            listOf("get_config:1", "begin", "set_config:1", "get_config:2", "set_config:2", "commit"),
+            rig.radio.log,
+        )
+        sameBytes(
+            "position config: the interval is the operator's, the flags are the role's defaults",
+            ProtoMsg().varint(1, 300).varint(7, 999).varint(13, 1).build(),
+            rig.radio.config[2],
         )
     }
 
-    @Test fun `a write remembers what it sent, so a rebroadcast change keeps an earlier role change`() = runBlocking {
-        val link = Link()
-        val cache = loadedCache()
-        val w = writer(cache, link)
-        // A push changes the role, then a separate rebroadcast write follows.
-        assertEquals(AdminWriteResult.Sent(1), w.pushDeviceConfig(matchingDraft.copy(role = MeshRole.ROUTER)))
-        assertEquals(AdminWriteResult.Sent(1), w.applyRebroadcastMode(RebroadcastMode.NONE))
+    @Test fun `edits are written in the order role, owner, interval, channel name, preset`() = runTest {
+        val rig = Rig(this)
+        val edits = DeviceEdits(
+            longName = "New Long", shortName = "NEW", role = MeshRole.ROUTER, positionBroadcastSecs = 60,
+            channelName = "ops", channelPreset = MeshChannelPreset.MEDIUM_FAST,
+        )
+        val result = rig.writer.pushDeviceConfig(edits)
 
-        val last = decode(link.frames.last()).setConfig().second
-        assertTrue(deviceConfig(role = 2, rebroadcast = 4).contentEquals(last))
+        assertEquals(edits.settings, (result as AdminWriteResult.Sent).written)
+        assertEquals(
+            listOf(
+                "get_config:1", "begin", "set_config:1",
+                "get_owner", "set_owner",
+                "get_config:2", "set_config:2",
+                "get_channel:0", "set_channel:0",
+                "get_config:6", "set_config:6",
+                "commit",
+            ),
+            rig.radio.log,
+        )
     }
 
-    @Test fun `a failed send leaves the cache as it was and reports the link failure`() = runBlocking {
-        val link = Link(failFrom = 1)
-        val cache = loadedCache()
-        val before = cache.get(Key.Config(6))
-        val result = writer(cache, link).applyLoRaConfig(MeshRegion.UNSET, MeshChannelPreset.MEDIUM_FAST)
-        assertEquals(AdminWriteResult.LinkFailed(sent = 0, total = 1), result)
-        assertTrue(before!!.contentEquals(cache.get(Key.Config(6))))
-    }
+    // endregion
 
-    @Test fun `an imported channel replaces the slot, and a rename afterwards starts from the imported key`() = runBlocking {
-        val link = Link()
+    // region a fresh read, not the cache ----------------------------------------------------------
+
+    @Test fun `a channel key rotated by another client is not put back by a rename`() = runTest {
+        // The answer takes a moment, as it does on a real link, so an old copy in the cache would be used if it were allowed.
+        val rig = Rig(this, latencyMs = 100)
         val oldKey = keyBytes(0x10)
-        val newKey = keyBytes(0x90)
-        val cache = loadedCache(channel0 = channelMessage(name = "Alpha", key = oldKey))
-        val w = writer(cache, link)
+        // What the app saw when the link came up (and still has).
+        rig.cache.put(Key.Channel(0), ProtoMsg().msg(2, ProtoMsg().bytes(2, oldKey)).varint(3, 1).build())
+        // Another client has since rotated the key: the radio holds key B.
+        val rotated = keyBytes(0x99)
+        rig.radio.channels[0] = ProtoMsg().msg(2, ProtoMsg().bytes(2, rotated).msg(7, ProtoMsg().varint(1, 13))).varint(3, 1).build()
 
-        assertEquals(AdminWriteResult.Sent(1), w.applyChannel(MeshChannel(name = "Shared", psk = newKey), index = 0))
-        // The rename the operator makes next must not put the old key back.
-        assertEquals(AdminWriteResult.Sent(1), w.pushDeviceConfig(matchingDraft.copy(channelName = "Bravo")))
+        rig.writer.pushDeviceConfig(DeviceEdits(channelName = "ops"))
 
-        // Frames: the import, then begin, the rename, commit.
-        val settings = fields(fields(decode(link.frames[link.frames.size - 2]).setChannel()).single(2).bytes)
-        assertTrue("the imported key survives the rename", newKey.contentEquals(settings.single(2).bytes))
-        assertEquals("Bravo", settings.single(3).bytes.toString(Charsets.UTF_8))
+        val settings = fields(fields(rig.radio.channels[0]!!).single(2).bytes)
+        assertTrue("the rotated key survives the rename", rotated.contentEquals(settings.single(2).bytes))
+        assertEquals("ops", settings.single(3).bytes.toString(Charsets.UTF_8))
+        assertEquals("position precision survives too", 13uL, fields(settings.single(7).bytes).single(1).varint)
+    }
+
+    @Test fun `the cache does not become what was sent`() = runTest {
+        val rig = Rig(this)
+        rig.writer.pushDeviceConfig(DeviceEdits(positionBroadcastSecs = 300, channelName = "ops"))
+
+        assertNull("the written entries are dropped, not stored as if the radio had accepted them", rig.cache.config(2))
+        assertNull(rig.cache.channel(0))
+    }
+
+    @Test fun `a slow answer is waited for`() = runTest {
+        val rig = Rig(this, latencyMs = 1_500)
+        val result = rig.writer.pushDeviceConfig(DeviceEdits(positionBroadcastSecs = 300))
+        assertEquals(AdminWriteResult.Sent(listOf(AdminSetting.POSITION_INTERVAL)), result)
     }
 
     // endregion
 
-    // region pushDeviceConfig --------------------------------------------------
+    // region a radio that does not answer ------------------------------------------------------------
 
-    @Test fun `a draft that matches the radio sends nothing`() = runBlocking {
-        val link = Link()
-        assertEquals(AdminWriteResult.NothingToChange, writer(loadedCache(), link).pushDeviceConfig(matchingDraft))
-        assertTrue("no begin, no commit: ${link.frames.size} frames went out", link.frames.isEmpty())
+    @Test fun `a radio that does not answer is left alone and the result says why`() = runTest {
+        val rig = Rig(this, readTimeoutMs = 3_000)
+        rig.radio.answers = false
+
+        val result = rig.writer.pushDeviceConfig(DeviceEdits(role = MeshRole.ROUTER))
+
+        assertEquals(AdminWriteResult.Refused(RefusalReason.NO_ANSWER), result)
+        assertEquals("only the read went out: no begin, no write, no commit", listOf("ignored get_config:1"), rig.radio.log)
+        assertTrue("it waited a few seconds, not forever", currentTime in 3_000..4_000)
+        assertTrue(result.describe().contains("managed"))
+        assertEquals("a refusal is not a write", false, result.reachedRadio)
     }
 
-    @Test fun `one changed setting sends begin, that one write, commit and nothing else`() = runBlocking {
-        val link = Link()
-        val result = writer(loadedCache(), link).pushDeviceConfig(matchingDraft.copy(positionBroadcastSecs = 300))
-
-        assertEquals(AdminWriteResult.Sent(1), result)
-        assertEquals(3, link.frames.size)
-        assertEquals("begin_edit_settings", listOf(64), adminFieldNumbers(link.frames[0]))
-        assertEquals("set_config", listOf(34), adminFieldNumbers(link.frames[1]))
-        assertEquals("commit_edit_settings", listOf(65), adminFieldNumbers(link.frames[2]))
-
-        val (variant, message) = decode(link.frames[1]).setConfig()
-        assertEquals("position", 2, variant)
-        assertTrue("only the interval differs", positionConfig(secs = 300).contentEquals(message))
-        link.frames.forEach { assertEquals("every frame is addressed to the radio", node, decode(it).to) }
+    @Test fun `an answer that comes too late is a refusal`() = runTest {
+        val rig = Rig(this, latencyMs = 5_000, readTimeoutMs = 3_000)
+        assertEquals(AdminWriteResult.Refused(RefusalReason.NO_ANSWER), rig.writer.pushDeviceConfig(DeviceEdits(positionBroadcastSecs = 300)))
+        assertFalse(rig.radio.log.any { it.startsWith("set_") })
     }
 
-    @Test fun `the writes of a batch go out between begin and commit in a fixed order`() = runBlocking {
-        val link = Link()
-        val draft = MeshDeviceConfig(
-            longName = "New Long", shortName = "NEW", role = MeshRole.ROUTER,
-            positionBroadcastSecs = 60, channelName = "Bravo", channelPreset = MeshChannelPreset.MEDIUM_FAST,
-        )
-        assertEquals(AdminWriteResult.Sent(5), writer(loadedCache(), link).pushDeviceConfig(draft))
+    @Test fun `a radio that stops answering part way reports what was sent and what was not`() = runTest {
+        val rig = Rig(this)
+        rig.radio.onSetConfig = { _, radio -> radio.answers = false } // goes quiet after the role write
+
+        val result = rig.writer.pushDeviceConfig(DeviceEdits(role = MeshRole.ROUTER, positionBroadcastSecs = 300))
 
         assertEquals(
-            listOf(64, 32, 34, 34, 33, 34, 65),
-            link.frames.map { adminFieldNumbers(it).single() },
+            AdminWriteResult.Incomplete(
+                written = listOf(AdminSetting.ROLE), notWritten = listOf(AdminSetting.POSITION_INTERVAL),
+                cause = Cause.NO_ANSWER, committed = true,
+            ),
+            result,
         )
-        val variants = link.frames.filter { adminFieldNumbers(it).single() == 34 }.map { decode(it).setConfig().first }
-        assertEquals("role, position, then preset", listOf(1, 2, 6), variants)
-    }
-
-    @Test fun `each write in a batch is the radio's own message with one field changed`() = runBlocking {
-        val link = Link()
-        val draft = matchingDraft.copy(role = MeshRole.ROUTER, channelName = "Bravo", channelPreset = MeshChannelPreset.MEDIUM_FAST)
-        writer(loadedCache(), link).pushDeviceConfig(draft)
-
-        val byKind = link.frames.drop(1).dropLast(1)
-        assertTrue(deviceConfig(role = 2, rebroadcast = 2).contentEquals(decode(byKind[0]).setConfig().second))
-        assertTrue(channelMessage(name = "Bravo").contentEquals(decode(byKind[1]).setChannel()))
-        assertTrue(loraConfig(preset = 4, region = 1).contentEquals(decode(byKind[2]).setConfig().second))
-    }
-
-    @Test fun `a push does not rewrite a setting that already matches`() = runBlocking {
-        val link = Link()
-        writer(loadedCache(), link).pushDeviceConfig(matchingDraft.copy(channelName = "Bravo"))
-        // Only the channel went out: no owner, role, position or lora write.
-        assertEquals(listOf(64, 33, 65), link.frames.map { adminFieldNumbers(it).single() })
-    }
-
-    @Test fun `a role or preset the app has no name for is left alone`() = runBlocking {
-        // Role 11 and modem preset 7 are real firmware values this app does not list. The draft cannot hold
-        // them, so comparing would "change" them on every push and overwrite what the radio is set to.
-        val link = Link()
-        val cache = loadedCache(device = deviceConfig(role = 11), lora = loraConfig(preset = 7))
-        val result = writer(cache, link).pushDeviceConfig(matchingDraft.copy(role = MeshRole.TAK, channelPreset = MeshChannelPreset.LONG_FAST))
-        assertEquals(AdminWriteResult.NothingToChange, result)
-        assertTrue(link.frames.isEmpty())
-    }
-
-    @Test fun `names are compared the way they would be sent, so a name that gets cut does not look changed forever`() = runBlocking {
-        val link = Link()
-        val long = "x".repeat(45)
-        val cache = loadedCache(owner = userMessage(longName = "x".repeat(39), shortName = "TNO"), channel0 = channelMessage(name = "abcdefghijk"))
-        val result = writer(cache, link).pushDeviceConfig(matchingDraft.copy(longName = long, channelName = "abcdefghijkl"))
-        assertEquals(AdminWriteResult.NothingToChange, result)
-        assertTrue(link.frames.isEmpty())
-    }
-
-    @Test fun `blank names in the draft leave the radio's names alone`() = runBlocking {
-        val link = Link()
         assertEquals(
-            AdminWriteResult.NothingToChange,
-            writer(loadedCache(), link).pushDeviceConfig(matchingDraft.copy(longName = "", shortName = " ")),
+            "the transaction is still closed",
+            listOf("get_config:1", "begin", "set_config:1", "ignored get_config:2", "ignored commit"),
+            rig.radio.log,
         )
-        assertTrue(link.frames.isEmpty())
-    }
-
-    @Test fun `a changed owner name goes out and keeps the licensed flag`() = runBlocking {
-        val link = Link()
-        val w = writer(loadedCache(owner = userMessage(licensed = true)), link)
-        assertEquals(AdminWriteResult.Sent(1), w.pushDeviceConfig(matchingDraft.copy(longName = "New Long")))
-        val user = fields(decode(link.frames[1]).setOwner())
-        assertEquals(1uL, user.single(6).varint)
-        assertTrue(user.has(9))
-    }
-
-    @Test fun `a failed begin sends nothing else`() = runBlocking {
-        val link = Link(failFrom = 1)
-        val result = writer(loadedCache(), link).pushDeviceConfig(matchingDraft.copy(role = MeshRole.ROUTER, positionBroadcastSecs = 60))
-        assertEquals(AdminWriteResult.LinkFailed(sent = 0, total = 2), result)
-        assertTrue(link.frames.isEmpty())
-    }
-
-    @Test fun `when a write fails the transaction is still closed, and the result says how far it got`() = runBlocking {
-        // Frames: begin (ok), role write (ok), position write (fails), then commit is attempted.
-        class FailsOnce {
-            val frames = mutableListOf<ByteArray>()
-            val attempted = mutableListOf<Int>()
-            suspend fun send(frame: ByteArray): Boolean {
-                val kind = decode(frame).admin.single().number
-                attempted += kind
-                if (kind == 34 && attempted.count { it == 34 } == 2) return false
-                frames += frame
-                return true
-            }
-        }
-        val link = FailsOnce()
-        val w = MeshSettingsWriter(loadedCache(), { node }, { link.send(it) }, frameSpacingMs = 0)
-        val result = w.pushDeviceConfig(matchingDraft.copy(role = MeshRole.ROUTER, positionBroadcastSecs = 60, channelName = "Bravo"))
-
-        assertEquals(AdminWriteResult.LinkFailed(sent = 1, total = 3), result)
-        assertEquals("begin, role, failed position, commit; the channel is not tried", listOf(64, 34, 34, 65), link.attempted)
-        assertTrue("the result tells the screen something may have been written", result.reachedRadio)
-    }
-
-    @Test fun `a failed commit is reported even though every write went out`() = runBlocking {
-        val link = Link(failFrom = 3) // begin, one write, then the commit fails
-        val result = writer(loadedCache(), link).pushDeviceConfig(matchingDraft.copy(positionBroadcastSecs = 60))
-        assertEquals(AdminWriteResult.LinkFailed(sent = 1, total = 1), result)
-        assertTrue(result.describe("ok").contains("confirmed"))
-    }
-
-    @Test fun `a batch leaves the cache holding what it wrote, so the next edit builds on it`() = runBlocking {
-        val link = Link()
-        val cache = loadedCache()
-        val w = writer(cache, link)
-        w.pushDeviceConfig(matchingDraft.copy(positionBroadcastSecs = 300))
-
-        assertTrue(positionConfig(secs = 300).contentEquals(cache.get(Key.Config(2))))
-        // The same draft again is now a no-op: nothing is re-sent.
-        val before = link.frames.size
-        assertEquals(AdminWriteResult.NothingToChange, w.pushDeviceConfig(matchingDraft.copy(positionBroadcastSecs = 300)))
-        assertEquals(before, link.frames.size)
+        assertTrue(result.describe().contains("Sent to the radio: role."))
+        assertTrue(result.describe().contains("Not sent: position interval"))
+        assertTrue(result.reachedRadio)
     }
 
     // endregion
 
-    // region pacing and cancellation ---------------------------------------------
+    // region transactions ---------------------------------------------------------------------------------
 
-    @Test fun `the frames of a batch go out a gap apart, so the radio can take each one`() = runTest {
-        // The firmware keeps four inbound packets and drops the oldest when a fifth arrives. Virtual time here.
-        val times = mutableListOf<Long>()
-        val w = MeshSettingsWriter(loadedCache(), { node }, { times += currentTime; true }, frameSpacingMs = 100)
+    @Test fun `even a single write is inside begin and commit`() = runTest {
+        val rig = Rig(this)
+        val result = rig.writer.applyRebroadcastMode(RebroadcastMode.KNOWN_ONLY)
 
-        val result = w.pushDeviceConfig(matchingDraft.copy(role = MeshRole.ROUTER, positionBroadcastSecs = 60))
-
-        assertEquals(AdminWriteResult.Sent(2), result)
-        assertEquals("begin, two writes, commit", listOf(0L, 100L, 200L, 300L), times)
-    }
-
-    @Test fun `a single write is not delayed`() = runTest {
-        val times = mutableListOf<Long>()
-        val w = MeshSettingsWriter(loadedCache(), { node }, { times += currentTime; true }, frameSpacingMs = 100)
-        w.applyLoRaConfig(MeshRegion.UNSET, MeshChannelPreset.MEDIUM_FAST)
-        assertEquals(listOf(0L), times)
-    }
-
-    @Test fun `two writes started together run one after the other, so the second builds on the first`() = runTest {
-        // Each write reads the cache, sends, then stores what it sent. Run side by side, both would start from
-        // the same message and the second would undo the first.
-        val frames = mutableListOf<ByteArray>()
-        val w = MeshSettingsWriter(
-            loadedCache(lora = loraConfig(preset = 6, region = 1)), { node },
-            { frames += it; delay(50); true },
-            frameSpacingMs = 0,
-        )
-
-        val first = async { w.applyLoRaConfig(MeshRegion.EU_868, MeshChannelPreset.SHORT_FAST) }
-        val second = async { w.applyLoRaConfig(MeshRegion.UNSET, MeshChannelPreset.MEDIUM_FAST) }
-
-        assertEquals(AdminWriteResult.Sent(1), first.await())
-        assertEquals(AdminWriteResult.Sent(1), second.await())
-        assertTrue(
-            "the second write still carries the region the first one set",
-            loraConfig(preset = 4, region = 3).contentEquals(decode(frames[1]).setConfig().second),
+        assertEquals(AdminWriteResult.Sent(listOf(AdminSetting.REBROADCAST_MODE)), result)
+        assertEquals(listOf("get_config:1", "begin", "set_config:1", "commit"), rig.radio.log)
+        sameBytes(
+            "device config: the mode changed, the time zone and LED switch stayed",
+            ProtoMsg().varint(6, 3).varint(7, 7200).string(11, "PST8PDT,M3.2.0,M11.1.0").bool(12, true).build(),
+            rig.radio.config[1],
         )
     }
 
-    @Test fun `a push that has begun reaches its commit even when the caller goes away`() = runTest {
+    @Test fun `a transaction left open by a dropped link is closed by the next write`() = runTest {
+        val rig = Rig(this)
+        rig.radio.inTransaction = true // an earlier link died between begin and commit
+        rig.writer.applyRebroadcastMode(RebroadcastMode.LOCAL_ONLY)
+        assertFalse(rig.radio.inTransaction)
+    }
+
+    @Test fun `the link dropping before the commit says some settings may have been applied`() = runTest {
+        val rig = Rig(this, failAt = mutableSetOf(4)) // get, begin, set, then the commit fails
+        val result = rig.writer.pushDeviceConfig(DeviceEdits(role = MeshRole.ROUTER))
+
+        assertEquals(
+            AdminWriteResult.Incomplete(listOf(AdminSetting.ROLE), emptyList(), Cause.LINK_LOST, committed = false),
+            result,
+        )
+        val text = result.describe()
+        assertTrue(text, text.contains("may have been applied"))
+        assertTrue(text, text.contains("Reconnect and check"))
+        assertFalse("the write did reach the radio: " + text, text.contains("did not reach"))
+        assertTrue(result.reachedRadio)
+    }
+
+    @Test fun `a write that cannot be sent still gets its commit, and the result does not say nothing reached the radio`() = runTest {
+        val rig = Rig(this, failAt = mutableSetOf(5)) // get, begin, set (ok), get, set fails, commit goes out
+        val result = rig.writer.pushDeviceConfig(DeviceEdits(role = MeshRole.ROUTER, positionBroadcastSecs = 300))
+
+        assertEquals(
+            AdminWriteResult.Incomplete(
+                written = listOf(AdminSetting.ROLE), notWritten = listOf(AdminSetting.POSITION_INTERVAL),
+                cause = Cause.LINK_LOST, committed = true,
+            ),
+            result,
+        )
+        assertEquals("get_config:1", rig.radio.log.first())
+        assertEquals("commit", rig.radio.log.last())
+        assertFalse(result.describe().contains("did not reach"))
+        assertTrue(result.describe().contains("saved what it received"))
+    }
+
+    @Test fun `a begin that cannot be sent writes nothing`() = runTest {
+        val rig = Rig(this, failAt = mutableSetOf(2))
+        assertEquals(AdminWriteResult.Refused(RefusalReason.NO_RADIO), rig.writer.pushDeviceConfig(DeviceEdits(role = MeshRole.ROUTER)))
+        assertEquals(listOf("get_config:1"), rig.radio.log)
+    }
+
+    @Test fun `a read that cannot be sent is no radio`() = runTest {
+        val rig = Rig(this, failAt = mutableSetOf(1))
+        assertEquals(AdminWriteResult.Refused(RefusalReason.NO_RADIO), rig.writer.pushDeviceConfig(DeviceEdits(role = MeshRole.ROUTER)))
+        assertTrue(rig.radio.log.isEmpty())
+    }
+
+    @Test fun `with no radio to address nothing is sent at all`() = runTest {
+        val rig = Rig(this, destination = null)
+        val w = rig.writer
+        assertEquals(AdminWriteResult.Refused(RefusalReason.NO_RADIO), w.pushDeviceConfig(DeviceEdits(role = MeshRole.ROUTER)))
+        assertEquals(AdminWriteResult.Refused(RefusalReason.NO_RADIO), w.applyRebroadcastMode(RebroadcastMode.ALL))
+        assertEquals(AdminWriteResult.Refused(RefusalReason.NO_RADIO), w.applyLoRaConfig(MeshRegion.US, MeshChannelPreset.LONG_FAST))
+        assertEquals(AdminWriteResult.Refused(RefusalReason.NO_RADIO), w.applyOwner("A", "B"))
+        assertEquals(AdminWriteResult.Refused(RefusalReason.NO_RADIO), w.applyChannel(MeshChannel(name = "Shared", psk = key)))
+        assertEquals(0, w.readAll())
+        assertTrue(rig.radio.log.isEmpty())
+    }
+
+    // endregion
+
+    // region what was sent is remembered ---------------------------------------------------------------------
+
+    @Test fun `what was sent is remembered for that radio, and judged by its next report`() = runTest {
+        val rig = Rig(this)
+        rig.writer.pushDeviceConfig(DeviceEdits(role = MeshRole.TAK, positionBroadcastSecs = 300))
+
+        assertEquals("another radio's report judges nothing", emptyList<AdminSetting>(), rig.ledger.check(otherNode, AdminResponse.PositionConfig(900)))
+        assertEquals("the radio kept 900", listOf(AdminSetting.POSITION_INTERVAL), rig.ledger.check(node, AdminResponse.PositionConfig(900)))
+        assertEquals("the radio took the role", emptyList<AdminSetting>(), rig.ledger.check(node, AdminResponse.DeviceConfig(MeshRole.TAK, RebroadcastMode.ALL)))
+    }
+
+    @Test fun `a value that was already set is not remembered as sent`() = runTest {
+        val rig = Rig(this)
+        rig.writer.pushDeviceConfig(DeviceEdits(positionBroadcastSecs = 900)) // the radio has it
+        assertEquals(0, rig.ledger.size)
+    }
+
+    // endregion
+
+    // region the LoRa config ------------------------------------------------------------------------------------
+
+    @Test fun `a preset-only apply keeps the radio's region`() = runTest {
+        val rig = Rig(this)
+        rig.radio.config[6] = ProtoMsg().bool(1, true).varint(2, 6).varint(7, 3).varint(8, 5).bool(9, true).build() // EU_868
+        val result = rig.writer.applyLoRaConfig(MeshRegion.UNSET, MeshChannelPreset.MEDIUM_FAST)
+
+        assertEquals(AdminWriteResult.Sent(listOf(AdminSetting.MODEM_PRESET)), result)
+        sameBytes(
+            "lora config: preset 4, region 3, hop limit 5, transmit on",
+            ProtoMsg().bool(1, true).varint(2, 4).varint(7, 3).varint(8, 5).bool(9, true).build(),
+            rig.radio.config[6],
+        )
+    }
+
+    @Test fun `a region-only apply leaves the preset`() = runTest {
+        val rig = Rig(this)
+        rig.radio.config[6] = ProtoMsg().bool(1, true).varint(2, 6).varint(7, 1).varint(8, 5).build()
+        val result = rig.writer.applyLoRaConfig(MeshRegion.EU_868, null)
+
+        assertEquals(AdminWriteResult.Sent(listOf(AdminSetting.REGION)), result)
+        sameBytes(
+            "lora config: region 3, preset still 6",
+            ProtoMsg().bool(1, true).varint(2, 6).varint(7, 3).varint(8, 5).build(),
+            rig.radio.config[6],
+        )
+    }
+
+    @Test fun `nothing picked is nothing to change`() = runTest {
+        val rig = Rig(this)
+        assertEquals(AdminWriteResult.NothingToChange, rig.writer.applyLoRaConfig(MeshRegion.UNSET, null))
+        assertTrue(rig.radio.log.isEmpty())
+    }
+
+    // endregion
+
+    // region the owner --------------------------------------------------------------------------------------------------
+
+    @Test fun `an owner rename keeps the licensed flag`() = runTest {
+        val rig = Rig(this)
+        rig.radio.owner = AdminTestFrames.userMessage(longName = "Sim Radio One", shortName = "SR1", licensed = true)
+        val result = rig.writer.applyOwner("New Long", "NEW")
+
+        assertEquals(AdminWriteResult.Sent(listOf(AdminSetting.LONG_NAME, AdminSetting.SHORT_NAME)), result)
+        val user = fields(rig.radio.owner)
+        assertEquals("New Long", user.single(2).bytes.toString(Charsets.UTF_8))
+        assertEquals("the licensed flag survived the rename", 1uL, user.single(6).varint)
+    }
+
+    @Test fun `an owner write with both names blank has nothing to say`() = runTest {
+        val rig = Rig(this)
+        assertEquals(AdminWriteResult.NothingToChange, rig.writer.applyOwner("", "  "))
+        assertTrue(rig.radio.log.isEmpty())
+    }
+
+    // endregion
+
+    // region importing a channel ------------------------------------------------------------------------------------------
+
+    private fun FakeRadio.useSlot(index: Int, role: Int = 2) {
+        channels[index] = ProtoMsg().varint(1, index).msg(2, ProtoMsg().bytes(2, keyBytes(index)).string(3, "slot$index")).varint(3, role).build()
+    }
+
+    @Test fun `an imported channel goes into the first free secondary slot, and the primary is left alone`() = runTest {
+        val rig = Rig(this)
+        rig.radio.useSlot(1) // in use; slot 2 is free
+        val primaryBefore = rig.radio.channels[0]!!.copyOf()
+        val slot1Before = rig.radio.channels[1]!!.copyOf()
+
+        val result = rig.writer.applyChannel(MeshChannel(name = "Shared", psk = key))
+
+        assertEquals(AdminWriteResult.Sent(listOf(AdminSetting.CHANNEL)), result)
+        assertEquals(listOf("get_channel:1", "get_channel:2", "begin", "set_channel:2", "commit"), rig.radio.log)
+        sameBytes("primary channel", primaryBefore, rig.radio.channels[0])
+        sameBytes("slot 1", slot1Before, rig.radio.channels[1])
+        val channel = fields(rig.radio.channels[2]!!)
+        assertEquals("secondary", 2uL, channel.single(3).varint)
+        val settings = fields(channel.single(2).bytes)
+        assertEquals("Shared", settings.single(3).bytes.toString(Charsets.UTF_8))
+        assertTrue(key.contentEquals(settings.single(2).bytes))
+    }
+
+    @Test fun `the first import on a factory radio lands in slot 1, not on the primary`() = runTest {
+        val rig = Rig(this)
+        val primaryBefore = rig.radio.channels[0]!!.copyOf()
+        rig.writer.applyChannel(MeshChannel(name = "Shared", psk = key))
+        sameBytes("primary channel (name, key, precision)", primaryBefore, rig.radio.channels[0])
+        assertTrue(rig.radio.log.contains("set_channel:1"))
+    }
+
+    @Test fun `the primary is replaced only when the operator asks, with no reads`() = runTest {
+        val rig = Rig(this)
+        val result = rig.writer.applyChannel(MeshChannel(name = "Shared", psk = key), replacePrimary = true)
+
+        assertEquals(AdminWriteResult.Sent(listOf(AdminSetting.CHANNEL)), result)
+        assertEquals(listOf("begin", "set_channel:0", "commit"), rig.radio.log)
+        val settings = fields(fields(rig.radio.channels[0]!!).single(2).bytes)
+        assertEquals("Shared", settings.single(3).bytes.toString(Charsets.UTF_8))
+    }
+
+    @Test fun `with every secondary slot in use nothing is imported`() = runTest {
+        val rig = Rig(this)
+        for (i in 1..7) rig.radio.useSlot(i)
+        val result = rig.writer.applyChannel(MeshChannel(name = "Shared", psk = key))
+
+        assertEquals(AdminWriteResult.Refused(RefusalReason.NO_FREE_SLOT), result)
+        assertEquals((1..7).map { "get_channel:$it" }, rig.radio.log)
+    }
+
+    @Test fun `an import needs the radio to say which slots are free`() = runTest {
+        val rig = Rig(this)
+        rig.radio.answers = false
+        assertEquals(AdminWriteResult.Refused(RefusalReason.NO_ANSWER), rig.writer.applyChannel(MeshChannel(name = "Shared", psk = key)))
+        assertFalse(rig.radio.log.any { it.contains("set_") || it.contains("begin") })
+    }
+
+    @Test fun `an imported channel name is cut to 11 bytes`() = runTest {
+        val rig = Rig(this)
+        rig.writer.applyChannel(MeshChannel(name = "x".repeat(40), psk = key))
+        val settings = fields(fields(rig.radio.channels[1]!!).single(2).bytes)
+        assertEquals(11, settings.single(3).bytes.size)
+    }
+
+    // endregion
+
+    // region spacing, turns and cancellation ------------------------------------------------------------------------------
+
+    @Test fun `frames go out a gap apart, reads included`() = runTest {
+        val rig = Rig(this, frameSpacingMs = 100)
+        rig.writer.pushDeviceConfig(DeviceEdits(role = MeshRole.ROUTER, positionBroadcastSecs = 300))
+
+        assertEquals("get, begin, set, get, set, commit", 6, rig.frameTimes.size)
+        assertTrue(rig.frameTimes.zipWithNext { a, b -> b - a }.all { it >= 100 })
+    }
+
+    @Test fun `reading everything takes its turn behind a write and spaces its requests`() = runTest {
+        val rig = Rig(this, frameSpacingMs = 100, latencyMs = 300)
+        val push = async { rig.writer.pushDeviceConfig(DeviceEdits(positionBroadcastSecs = 300)) }
+        val read = async { rig.writer.readAll() }
+
+        assertEquals(AdminWriteResult.Sent(listOf(AdminSetting.POSITION_INTERVAL)), push.await())
+        assertEquals(12, read.await())
+        val log = rig.radio.log
+        val commitAt = log.indexOf("commit")
+        assertTrue("the whole write comes before the first read-all request: $log", log.indexOf("get_owner") > commitAt)
+        val readAllTimes = rig.frameTimes.takeLast(12)
+        assertTrue(readAllTimes.zipWithNext { a, b -> b - a }.all { it >= 100 })
+    }
+
+    @Test fun `two writes started together run one after the other`() = runTest {
+        val rig = Rig(this, latencyMs = 100)
+        val first = async { rig.writer.pushDeviceConfig(DeviceEdits(positionBroadcastSecs = 300)) }
+        val second = async { rig.writer.pushDeviceConfig(DeviceEdits(channelName = "ops")) }
+        first.await()
+        second.await()
+
+        assertEquals(
+            listOf("get_config:2", "begin", "set_config:2", "commit", "get_channel:0", "begin", "set_channel:0", "commit"),
+            rig.radio.log,
+        )
+    }
+
+    @Test fun `a sequence that has begun reaches its commit even when the caller goes away`() = runTest {
         // A screen left mid-push cancels its scope. A transaction left open would swallow the next edit from any client.
-        val frames = mutableListOf<ByteArray>()
+        val rig = Rig(this, frameSpacingMs = 100)
         val begun = CompletableDeferred<Unit>()
-        val w = MeshSettingsWriter(
-            loadedCache(), { node },
-            {
-                frames += it
-                if (frames.size == 1) begun.complete(Unit)
+        val push = launch {
+            rig.writer.pushDeviceConfig(DeviceEdits(role = MeshRole.ROUTER, positionBroadcastSecs = 300))
+        }
+        // Cancel as soon as the radio has seen the begin. The wait is bounded, so a writer that never begins
+        // fails this test instead of leaving it waiting.
+        launch {
+            val seen = withTimeoutOrNull(10_000) {
+                while ("begin" !in rig.radio.log) delay(10)
                 true
-            },
-            frameSpacingMs = 100,
-        )
-
-        val push = launch { w.pushDeviceConfig(matchingDraft.copy(role = MeshRole.ROUTER, positionBroadcastSecs = 60)) }
+            }
+            if (seen == true) begun.complete(Unit)
+            else begun.completeExceptionally(AssertionError("the writer never opened a transaction: ${rig.radio.log}"))
+        }
         begun.await()
         push.cancel()
         push.join()
 
-        assertEquals("begin, both writes, commit", listOf(64, 34, 34, 65), frames.map { adminFieldNumbers(it).single() })
+        assertEquals("commit", rig.radio.log.last())
+        assertEquals(listOf("get_config:1", "begin", "set_config:1", "get_config:2", "set_config:2", "commit"), rig.radio.log)
     }
 
     // endregion
 
-    // region result text ---------------------------------------------------------
+    // region the result text ---------------------------------------------------------------------------------------------------
 
     @Test fun `every outcome has text the operator can act on`() {
-        assertEquals("done", AdminWriteResult.Sent(2).describe("done"))
-        assertTrue(AdminWriteResult.NothingToChange.describe("done").startsWith("Nothing to change"))
-        assertEquals("No radio connected.", AdminWriteResult.Refused(RefusalReason.NO_RADIO).describe("done"))
-        assertTrue(AdminWriteResult.Refused(RefusalReason.UNREADABLE).describe("done").contains("Reconnect"))
-        assertTrue(AdminWriteResult.LinkFailed(0, 1).describe("done").contains("did not reach"))
-        assertTrue(AdminWriteResult.LinkFailed(1, 3).describe("done").contains("1 of 3"))
-        assertFalse(AdminWriteResult.Refused(RefusalReason.NOT_LOADED).reachedRadio)
+        assertEquals(
+            "Sent to the radio: role, position interval. The radio restarts to save them.",
+            AdminWriteResult.Sent(listOf(AdminSetting.ROLE, AdminSetting.POSITION_INTERVAL)).describe(),
+        )
+        assertTrue(AdminWriteResult.NothingToChange.describe().startsWith("Nothing to change"))
+        assertEquals("No radio connected.", AdminWriteResult.Refused(RefusalReason.NO_RADIO).describe())
+        assertTrue(AdminWriteResult.Refused(RefusalReason.UNREADABLE).describe().contains("Reconnect"))
+        assertTrue(AdminWriteResult.Refused(RefusalReason.NO_FREE_SLOT).describe().contains("Replace primary"))
+        assertFalse(AdminWriteResult.Refused(RefusalReason.NO_ANSWER).reachedRadio)
         assertFalse(AdminWriteResult.NothingToChange.reachedRadio)
-        assertFalse(AdminWriteResult.LinkFailed(0, 2).reachedRadio)
-        assertTrue(AdminWriteResult.LinkFailed(1, 2).reachedRadio)
-        assertTrue(AdminWriteResult.Sent(1).reachedRadio)
+        assertTrue(AdminWriteResult.Sent(listOf(AdminSetting.ROLE)).reachedRadio)
+    }
+
+    @Test fun `an incomplete write that never sent a setting says nothing was changed`() {
+        val result = AdminWriteResult.Incomplete(emptyList(), listOf(AdminSetting.ROLE), Cause.LINK_LOST, committed = false)
+        assertTrue(result.describe(), result.describe().contains("Nothing was changed"))
+        assertFalse(result.reachedRadio)
     }
 
     // endregion
+
+    /** The reports the screen would have received from [radio]: owner, device, position and lora config, primary channel. */
+    private fun reportsFrom(radio: FakeRadio): List<AdminResponse> = buildList {
+        AdminMessageParser.parse(ProtoMsg().bytes(4, radio.owner).build())?.let { add(it) }
+        for (variant in listOf(1, 2, 6)) {
+            AdminMessageParser.parse(ProtoMsg().msg(6, ProtoMsg().bytes(variant, radio.config.getValue(variant))).build())?.let { add(it) }
+        }
+        AdminMessageParser.parse(ProtoMsg().bytes(2, radio.channels.getValue(0)).build())?.let { add(it) }
+    }
 }

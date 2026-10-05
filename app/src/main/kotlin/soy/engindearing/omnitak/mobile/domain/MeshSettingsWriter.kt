@@ -6,75 +6,151 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import soy.engindearing.omnitak.mobile.data.AdminMessageParser
 import soy.engindearing.omnitak.mobile.data.AdminMessageSerializer
 import soy.engindearing.omnitak.mobile.data.AdminMessageSerializer.AdminWrite
+import soy.engindearing.omnitak.mobile.data.AdminSetting
 import soy.engindearing.omnitak.mobile.data.AdminWriteResult
+import soy.engindearing.omnitak.mobile.data.DeviceEdits
 import soy.engindearing.omnitak.mobile.data.MeshChannel
 import soy.engindearing.omnitak.mobile.data.MeshChannelPreset
-import soy.engindearing.omnitak.mobile.data.MeshDeviceConfig
 import soy.engindearing.omnitak.mobile.data.MeshRegion
 import soy.engindearing.omnitak.mobile.data.ProtoFields
 import soy.engindearing.omnitak.mobile.data.RadioSettingsCache
 import soy.engindearing.omnitak.mobile.data.RadioSettingsCache.Key
 import soy.engindearing.omnitak.mobile.data.RebroadcastMode
 import soy.engindearing.omnitak.mobile.data.RefusalReason
+import soy.engindearing.omnitak.mobile.data.SentLedger
 
 /**
- * Writes settings to the attached radio: read, change one field, write the
- * whole thing back.
+ * Writes settings to the attached radio, one setting at a time, each patched
+ * onto what the radio holds at that moment.
  *
  * The firmware replaces a whole config (or channel, or owner) with what a
- * write carries, so every write here starts from what the radio last
- * reported ([cache]) and changes only what was asked for
- * ([AdminMessageSerializer]). Without that entry in the cache nothing is sent:
- * a write built from scratch would reset every field it does not mention.
- * After a write goes out, what was sent is stored in the cache, so a second
- * edit builds on the first.
+ * write carries, so a write has to be the radio's own message with one field
+ * changed ([AdminMessageSerializer]). That message is not taken from memory:
+ * another client may have changed it since the app last looked (a rotated
+ * channel key would be put back by the next rename). Each step asks the radio
+ * for the entry it is about to patch, waits for the answer, and patches that.
+ * If no answer comes within [readTimeoutMs] nothing is changed and the result
+ * says so. A managed radio ignores every local admin message, reads included,
+ * so it ends here too.
  *
- * Transport-free on purpose: [send] hands a framed ToRadio to whatever link is
- * up and says whether it got out, and [destination] is the attached radio's
- * node number (null when there is no radio to address).
+ * A sequence runs inside `begin_edit_settings` / `commit_edit_settings`, a
+ * single write included, so a transaction left open by a dropped link is
+ * closed by the next write. The transaction is opened only when there is
+ * something to write, and once open it is always committed, even after a
+ * failure and even if the caller goes away.
  *
- * The frames of a batch go out [frameSpacingMs] apart. The firmware keeps four
- * inbound packets waiting for its router thread and drops the oldest when a
- * fifth arrives, and nothing tells the app. Sent back to back over TCP to a
+ * Steps run in the order given, the role first: when the role changes the
+ * firmware installs role defaults (broadcast intervals among them), and a
+ * position write patched onto bytes read before that would undo them. Because
+ * each entry is read just before it is patched, the one after the role is read
+ * after the defaults are in.
+ *
+ * What was sent is not recorded as what the radio holds. The written entries
+ * are dropped from [cache], and the radio's next report (the re-read, or the
+ * download after it restarts) says what it kept. The app remembers what it sent
+ * in [ledger], so it can tell the operator when the radio did not take a value.
+ *
+ * Frames go out [frameSpacingMs] apart. The firmware keeps four inbound
+ * packets waiting for its router thread and drops the oldest when a fifth
+ * arrives, and nothing tells the app. Sent back to back over TCP to a
  * simulated radio, a batch of six frames lost its device config write and a
  * batch of seven lost its position config write: those changes never took
  * effect, and no error was reported anywhere. The same batches with 100 ms
  * between frames applied every write.
  *
- * One write at a time: a write reads the cache, sends, and stores what it sent,
- * so two running together could both start from the same message and the
- * second would undo the first. Each public write waits its turn.
+ * One sequence at a time, reads of the whole config ([readAll]) included.
+ *
+ * Transport-free on purpose: [send] hands a framed ToRadio to whatever link is
+ * up and says whether it got out, [destination] is the attached radio's node
+ * number (null when there is no radio to address), and the radio's answers
+ * arrive in [cache] the way every report does.
  */
 class MeshSettingsWriter(
     private val cache: RadioSettingsCache,
     private val destination: () -> UInt?,
     private val send: suspend (ByteArray) -> Boolean,
+    private val ledger: SentLedger = SentLedger(),
     private val frameSpacingMs: Long = ADMIN_FRAME_SPACING_MS,
+    private val readTimeoutMs: Long = READ_TIMEOUT_MS,
 ) {
     private val turn = Mutex()
 
+    /** The settings the operator edited, role first. Only these are written, each patched onto a fresh read. */
+    suspend fun pushDeviceConfig(edits: DeviceEdits): AdminWriteResult {
+        if (edits.isEmpty) return AdminWriteResult.NothingToChange
+        return runSequence(edits.settings) {
+            edits.role?.let { role ->
+                patch(Key.Config(RadioSettingsCache.CONFIG_DEVICE), listOf(AdminSetting.ROLE), mapOf(AdminSetting.ROLE to role)) { dest, current ->
+                    AdminMessageSerializer.buildSetDeviceRole(dest, role, current)
+                } || return@runSequence
+            }
+            if (edits.longName != null || edits.shortName != null) {
+                val longName = edits.longName.orEmpty()
+                val shortName = edits.shortName.orEmpty()
+                patchOwner(longName, shortName, isLicensed = null) || return@runSequence
+            }
+            edits.positionBroadcastSecs?.let { secs ->
+                patch(
+                    Key.Config(RadioSettingsCache.CONFIG_POSITION), listOf(AdminSetting.POSITION_INTERVAL),
+                    mapOf(AdminSetting.POSITION_INTERVAL to secs.coerceIn(0, MAX_INTERVAL_SECS)),
+                ) { dest, current ->
+                    AdminMessageSerializer.buildSetPositionBroadcastSecs(dest, secs, current)
+                } || return@runSequence
+            }
+            edits.channelName?.let { name ->
+                patch(
+                    Key.Channel(0), listOf(AdminSetting.CHANNEL_NAME),
+                    mapOf(AdminSetting.CHANNEL_NAME to AdminMessageSerializer.clampChannelName(name)),
+                ) { dest, current ->
+                    AdminMessageSerializer.buildSetChannel0Name(dest, name, current)
+                } || return@runSequence
+            }
+            edits.channelPreset?.let { preset ->
+                patch(Key.Config(RadioSettingsCache.CONFIG_LORA), listOf(AdminSetting.MODEM_PRESET), mapOf(AdminSetting.MODEM_PRESET to preset)) { dest, current ->
+                    AdminMessageSerializer.buildSetLoraPreset(dest, preset, current)
+                } || return@runSequence
+            }
+        }
+    }
+
     /** `set_config { device { rebroadcast_mode } }`: the radio's other device settings are carried over. */
     suspend fun applyRebroadcastMode(mode: RebroadcastMode): AdminWriteResult =
-        writeOne("rebroadcast mode", Key.Config(RadioSettingsCache.CONFIG_DEVICE)) { dest, current ->
-            AdminMessageSerializer.buildSetRebroadcastMode(dest, mode, current)
+        runSequence(listOf(AdminSetting.REBROADCAST_MODE)) {
+            patch(
+                Key.Config(RadioSettingsCache.CONFIG_DEVICE), listOf(AdminSetting.REBROADCAST_MODE),
+                mapOf(AdminSetting.REBROADCAST_MODE to mode),
+            ) { dest, current ->
+                AdminMessageSerializer.buildSetRebroadcastMode(dest, mode, current)
+            }
         }
 
     /**
-     * `set_config { lora { use_preset, modem_preset, region } }`. A region of
-     * [MeshRegion.UNSET] leaves the radio's region as it is; every other LoRa
-     * setting (hop limit, transmit switch, ...) is carried over either way.
+     * `set_config { lora { use_preset, modem_preset, region } }`. A [region] of [MeshRegion.UNSET] and a null
+     * [preset] each leave that setting as the radio has it; every other LoRa setting (hop limit, transmit
+     * switch, ...) is carried over either way.
      */
     suspend fun applyLoRaConfig(
         region: MeshRegion,
-        preset: MeshChannelPreset,
+        preset: MeshChannelPreset?,
         usePreset: Boolean = true,
-    ): AdminWriteResult =
-        writeOne("LoRa config", Key.Config(RadioSettingsCache.CONFIG_LORA)) { dest, current ->
-            AdminMessageSerializer.buildSetLoRaConfig(dest, region, preset, current, usePreset)
+    ): AdminWriteResult {
+        val settings = listOfNotNull(
+            AdminSetting.REGION.takeIf { region != MeshRegion.UNSET },
+            AdminSetting.MODEM_PRESET.takeIf { preset != null },
+        )
+        if (settings.isEmpty()) return AdminWriteResult.NothingToChange
+        val expected = buildMap<AdminSetting, Any> {
+            if (region != MeshRegion.UNSET) put(AdminSetting.REGION, region)
+            if (preset != null) put(AdminSetting.MODEM_PRESET, preset)
         }
+        return runSequence(settings) {
+            patch(Key.Config(RadioSettingsCache.CONFIG_LORA), settings, expected) { dest, current ->
+                AdminMessageSerializer.buildSetLoRaConfig(dest, region, preset, current, usePreset)
+            }
+        }
+    }
 
     /**
      * `set_owner`: the long and short name. A blank name is left as the radio
@@ -82,197 +158,215 @@ class MeshSettingsWriter(
      * wants.
      */
     suspend fun applyOwner(longName: String, shortName: String, isLicensed: Boolean? = null): AdminWriteResult {
-        if (longName.isBlank() && shortName.isBlank() && isLicensed == null) return AdminWriteResult.NothingToChange
-        return writeOne("owner", Key.Owner) { dest, current ->
-            AdminMessageSerializer.buildSetOwner(dest, longName, shortName, current, isLicensed)
-        }
+        val settings = ownerSettings(longName, shortName)
+        if (settings.isEmpty() && isLicensed == null) return AdminWriteResult.NothingToChange
+        return runSequence(settings) { patchOwner(longName, shortName, isLicensed) }
     }
 
     /**
-     * #172: put an imported channel in slot [index]. A full replacement by
-     * design (new name, new key), so it needs nothing from the radio first.
+     * #172: import a channel. A full replacement by design (new name, new key), so the target slot is not read,
+     * but which slot to replace is: it goes into the first free secondary slot, found by reading slots 1 to 7
+     * from the radio. The primary is replaced only when [replacePrimary] says the operator asked for that.
      */
-    suspend fun applyChannel(channel: MeshChannel, index: Int = 0): AdminWriteResult = turn.withLock {
-        val dest = destination() ?: return@withLock refuse("channel import", RefusalReason.NO_RADIO)
-        val write = AdminMessageSerializer.buildSetChannelWrite(dest, channel, index)
-        if (!send(write.frame)) return@withLock AdminWriteResult.LinkFailed(sent = 0, total = 1)
-        // The slot now holds exactly what was sent: a rename right after the import must not start from the old key.
-        cache.put(Key.Channel(index.coerceIn(0, RadioSettingsCache.MAX_CHANNELS - 1)), write.message)
-        AdminWriteResult.Sent(1)
-    }
-
-    /**
-     * Push the Device Settings draft to the radio: write only what differs
-     * from the radio's current values, in one edit transaction, so the radio
-     * saves and reboots once.
-     *
-     * "Differs" is judged against the radio's own settings (decoded from
-     * [cache]), not against defaults. A setting the radio holds as something
-     * this app has no name for (a role or preset it does not list) is left
-     * alone, because the draft cannot hold that value and would overwrite it
-     * every time. If any setting that has to change cannot be written (the
-     * radio's settings are missing or unreadable) nothing at all is sent.
-     */
-    suspend fun pushDeviceConfig(draft: MeshDeviceConfig): AdminWriteResult = turn.withLock {
-        val dest = destination() ?: return@withLock refuse("push", RefusalReason.NO_RADIO)
-
-        val steps = listOf(
-            planOwner(dest, draft),
-            planRole(dest, draft),
-            planPositionInterval(dest, draft),
-            planChannelName(dest, draft),
-            planPreset(dest, draft),
-        )
-        steps.filterIsInstance<Step.Stop>().firstOrNull()?.let { return@withLock refuse("push", it.reason) }
-        val plans = steps.filterIsInstance<Step.Write>().map { it.plan }
-        if (plans.isEmpty()) {
-            Log.i(TAG, "push: the radio already has every setting in the draft, nothing sent")
-            return@withLock AdminWriteResult.NothingToChange
+    suspend fun applyChannel(channel: MeshChannel, replacePrimary: Boolean = false): AdminWriteResult =
+        runSequence(listOf(AdminSetting.CHANNEL)) {
+            val slot = if (replacePrimary) 0 else firstFreeSecondary() ?: return@runSequence
+            val write = AdminMessageSerializer.buildSetChannelWrite(dest, channel, slot)
+            emit(write, Key.Channel(slot), listOf(AdminSetting.CHANNEL), emptyMap())
         }
 
-        // Once begin is out the batch runs to its commit even if the caller goes away (a screen that is left
+    /**
+     * Ask the radio for its owner, device, position and LoRa config and all eight channels. The answers arrive
+     * in [cache] and as reports. Takes its turn like a write and spaces the requests the same way: twelve sent
+     * back to back got four answers from a simulated radio. Returns how many requests went out.
+     */
+    suspend fun readAll(): Int = turn.withLock {
+        val dest = destination() ?: return@withLock 0
+        val requests = listOf(
+            AdminMessageSerializer.buildGetOwnerRequest(dest),
+            AdminMessageSerializer.buildGetConfigRequest(dest, GET_CONFIG_DEVICE),
+            AdminMessageSerializer.buildGetConfigRequest(dest, GET_CONFIG_POSITION),
+            AdminMessageSerializer.buildGetConfigRequest(dest, GET_CONFIG_LORA),
+        ) + (0 until RadioSettingsCache.MAX_CHANNELS).map { AdminMessageSerializer.buildGetChannelRequest(dest, it) }
+        var sent = 0
+        for (request in requests) {
+            if (sent > 0 && frameSpacingMs > 0) delay(frameSpacingMs)
+            if (!send(request)) break
+            sent++
+        }
+        sent
+    }
+
+    // region One sequence ---------------------------------------------------------
+
+    private suspend fun runSequence(
+        all: List<AdminSetting>,
+        body: suspend Run.() -> Unit,
+    ): AdminWriteResult = turn.withLock {
+        // Once the sequence starts it runs to its commit even if the caller goes away (a screen that is left
         // mid-push): a transaction left open would swallow the next edit from any client.
         withContext(NonCancellable) {
-            if (!send(AdminMessageSerializer.buildBeginEditSettings(dest))) {
-                return@withContext AdminWriteResult.LinkFailed(sent = 0, total = plans.size)
+            val dest = destination()
+            if (dest == null) {
+                Log.w(TAG, "write refused, nothing sent: no radio to address")
+                return@withContext AdminWriteResult.Refused(RefusalReason.NO_RADIO)
             }
-            var sent = 0
-            for (plan in plans) {
-                pace()
-                // Stop at the first write that does not get out, but still close the transaction below.
-                if (!send(plan.write.frame)) break
-                cache.put(plan.key, plan.write.message)
-                sent++
-            }
-            // The radio holds its saves, and its reboot, until this arrives. Send it even after a failed write.
-            pace()
-            val committed = send(AdminMessageSerializer.buildCommitEditSettings(dest))
-            Log.i(TAG, "push: ${plans.map { it.setting }} -> sent $sent of ${plans.size}, committed=$committed")
-            if (sent == plans.size && committed) {
-                AdminWriteResult.Sent(plans.size)
-            } else {
-                AdminWriteResult.LinkFailed(sent = sent, total = plans.size)
-            }
+            val run = Run(dest, all)
+            run.body()
+            run.finish()
         }
     }
 
-    /** Leave the radio time to take the frame before this one. */
-    private suspend fun pace() {
-        if (frameSpacingMs > 0) delay(frameSpacingMs)
-    }
+    private enum class Stop { LINK, NO_ANSWER, UNREADABLE, NO_FREE_SLOT }
 
-    // region One write ------------------------------------------------------
+    private inner class Run(val dest: UInt, private val all: List<AdminSetting>) {
+        private var framesSent = 0
+        private var begun = false
+        private var stop: Stop? = null
+        private val written = ArrayList<AdminSetting>()
+        private val alreadySet = ArrayList<AdminSetting>()
 
-    private suspend fun writeOne(
-        setting: String,
-        key: Key,
-        build: (dest: UInt, current: ByteArray) -> AdminWrite?,
-    ): AdminWriteResult = turn.withLock {
-        val dest = destination() ?: return@withLock refuse(setting, RefusalReason.NO_RADIO)
-        val current = cache.get(key) ?: return@withLock refuse(setting, RefusalReason.NOT_LOADED)
-        val write = build(dest, current) ?: return@withLock refuse(setting, RefusalReason.UNREADABLE)
-        if (!send(write.frame)) return@withLock AdminWriteResult.LinkFailed(sent = 0, total = 1)
-        cache.put(key, write.message)
-        AdminWriteResult.Sent(1)
-    }
-
-    private fun refuse(setting: String, reason: RefusalReason): AdminWriteResult {
-        Log.w(TAG, "write refused, nothing sent: $setting ($reason)")
-        return AdminWriteResult.Refused(reason)
-    }
-
-    // endregion
-
-    // region Planning the push ----------------------------------------------
-
-    private class Plan(val setting: String, val key: Key, val write: AdminWrite)
-
-    private sealed interface Step {
-        /** The radio already has this one. */
-        data object Skip : Step
-
-        class Write(val plan: Plan) : Step
-
-        /** This one has to change and cannot be written, so the push as a whole is refused. */
-        class Stop(val reason: RefusalReason) : Step
-    }
-
-    private fun planOwner(dest: UInt, draft: MeshDeviceConfig): Step {
-        val longName = AdminMessageSerializer.clampUtf8(draft.longName, AdminMessageSerializer.MAX_LONG_NAME_BYTES)
-        val shortName = AdminMessageSerializer.clampUtf8(draft.shortName, AdminMessageSerializer.MAX_SHORT_NAME_BYTES)
-        // A blank name means "leave it", so a draft with neither has nothing to say.
-        if (longName.isBlank() && shortName.isBlank()) return Step.Skip
-        val current = cache.get(Key.Owner) ?: return Step.Stop(RefusalReason.NOT_LOADED)
-        val fields = ProtoFields.parse(current) ?: return Step.Stop(RefusalReason.UNREADABLE)
-        val haveLong = ProtoFields.lastString(fields, USER_LONG_NAME) ?: ""
-        val haveShort = ProtoFields.lastString(fields, USER_SHORT_NAME) ?: ""
-        val changed = (longName.isNotBlank() && longName != haveLong) || (shortName.isNotBlank() && shortName != haveShort)
-        if (!changed) return Step.Skip
-        val write = AdminMessageSerializer.buildSetOwner(dest, draft.longName, draft.shortName, current)
-            ?: return Step.Stop(RefusalReason.UNREADABLE)
-        return Step.Write(Plan("owner", Key.Owner, write))
-    }
-
-    private fun planRole(dest: UInt, draft: MeshDeviceConfig): Step {
-        val key = Key.Config(RadioSettingsCache.CONFIG_DEVICE)
-        val current = cache.get(key) ?: return Step.Stop(RefusalReason.NOT_LOADED)
-        val fields = ProtoFields.parse(current) ?: return Step.Stop(RefusalReason.UNREADABLE)
-        val haveOrdinal = ProtoFields.lastVarint(fields, DEVICE_ROLE) ?: 0uL
-        val have = ordinalOrNull(haveOrdinal)?.let { AdminMessageParser.roleFromOrdinal(it) }
-        if (have == null) {
-            Log.i(TAG, "push: the radio's role ($haveOrdinal) is not one this app lists, left as it is")
-            return Step.Skip
+        /** Read [key] from the radio, patch it with [build], and write the result unless the radio already holds it. False when the sequence must stop. */
+        suspend fun patch(
+            key: Key,
+            settings: List<AdminSetting>,
+            expected: Map<AdminSetting, Any>,
+            build: (dest: UInt, current: ByteArray) -> AdminWrite?,
+        ): Boolean {
+            val current = read(key) ?: return false
+            val write = build(dest, current)
+            if (write == null) {
+                stop = Stop.UNREADABLE
+                return false
+            }
+            if (write.message.contentEquals(current)) {
+                // Someone else already set it: nothing to send for this one.
+                alreadySet += settings
+                return true
+            }
+            return emit(write, key, settings, expected)
         }
-        if (have == draft.role) return Step.Skip
-        val write = AdminMessageSerializer.buildSetDeviceRole(dest, draft.role, current)
-            ?: return Step.Stop(RefusalReason.UNREADABLE)
-        return Step.Write(Plan("role", key, write))
-    }
 
-    private fun planPositionInterval(dest: UInt, draft: MeshDeviceConfig): Step {
-        val key = Key.Config(RadioSettingsCache.CONFIG_POSITION)
-        val current = cache.get(key) ?: return Step.Stop(RefusalReason.NOT_LOADED)
-        val fields = ProtoFields.parse(current) ?: return Step.Stop(RefusalReason.UNREADABLE)
-        val have = ProtoFields.lastVarint(fields, POSITION_BROADCAST_SECS) ?: 0uL
-        val want = draft.positionBroadcastSecs.coerceIn(0, 24 * 60 * 60).toULong()
-        if (have == want) return Step.Skip
-        val write = AdminMessageSerializer.buildSetPositionBroadcastSecs(dest, draft.positionBroadcastSecs, current)
-            ?: return Step.Stop(RefusalReason.UNREADABLE)
-        return Step.Write(Plan("position interval", key, write))
-    }
-
-    private fun planChannelName(dest: UInt, draft: MeshDeviceConfig): Step {
-        val key = Key.Channel(0)
-        val current = cache.get(key) ?: return Step.Stop(RefusalReason.NOT_LOADED)
-        val fields = ProtoFields.parse(current) ?: return Step.Stop(RefusalReason.UNREADABLE)
-        val settings = ProtoFields.lastBytes(fields, CHANNEL_SETTINGS)
-            ?.let { ProtoFields.parse(it) ?: return Step.Stop(RefusalReason.UNREADABLE) }
-            ?: emptyList()
-        val have = ProtoFields.lastString(settings, SETTINGS_NAME) ?: ""
-        val want = AdminMessageSerializer.clampUtf8(draft.channelName, AdminMessageSerializer.MAX_CHANNEL_NAME_BYTES)
-        if (have == want) return Step.Skip
-        val write = AdminMessageSerializer.buildSetChannel0Name(dest, draft.channelName, current)
-            ?: return Step.Stop(RefusalReason.UNREADABLE)
-        return Step.Write(Plan("channel 0 name", key, write))
-    }
-
-    private fun planPreset(dest: UInt, draft: MeshDeviceConfig): Step {
-        val key = Key.Config(RadioSettingsCache.CONFIG_LORA)
-        val current = cache.get(key) ?: return Step.Stop(RefusalReason.NOT_LOADED)
-        val fields = ProtoFields.parse(current) ?: return Step.Stop(RefusalReason.UNREADABLE)
-        val haveOrdinal = ProtoFields.lastVarint(fields, LORA_MODEM_PRESET) ?: 0uL
-        val have = ordinalOrNull(haveOrdinal)?.let { AdminMessageParser.presetFromOrdinal(it) }
-        if (have == null) {
-            Log.i(TAG, "push: the radio's modem preset ($haveOrdinal) is not one this app lists, left as it is")
-            return Step.Skip
+        suspend fun patchOwner(longName: String, shortName: String, isLicensed: Boolean?): Boolean {
+            val settings = ownerSettings(longName, shortName)
+            val expected = buildMap<AdminSetting, Any> {
+                if (longName.isNotBlank()) put(AdminSetting.LONG_NAME, AdminMessageSerializer.clampLongName(longName))
+                if (shortName.isNotBlank()) put(AdminSetting.SHORT_NAME, AdminMessageSerializer.clampShortName(shortName))
+            }
+            return patch(Key.Owner, settings, expected) { d, current ->
+                AdminMessageSerializer.buildSetOwner(d, longName, shortName, current, isLicensed)
+            }
         }
-        if (have == draft.channelPreset) return Step.Skip
-        val write = AdminMessageSerializer.buildSetLoraPreset(dest, draft.channelPreset, current)
-            ?: return Step.Stop(RefusalReason.UNREADABLE)
-        return Step.Write(Plan("modem preset", key, write))
+
+        /** Send one write inside the transaction (opened now if it is not open yet). */
+        suspend fun emit(write: AdminWrite, key: Key, settings: List<AdminSetting>, expected: Map<AdminSetting, Any>): Boolean {
+            if (!begun) {
+                if (!frame(AdminMessageSerializer.buildBeginEditSettings(dest))) {
+                    stop = Stop.LINK
+                    return false
+                }
+                begun = true
+            }
+            if (!frame(write.frame)) {
+                stop = Stop.LINK
+                return false
+            }
+            // Not stored as what the radio holds: the next report says what it kept.
+            cache.remove(key)
+            written += settings
+            expected.forEach { (setting, value) -> ledger.expect(dest, setting, value) }
+            return true
+        }
+
+        /** The first channel slot from 1 to 7 whose role is DISABLED, read from the radio. Null (with the reason recorded) when there is none. */
+        suspend fun firstFreeSecondary(): Int? {
+            for (slot in 1 until RadioSettingsCache.MAX_CHANNELS) {
+                val channel = read(Key.Channel(slot)) ?: return null
+                val fields = ProtoFields.parse(channel)
+                if (fields == null) {
+                    stop = Stop.UNREADABLE
+                    return null
+                }
+                // Channel.role is field 3, and 0 (DISABLED) is not on the wire at all.
+                if ((ProtoFields.lastVarint(fields, CHANNEL_ROLE) ?: 0uL) == 0uL) return slot
+            }
+            stop = Stop.NO_FREE_SLOT
+            return null
+        }
+
+        /** Ask the radio for [key] and wait for its answer: the entry is dropped first, so only a newer one counts. */
+        private suspend fun read(key: Key): ByteArray? {
+            cache.remove(key)
+            val request = when (key) {
+                // Config variants are numbered from 1 in the oneof and from 0 in ConfigType.
+                is Key.Config -> AdminMessageSerializer.buildGetConfigRequest(dest, key.variant - 1)
+                is Key.Channel -> AdminMessageSerializer.buildGetChannelRequest(dest, key.index)
+                Key.Owner -> AdminMessageSerializer.buildGetOwnerRequest(dest)
+            }
+            if (!frame(request)) {
+                stop = Stop.LINK
+                return null
+            }
+            var waited = 0L
+            while (true) {
+                cache.get(key)?.let { return it }
+                if (waited >= readTimeoutMs) break
+                delay(POLL_MS)
+                waited += POLL_MS
+            }
+            stop = Stop.NO_ANSWER
+            return null
+        }
+
+        /** Send one frame, a frame gap after the one before. */
+        private suspend fun frame(bytes: ByteArray): Boolean {
+            if (framesSent > 0 && frameSpacingMs > 0) delay(frameSpacingMs)
+            framesSent++
+            return send(bytes)
+        }
+
+        suspend fun finish(): AdminWriteResult {
+            // Once the radio was told to expect changes, tell it to save them, whatever happened since.
+            val committed = begun && frame(AdminMessageSerializer.buildCommitEditSettings(dest))
+            val notWritten = all.filter { it !in written && it !in alreadySet }
+            val reason = stop
+            Log.i(TAG, "sequence: written=$written alreadySet=$alreadySet notWritten=$notWritten stop=$reason committed=$committed")
+            if (reason == null) {
+                return when {
+                    !begun -> AdminWriteResult.NothingToChange
+                    committed -> AdminWriteResult.Sent(written.toList())
+                    else -> AdminWriteResult.Incomplete(
+                        written.toList(), emptyList(), AdminWriteResult.Incomplete.Cause.LINK_LOST, committed = false,
+                    )
+                }
+            }
+            if (!begun) {
+                Log.w(TAG, "write refused, nothing sent: $reason")
+                return AdminWriteResult.Refused(
+                    when (reason) {
+                        Stop.LINK -> RefusalReason.NO_RADIO
+                        Stop.NO_ANSWER -> RefusalReason.NO_ANSWER
+                        Stop.UNREADABLE -> RefusalReason.UNREADABLE
+                        Stop.NO_FREE_SLOT -> RefusalReason.NO_FREE_SLOT
+                    },
+                )
+            }
+            return AdminWriteResult.Incomplete(
+                written.toList(), notWritten,
+                when (reason) {
+                    Stop.LINK -> AdminWriteResult.Incomplete.Cause.LINK_LOST
+                    Stop.NO_ANSWER, Stop.NO_FREE_SLOT -> AdminWriteResult.Incomplete.Cause.NO_ANSWER
+                    Stop.UNREADABLE -> AdminWriteResult.Incomplete.Cause.UNREADABLE
+                },
+                committed,
+            )
+        }
     }
 
-    private fun ordinalOrNull(value: ULong): Int? = if (value <= Int.MAX_VALUE.toULong()) value.toInt() else null
+    private fun ownerSettings(longName: String, shortName: String): List<AdminSetting> = listOfNotNull(
+        AdminSetting.LONG_NAME.takeIf { longName.isNotBlank() },
+        AdminSetting.SHORT_NAME.takeIf { shortName.isNotBlank() },
+    )
 
     // endregion
 
@@ -280,19 +374,24 @@ class MeshSettingsWriter(
         private const val TAG = "MeshSettings"
 
         /**
-         * Gap between admin frames sent in a row, for write batches and for read requests. Measured on a simulated
-         * radio: twelve read requests with no gap got four answers, with 20 ms between them eleven, with 50 ms or
-         * 100 ms all twelve. Write batches lost writes with no gap and lost none with 100 ms (see the class doc).
+         * Gap between admin frames sent in a row, for write sequences and for read requests. Measured on a
+         * simulated radio: twelve read requests with no gap got four answers, with 20 ms between them eleven,
+         * with 50 ms or 100 ms all twelve. Write batches lost writes with no gap and lost none with 100 ms
+         * (see the class doc).
          */
         const val ADMIN_FRAME_SPACING_MS = 100L
 
-        // Field numbers read back from the radio's own messages (config.proto, channel.proto, mesh.proto).
-        private const val DEVICE_ROLE = 1
-        private const val POSITION_BROADCAST_SECS = 1
-        private const val LORA_MODEM_PRESET = 2
-        private const val CHANNEL_SETTINGS = 2
-        private const val SETTINGS_NAME = 3
-        private const val USER_LONG_NAME = 2
-        private const val USER_SHORT_NAME = 3
+        /** How long a read waits for the radio's answer before the write is refused. */
+        const val READ_TIMEOUT_MS = 3_000L
+
+        private const val POLL_MS = 20L
+        private const val MAX_INTERVAL_SECS = 24 * 60 * 60
+
+        // ConfigType (admin.proto) numbers for get_config_request.
+        private const val GET_CONFIG_DEVICE = 0
+        private const val GET_CONFIG_POSITION = 1
+        private const val GET_CONFIG_LORA = 5
+
+        private const val CHANNEL_ROLE = 3 // Channel.role (channel.proto)
     }
 }

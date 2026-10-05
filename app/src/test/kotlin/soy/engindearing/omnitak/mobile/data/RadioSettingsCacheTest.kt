@@ -46,7 +46,7 @@ class RadioSettingsCacheTest {
 
     // region the config download ---------------------------------------------
 
-    @Test fun `every config variant the radio sends is kept, including the ones the screen cannot decode`() {
+    @Test fun `only the config variants the app patches are kept`() {
         val cache = RadioSettingsCache()
         val variants = mapOf(
             1 to deviceConfig(),
@@ -62,10 +62,43 @@ class RadioSettingsCacheTest {
         )
         for ((variant, message) in variants) feed(cache, configFrame(variant, message))
 
-        for ((variant, message) in variants) {
-            assertSame("config variant $variant", message, cache.config(variant))
+        assertSame("device config", variants.getValue(1), cache.config(1))
+        assertSame("position config", variants.getValue(2), cache.config(2))
+        assertSame("lora config", variants.getValue(6), cache.config(6))
+        for (dropped in listOf(3, 4, 5, 7, 8, 9, 10)) {
+            assertNull("config variant $dropped is not something the app patches", cache.config(dropped))
         }
-        assertEquals(10, cache.size)
+        assertEquals(3, cache.size)
+    }
+
+    @Test fun `a security or network config is not retained, however it arrives`() {
+        // The security config holds the radio's private key and the network config its Wi-Fi password.
+        // Nothing in the app writes either, so neither may sit in memory.
+        val cache = RadioSettingsCache()
+        val security = ProtoMsg().bytes(1, keyBytes(0x20)).bytes(2, keyBytes(0x30)).build() // made-up key bytes
+        val network = ProtoMsg().string(3, "ssid-example").string(4, "password-example").build()
+
+        // In the config download.
+        feed(cache, configFrame(8, security))
+        feed(cache, configFrame(4, network))
+        assertEquals("nothing was stored from the download frames", 0, cache.size)
+
+        // In the answer to a get_config_request.
+        feed(cache, adminResponseFrame(from = me, to = me, adminField = 6, message = ProtoMsg().bytes(8, security).build()))
+        feed(cache, adminResponseFrame(from = me, to = me, adminField = 6, message = ProtoMsg().bytes(4, network).build()))
+        assertEquals("nothing was stored from the admin responses", 0, cache.size)
+
+        // And not by being handed over directly.
+        assertFalse(cache.put(RadioSettingsCache.Key.Config(8), security))
+        assertFalse(cache.put(RadioSettingsCache.Key.Config(4), network))
+        assertNull(cache.config(8))
+        assertNull(cache.config(4))
+        assertEquals(0, cache.size)
+
+        // A frame that carries both a kept and a dropped variant keeps only the kept one.
+        feed(cache, configFrame(6, loraConfig()))
+        feed(cache, configFrame(8, security))
+        assertEquals("RadioSettingsCache(configs=[6], channels=[], owner=false)", cache.toString())
     }
 
     @Test fun `an empty config variant counts as present, not as missing`() {
@@ -215,10 +248,10 @@ class RadioSettingsCacheTest {
 
     @Test fun `toString shows which entries there are and never their contents`() {
         val cache = RadioSettingsCache()
-        feed(cache, configFrame(8, ProtoMsg().bytes(1, keyBytes(0x55)).build()))
+        feed(cache, configFrame(6, loraConfig()))
         feed(cache, channelFrame(channelMessage(name = "Secret Name")))
         val text = cache.toString()
-        assertEquals("RadioSettingsCache(configs=[8], channels=[0], owner=false)", text)
+        assertEquals("RadioSettingsCache(configs=[6], channels=[0], owner=false)", text)
         assertFalse(text.contains("Secret"))
     }
 
