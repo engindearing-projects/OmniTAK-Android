@@ -13,6 +13,7 @@ import soy.engindearing.omnitak.mobile.data.AdminTestFrames.Field
 import soy.engindearing.omnitak.mobile.data.AdminWriteResult
 import soy.engindearing.omnitak.mobile.data.DeviceEdits
 import soy.engindearing.omnitak.mobile.data.DeviceSettingsState
+import soy.engindearing.omnitak.mobile.data.InterruptedWrite
 import soy.engindearing.omnitak.mobile.data.MeshChannel
 import soy.engindearing.omnitak.mobile.data.MeshChannelPreset
 import soy.engindearing.omnitak.mobile.data.MeshDeviceConfig
@@ -80,6 +81,11 @@ import java.util.Random
  * when the radio restarts, the app says so before the push and after the restart (one manager across the
  * restart, as in the app), and with a private key on the primary channel, or a name that is not the preset's, or no
  * position precision, the radio keeps the interval and the app says nothing.
+ *
+ * A third test, [an_interrupted_sequence_is_closed_or_given_up_on_at_the_next_link_up], drops a sequence's commit
+ * and runs what the app does at the next link-up on a radio that does not count its restarts (the simulator's
+ * my_info has no reboot_count): while the radio still holds the transaction in memory the app finds its change in
+ * the download and commits, and after a restart that lost it the app sends nothing and says it was not saved.
  *
  * Never prints or logs key bytes: channel keys are only ever compared by length.
  */
@@ -929,6 +935,118 @@ class SimRadioSettingsIT {
                 readsAfterRestore = diff(asFound, view(last.cache))
                 log("restored: ${readsAfterRestore!!.ifEmpty { "identical to what was found" }}")
                 log("restored: ${held(view(last.cache))}")
+                last.close()
+            }.onFailure { log("RESTORE FAILED, the radio was left changed: ${it.message}") }
+        }
+
+        assertEquals(
+            "after the test puts its changes back, every watched field reads as it did when the test started",
+            emptyMap<String, Pair<Any?, Any?>>(),
+            readsAfterRestore,
+        )
+    }
+
+    // endregion
+
+    // region an interrupted sequence ---------------------------------------------------------------------------------
+
+    private fun isCommit(frame: ByteArray): Boolean = AdminTestFrames.decode(frame).admin.first().number == 65
+
+    /**
+     * An owner rename that goes out as the app sends it, except that the commit never reaches the radio: the link
+     * "drops" at the last frame. The radio is left with the new name in memory and the transaction open.
+     */
+    private fun renameWithoutCommit(s: Session, name: String): AdminWriteResult {
+        s.mgr.adminSendOverride = { frame -> if (isCommit(frame)) false else s.mgr.tcpClient.sendBytes(frame) }
+        try {
+            return runBlocking { s.mgr.pushDeviceConfig(DeviceEdits(longName = name)) }
+        } finally {
+            s.mgr.adminSendOverride = null
+        }
+    }
+
+    private fun awaitOwnerName(s: Session, name: String) {
+        val deadline = System.currentTimeMillis() + 15_000
+        while (System.currentTimeMillis() < deadline) {
+            if (app.state.radio?.longName == name) return
+            runBlocking { s.mgr.requestDeviceConfig() }
+            Thread.sleep(1_500)
+        }
+        throw AssertionError("the radio does not report the owner name '$name', it says '${app.state.radio?.longName}'")
+    }
+
+    /**
+     * The transaction a lost link leaves open, against the real firmware. The simulator does not count its restarts
+     * (my_info carries no reboot_count), so the app decides from the download, with the same manager across the
+     * reconnects as in the app:
+     *
+     *  1. rename without a commit: the radio holds the name in memory, unsaved. The manager connects again, finds the
+     *     name in the download, commits, says the change was saved, and the name survives the restart that follows;
+     *  2. rename without a commit again, then restart the radio without a commit (an admin reboot): the name is
+     *     lost. The manager connects again, finds the old name, sends nothing (a stray commit would restart the radio
+     *     a second time a few seconds later, which the test watches for) and says the change was not saved.
+     *
+     * Then the owner is put back as found.
+     */
+    @Test fun an_interrupted_sequence_is_closed_or_given_up_on_at_the_next_link_up() {
+        assumeTrue("MESHSIM_HOST is not set, so the simulated-radio test is skipped", host != null)
+
+        var s = connect()
+        val found = AsFound.of(s.cache)
+        val asFound = view(s.cache)
+        assumeTrue("the peer is not a simulator (hardware model ${asFound["owner.hw_model"]}), nothing was written", asFound["owner.hw_model"] == PORTDUINO)
+        val foundName = asFound["owner.long_name"] as String
+        log("as found: owner '$foundName'")
+        var readsAfterRestore: Map<String, Pair<Any?, Any?>>? = null
+
+        try {
+            // 1. the change is still in the radio's memory
+            val first = renameWithoutCommit(s, "Txn App One")
+            log("1. the push said: ${first.describe()}")
+            assertTrue(first.toString(), first is AdminWriteResult.Incomplete && !first.committed)
+            awaitOwnerName(s, "Txn App One")
+            log("1. the radio reports the new name, unsaved, with the transaction open")
+            s.close()
+            assertTrue(waitUntil(10_000) { app.state.radio == null })
+            s.reconnect()
+            assertTrue("the manager says what it did", waitUntil(20_000) { s.mgr.lastPushResult.value == InterruptedWrite.SAVED })
+            log("1. the app says: ${s.mgr.lastPushResult.value}")
+            s.awaitRebootAndForget() // the commit made the radio save and restart
+            s.reconnect()
+            val afterOne = view(s.cache)
+            log("1. after the commit and the restart: owner '${afterOne["owner.long_name"]}'")
+            assertEquals("saved", "Txn App One", afterOne["owner.long_name"])
+            s.close()
+
+            // 2. the radio restarted without a commit: the change is gone
+            s = connect()
+            val second = renameWithoutCommit(s, "Txn App Two")
+            assertTrue(second.toString(), second is AdminWriteResult.Incomplete && !second.committed)
+            awaitOwnerName(s, "Txn App Two")
+            log("2. the radio reports the second name, unsaved")
+            // The radio is restarted by an admin reboot, which does not commit: the transaction and the name go with it.
+            send(s, listOf(adminFrame(s.node, ProtoMsg().varint(97, 2).build())))
+            s.awaitRebootAndForget()
+            s.reconnect()
+            val afterTwo = view(s.cache)
+            log("2. after the restart: owner '${afterTwo["owner.long_name"]}'")
+            assertEquals("the unsaved name is gone with the restart", "Txn App One", afterTwo["owner.long_name"])
+            assertTrue("the manager says what it found", waitUntil(20_000) { s.mgr.lastPushResult.value == InterruptedWrite.NOT_SAVED })
+            log("2. the app says: ${s.mgr.lastPushResult.value}")
+            // A commit sent to this radio would save its config and restart it again about seven seconds later.
+            Thread.sleep(15_000)
+            assertTrue("nothing was sent: the radio was not restarted a second time", s.mgr.activeConnectionState.value is ConnectionState.Connected)
+            log("2. fifteen seconds later the link is still up: no stray commit")
+        } finally {
+            runCatching {
+                s.close()
+                val back = connect()
+                restore(back, found)
+                back.awaitRebootAndForget()
+                back.close()
+                val last = connect()
+                readsAfterRestore = diff(asFound, view(last.cache))
+                log("restored: ${readsAfterRestore!!.ifEmpty { "identical to what was found" }}")
                 last.close()
             }.onFailure { log("RESTORE FAILED, the radio was left changed: ${it.message}") }
         }
