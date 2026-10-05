@@ -105,15 +105,16 @@ class MeshtasticProtoParserTest {
             writeTagVarint(this, field = 3, value = 100UL)
         }.toByteArray()
 
-        // NodeInfo: num=0xDEADBEEF, user=user, position=position, snr=12.5,
-        // last_heard=1700000000, hops_away=2.
+        // NodeInfo, official mesh.proto numbers: num=1, user=2, position=3,
+        // snr=4 (float), last_heard=5 (fixed32), hops_away=9. Values: num=0xDEADBEEF,
+        // snr=12.5, last_heard=1700000000, hops_away=2.
         val nodeInfo = ByteArrayOutputStream().apply {
             writeTagVarint(this, field = 1, value = 0xDEADBEEFUL)
-            writeTagBytes(this, field = 4, value = user)
-            writeTagBytes(this, field = 5, value = position)
-            writeTagFixed32Float(this, field = 7, value = 12.5f)
-            writeTagFixed32(this, field = 9, value = 1_700_000_000)
-            writeTagVarint(this, field = 11, value = 2UL)
+            writeTagBytes(this, field = 2, value = user)
+            writeTagBytes(this, field = 3, value = position)
+            writeTagFixed32Float(this, field = 4, value = 12.5f)
+            writeTagFixed32(this, field = 5, value = 1_700_000_000)
+            writeTagVarint(this, field = 9, value = 2UL)
         }.toByteArray()
 
         // FromRadio.node_info is canonical field 4 in mesh.proto.
@@ -150,7 +151,7 @@ class MeshtasticProtoParserTest {
             }.toByteArray()
             val nodeInfo = ByteArrayOutputStream().apply {
                 writeTagVarint(this, field = 1, value = 0x1234UL)
-                writeTagBytes(this, field = 4, value = user)
+                writeTagBytes(this, field = 2, value = user) // NodeInfo.user
             }.toByteArray()
             val fromRadio = ByteArrayOutputStream().apply {
                 writeTagBytes(this, field = 4, value = nodeInfo)

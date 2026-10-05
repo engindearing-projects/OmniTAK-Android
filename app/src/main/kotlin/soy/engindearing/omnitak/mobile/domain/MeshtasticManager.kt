@@ -365,7 +365,7 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
         _activeTransport.value = null
     }
 
-    private fun dispatchFrame(frame: ByteArray) {
+    internal fun dispatchFrame(frame: ByteArray) {
         bytesRx += frame.size
         when (val parsed = MeshtasticProtoParser.parseFromRadio(frame)) {
             is FromRadioFrame.NodeInfoFrame -> upsertNode(parsed.node)
@@ -401,6 +401,7 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
             snr = node.snr ?: existing.snr,
             hopDistance = node.hopDistance ?: existing.hopDistance,
             batteryLevel = node.batteryLevel ?: existing.batteryLevel,
+            lastHeardEpoch = node.lastHeardEpoch ?: existing.lastHeardEpoch,
             shortName = node.shortName.ifBlank { existing.shortName },
             longName = node.longName.ifBlank { existing.longName },
             role = node.role ?: existing.role,
@@ -418,8 +419,12 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
                 val pos = MeshtasticProtoParser.parsePosition(packet.payload) ?: return
                 val nodeId = packet.from.toLong() and 0xFFFFFFFFL
                 val existing = _nodes.value[nodeId]
+                // A packet that just came off the radio means the node was heard
+                // now. The radio's rx_time is preferred, but it is absent when the
+                // radio has no clock, so fall back to the phone's.
+                val heardAt = packet.rxTime ?: (System.currentTimeMillis() / 1000)
                 if (existing != null) {
-                    upsertNode(existing.copy(position = pos, lastHeardEpoch = packet.rxTime ?: existing.lastHeardEpoch))
+                    upsertNode(existing.copy(position = pos, lastHeardEpoch = heardAt))
                 } else {
                     upsertNode(
                         MeshNode(
@@ -427,7 +432,7 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
                             shortName = "%04X".format((nodeId and 0xFFFFL).toInt()),
                             longName = "Node %08X".format(nodeId.toInt()),
                             position = pos,
-                            lastHeardEpoch = packet.rxTime ?: (System.currentTimeMillis() / 1000),
+                            lastHeardEpoch = heardAt,
                             snr = packet.rxSnr?.toDouble(),
                         ),
                     )

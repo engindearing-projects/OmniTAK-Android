@@ -16,15 +16,25 @@ data class MeshNode(
     val shortName: String,
     val longName: String,
     val position: MeshPosition? = null,
-    val lastHeardEpoch: Long,
+    /** When the radio last heard this node, in epoch seconds, or null when
+     *  that is not known (`NodeInfo.last_heard` missing or 0). Null is a real
+     *  state: it must never be filled in with "now", and the UI shows a dash. */
+    val lastHeardEpoch: Long?,
     val snr: Double? = null,
     val hopDistance: Int? = null,
+    /** `DeviceMetrics.battery_level`: 0..100, or above 100 (101 in practice)
+     *  when the node is on external power. See [batteryLabel]. */
     val batteryLevel: Int? = null,
     /** Meshtastic device role (`User.role`, config.proto enum value), or
      *  null when the NodeInfo didn't carry one. */
     val role: Int? = null,
 ) {
     val idHex: String get() = "%08x".format(id.toInt())
+
+    /** Battery text for the UI: "73%", "powered" for the above-100 external
+     *  power value, or null when the level is unknown. */
+    val batteryLabel: String?
+        get() = batteryLevel?.let { if (it > MAX_BATTERY_PERCENT) "powered" else "$it%" }
 
     /** Role `TAK` — a radio paired to a phone running a TAK client. Its
      *  position duplicates the operator's own PLI, so the map can hide it
@@ -35,6 +45,10 @@ data class MeshNode(
         /** meshtastic config.proto Config.DeviceConfig.Role values we care about. */
         const val ROLE_TAK = 7
         const val ROLE_TAK_TRACKER = 10
+
+        /** Highest real battery percentage; telemetry.proto reports more than
+         *  this when the node is on external power. */
+        const val MAX_BATTERY_PERCENT = 100
     }
 }
 

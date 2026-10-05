@@ -152,6 +152,24 @@ object MeshtasticProtoParser {
         return nodeNum
     }
 
+    /**
+     * NodeInfo, using the field numbers and wire types from mesh.proto. Fields
+     * 1 to 6 are unchanged in every tagged release since v2.0.12; 7 to 11 were
+     * added later and never renumbered:
+     *
+     *    1 num (uint32)           2 user (User)             3 position (Position)
+     *    4 snr (float)            5 last_heard (fixed32)    6 device_metrics (DeviceMetrics)
+     *    7 channel (uint32)       8 via_mqtt (bool)         9 hops_away (optional uint32)
+     *   10 is_favorite (bool)    11 is_ignored (bool)
+     *
+     * Fields we do not use (7, 8, 10, 11 and anything newer) are skipped by
+     * wire type. 1.x firmware used a different layout (snr = 7, last_heard = 4,
+     * before 2022-03-20). It is not decoded: field 4 means a different thing
+     * there, and this app talks to 2.x firmware.
+     *
+     * `last_heard` is left null when the field is missing or 0 (the firmware
+     * sends 0 for a node it has never heard). It is never defaulted to "now".
+     */
     private fun parseNodeInfo(bytes: ByteArray): MeshNode? {
         var idx = 0
         var nodeNum: UInt = 0u
@@ -161,7 +179,7 @@ object MeshtasticProtoParser {
         var role: Int? = null
         var position: MeshPosition? = null
         var snr: Double? = null
-        var lastHeard: Long = System.currentTimeMillis() / 1000
+        var lastHeard: Long? = null
         var battery: Int? = null
         var hopsAway: Int? = null
 
@@ -171,25 +189,12 @@ object MeshtasticProtoParser {
             val wire = (tag and 0x7UL).toInt()
             idx = afterTag
             when (field) {
-                1 -> {
-                    // num — proto says fixed32 in newer revs, but iOS handles
-                    // it as varint. Accept either to stay compatible.
-                    when (wire) {
-                        0 -> {
-                            val (v, after) = readVarint(bytes, idx) ?: break
-                            nodeNum = v.toUInt(); nodeNumSeen = true; idx = after
-                        }
-                        5 -> {
-                            val (v, after) = readFixed32(bytes, idx) ?: break
-                            nodeNum = v; nodeNumSeen = true; idx = after
-                        }
-                        else -> idx = skipField(bytes, idx, wire)
-                    }
+                1 -> { // num (uint32, varint)
+                    if (wire != 0) { idx = skipField(bytes, idx, wire); continue }
+                    val (v, after) = readVarint(bytes, idx) ?: break
+                    nodeNum = v.toUInt(); nodeNumSeen = true; idx = after
                 }
-                4 -> {
-                    // user submessage — long_name (2), short_name (3), and
-                    // role (7). iOS uses field 2 = user historically; the
-                    // modern proto puts user at field 4. Accept either.
+                2 -> { // user (User): long_name (2), short_name (3), role (7)
                     if (wire != 2) { idx = skipField(bytes, idx, wire); continue }
                     val sub = readLengthDelimited(bytes, idx) ?: break
                     val user = parseUser(sub.first)
@@ -198,64 +203,31 @@ object MeshtasticProtoParser {
                     if (user.role != null) role = user.role
                     idx = sub.second
                 }
-                2 -> {
-                    // Older field number for user submessage; same
-                    // payload shape.
+                3 -> { // position (Position)
                     if (wire != 2) { idx = skipField(bytes, idx, wire); continue }
                     val sub = readLengthDelimited(bytes, idx) ?: break
-                    val user = parseUser(sub.first)
-                    if (user.shortName.isNotEmpty()) shortName = user.shortName
-                    if (user.longName.isNotEmpty()) longName = user.longName
-                    if (user.role != null) role = user.role
+                    position = parsePosition(sub.first) ?: position
                     idx = sub.second
                 }
-                5 -> {
-                    // Position submessage (length-delimited) OR snr (float).
-                    // Disambiguate by wire type.
-                    when (wire) {
-                        2 -> {
-                            val sub = readLengthDelimited(bytes, idx) ?: break
-                            position = parsePosition(sub.first) ?: position
-                            idx = sub.second
-                        }
-                        5 -> {
-                            val (raw, after) = readFixed32(bytes, idx) ?: break
-                            snr = Float.fromBits(raw.toInt()).toDouble()
-                            idx = after
-                        }
-                        else -> idx = skipField(bytes, idx, wire)
-                    }
+                4 -> { // snr (float, dB of the last packet heard from this node)
+                    if (wire != 5) { idx = skipField(bytes, idx, wire); continue }
+                    val (raw, after) = readFixed32(bytes, idx) ?: break
+                    snr = Float.fromBits(raw.toInt()).toDouble()
+                    idx = after
                 }
-                7 -> {
-                    if (wire == 5) {
-                        // snr (float)
-                        val (raw, after) = readFixed32(bytes, idx) ?: break
-                        snr = Float.fromBits(raw.toInt()).toDouble()
-                        idx = after
-                    } else {
-                        idx = skipField(bytes, idx, wire)
-                    }
+                5 -> { // last_heard (fixed32, epoch seconds)
+                    if (wire != 5) { idx = skipField(bytes, idx, wire); continue }
+                    val (raw, after) = readFixed32(bytes, idx) ?: break
+                    lastHeard = raw.toLong().takeIf { it > 0L }
+                    idx = after
                 }
-                9 -> {
-                    if (wire == 5) {
-                        val (raw, after) = readFixed32(bytes, idx) ?: break
-                        lastHeard = raw.toLong() and 0xFFFFFFFFL
-                        idx = after
-                    } else if (wire == 0) {
-                        val (v, after) = readVarint(bytes, idx) ?: break
-                        lastHeard = v.toLong()
-                        idx = after
-                    } else {
-                        idx = skipField(bytes, idx, wire)
-                    }
-                }
-                10 -> {
+                6 -> { // device_metrics (DeviceMetrics): battery_level (1)
                     if (wire != 2) { idx = skipField(bytes, idx, wire); continue }
                     val sub = readLengthDelimited(bytes, idx) ?: break
-                    battery = parseDeviceMetricsBattery(sub.first)
+                    battery = parseDeviceMetricsBattery(sub.first) ?: battery
                     idx = sub.second
                 }
-                11 -> {
+                9 -> { // hops_away (optional uint32; 0 = direct neighbour)
                     if (wire != 0) { idx = skipField(bytes, idx, wire); continue }
                     val (v, after) = readVarint(bytes, idx) ?: break
                     hopsAway = v.toInt()
@@ -335,6 +307,20 @@ object MeshtasticProtoParser {
         return null
     }
 
+    /**
+     * MeshPacket, using the field numbers and wire types from mesh.proto
+     * (none renumbered since the 2.0 line):
+     *
+     *    1 from (fixed32)    2 to (fixed32)         3 channel (uint32)
+     *    4 decoded (Data)    5 encrypted (bytes)    6 id (fixed32)
+     *    7 rx_time (fixed32) 8 rx_snr (float)       9 hop_limit (uint32)
+     *   10 want_ack (bool)  11 priority (enum)     12 rx_rssi (int32)
+     *   14 via_mqtt (bool)  15 hop_start (uint32)  16 public_key (bytes)
+     *
+     * `from` and `to` also accept a varint. That is the layout before
+     * 2021-02-17 (1.x firmware); it cannot collide with the fixed32 form, so
+     * it is left in.
+     */
     private fun parseMeshPacket(bytes: ByteArray): MeshPacketDecoded? {
         var idx = 0
         var from: UInt = 0u
@@ -385,36 +371,30 @@ object MeshtasticProtoParser {
                     payload = parsed.second
                     idx = sub.second
                 }
-                8 -> {
+                7 -> { // rx_time (fixed32, epoch seconds; 0 or absent when the radio has no clock)
                     if (wire != 5) { idx = skipField(bytes, idx, wire); continue }
                     val (v, after) = readFixed32(bytes, idx) ?: return null
-                    rxTime = v.toLong() and 0xFFFFFFFFL
+                    rxTime = v.toLong().takeIf { it > 0L }
                     idx = after
                 }
-                9 -> {
+                8 -> { // rx_snr (float)
                     if (wire != 5) { idx = skipField(bytes, idx, wire); continue }
                     val (v, after) = readFixed32(bytes, idx) ?: return null
                     rxSnr = Float.fromBits(v.toInt())
                     idx = after
                 }
-                10 -> {
+                9 -> { // hop_limit (uint32)
                     if (wire != 0) { idx = skipField(bytes, idx, wire); continue }
                     val (v, after) = readVarint(bytes, idx) ?: return null
                     hopLimit = v.toInt(); idx = after
                 }
-                12 -> {
+                12 -> { // rx_rssi (int32: a negative value is a 10-byte sign-extended varint)
                     if (wire != 0) { idx = skipField(bytes, idx, wire); continue }
                     val (v, after) = readVarint(bytes, idx) ?: return null
                     rxRssi = v.toInt(); idx = after
                 }
-                16 -> {
-                    if (wire != 0) { idx = skipField(bytes, idx, wire); continue }
-                    val (v, after) = readVarint(bytes, idx) ?: return null
-                    // sint32 zigzag decode
-                    val zz = v.toLong()
-                    rxRssi = ((zz ushr 1) xor -(zz and 1L)).toInt()
-                    idx = after
-                }
+                // Skipped on purpose: 5 encrypted, 10 want_ack, 11 priority,
+                // 14 via_mqtt, 15 hop_start, 16 public_key (bytes, not an RSSI).
                 else -> idx = skipField(bytes, idx, wire)
             }
         }

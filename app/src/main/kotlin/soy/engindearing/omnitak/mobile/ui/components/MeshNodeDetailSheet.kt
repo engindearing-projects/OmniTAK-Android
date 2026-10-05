@@ -115,7 +115,7 @@ fun MeshNodeDetailSheet(
             // Link health — SNR, hops, battery, last heard.
             node.snr?.let { DetailRow("SNR", "%.1f dB".format(it)) }
             node.hopDistance?.let { DetailRow("Hops away", "$it") }
-            node.batteryLevel?.let { DetailRow("Battery", "$it%") }
+            node.batteryLabel?.let { DetailRow("Battery", it) }
             DetailRow("Last heard", formatLastHeard(node.lastHeardEpoch))
 
             // GAP-124 — only show "Message" when a callback is wired
@@ -175,8 +175,8 @@ private val timestampFormatter = SimpleDateFormat("HH:mm:ss", Locale.US).apply {
     timeZone = TimeZone.getDefault()
 }
 
-private fun formatLastHeard(epochSec: Long): String {
-    if (epochSec <= 0L) return "—"
+private fun formatLastHeard(epochSec: Long?): String {
+    if (epochSec == null || epochSec <= 0L) return "—"
     val ageSec = (System.currentTimeMillis() / 1000L) - epochSec
     return when {
         ageSec < 0 -> timestampFormatter.format(Date(epochSec * 1000L))
