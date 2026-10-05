@@ -18,6 +18,7 @@ import soy.engindearing.omnitak.mobile.data.MeshChannelPreset
 import soy.engindearing.omnitak.mobile.data.MeshDeviceConfig
 import soy.engindearing.omnitak.mobile.data.MeshRole
 import soy.engindearing.omnitak.mobile.data.MeshWire
+import soy.engindearing.omnitak.mobile.data.PositionFloor
 import soy.engindearing.omnitak.mobile.data.ProtoMsg
 import soy.engindearing.omnitak.mobile.data.RadioSettingsCache
 import soy.engindearing.omnitak.mobile.data.RebroadcastMode
@@ -73,6 +74,12 @@ import java.util.Random
  *     boots with one (step 4 sets a region), and the owner then carries a public
  *     key. The final comparison leaves that one field out in that case, and the
  *     radio keeps the key pair.
+ *
+ * A second test, [a_short_position_interval_on_the_default_channel_is_raised_and_the_app_says_so], runs the position
+ * floor against the real firmware: on the stock radio's default channel a 120 s interval is put back to one hour
+ * when the radio restarts, the app says so before the push and after the restart (one manager across the
+ * restart, as in the app), and with a private key on the primary channel, or a name that is not the preset's, or no
+ * position precision, the radio keeps the interval and the app says nothing.
  *
  * Never prints or logs key bytes: channel keys are only ever compared by length.
  */
@@ -247,6 +254,21 @@ class SimRadioSettingsIT {
                 waitUntil(5_000) { app.state.radio == null },
             )
             assertNull("and the node number, so nothing is addressed to the old link", mgr.myNodeNum)
+        }
+
+        /**
+         * Connect this same manager again after the radio restarted, the way the app reconnects: one call to
+         * [MeshtasticManager.connectTcp], made when the radio is up. A throwaway session finds out when that is
+         * (each failed attempt of a manager leaves a waiter behind that asks the radio for its config once it
+         * connects), then this manager connects once and the note about the last push, which lives in the manager,
+         * is judged on the download.
+         */
+        fun reconnect(timeoutMs: Long = 150_000) {
+            connect(timeoutMs).close()
+            // The throwaway session's link-down report reaches the shared settings state a moment after it closes.
+            check(waitUntil(5_000) { app.state.radio == null }) { "the throwaway session's link drop was not reported" }
+            check(open(60_000)) { "the manager could not connect again to the radio that is up" }
+            log("reconnected the same manager, node ${"%08x".format(node.toInt())}")
         }
 
         override fun close() {
@@ -443,10 +465,11 @@ class SimRadioSettingsIT {
      * in a busy moment).
      *
      * The interval is checked here, on what the radio reports right after a write, and not only after its
-     * restart: the simulator as it comes from the stock image set `position_broadcast_secs` back to its default
-     * on a restart that followed a write of 400 s (writes of the GPS mode and the GPS update interval alone
-     * survived), and did not once the test had written its own position config. The rule is not known. The
-     * radio's report before the restart is where the app's write is always visible.
+     * restart. The stock radio sends its position on its default channel, and firmware 2.7.26 raises a position
+     * interval under one hour to one hour when it restarts ([PositionFloor]), so a short interval written to it
+     * is back at one hour after the restart. Once step 4 has put a private key on the primary channel the
+     * interval survives restarts. The radio's report before the restart is where the app's write is always
+     * visible.
      */
     private fun awaitInterval(s: Session, secs: Int, what: String) {
         val deadline = System.currentTimeMillis() + 15_000
@@ -750,6 +773,174 @@ class SimRadioSettingsIT {
             readsAfterRestore,
         )
     }
+
+    // region the position floor -------------------------------------------------------------------------------
+
+    /** What the position floor looks at, from a download. Key lengths only. */
+    private fun held(v: Map<String, Any?>): String =
+        "interval=${v[INTERVAL]} smart_min_interval=${v["position.smart_min_interval_secs"]} " +
+            "channel0[key_length=${v["channel0.key_length"]} name='${v["channel0.name"] ?: ""}' precision=${v["channel0.position_precision"]}] " +
+            "preset=${v["lora.modem_preset"] ?: 0} role=${v["device.role"] ?: 0}"
+
+    /** Channel 0 as it was found, with its key, name and position precision replaced. Never prints the key. */
+    private fun channel0With(found: AsFound, key: ByteArray, name: String, precision: Int): ByteArray {
+        val settings = rebuild(
+            Msg(found.channel0).sub(2)?.bytes ?: ByteArray(0),
+            at(2) { bytes(2, key) },
+            at(3) { string(3, name) },
+            at(7) { msg(7, ProtoMsg().varint(1, precision)) },
+        )
+        return rebuild(found.channel0, at(2) { bytes(2, settings) }, at(3) { varint(3, 1) })
+    }
+
+    /** Replace channel 0 on the radio, in one transaction (one reboot), and reconnect a fresh session to it. */
+    private fun arrangeChannel0(s: Session, channel: ByteArray): Session {
+        send(s, listOf(beginFrame(s.node), setChannelFrame(s.node, channel), commitFrame(s.node)))
+        s.awaitRebootAndForget()
+        s.close()
+        return connect()
+    }
+
+    /** The settings screen's decision for the interval control, from what the radio reported and the draft with [secs]. */
+    private fun hintFor(s: Session, secs: Int): String? =
+        app.state.positionIntervalHint(s.mgr.positionFacts.value, app.state.draft.copy(positionBroadcastSecs = secs))
+
+    /**
+     * The position floor against the real firmware. Four radios in a row, each the stock radio with something
+     * changed on its primary channel, always pushed through the app and judged on what the radio itself reports:
+     *
+     *  A. the stock radio, default key, unnamed, precision 13, LONG_FAST: 120 s is announced before the push, the
+     *     radio reports 120 s until it restarts and one hour after, and the manager that made the push says so
+     *     with both numbers and the reason when it connects again;
+     *  B. a 32 byte key on the primary channel: no hint, 120 s survives the restart, no note;
+     *  C. the default key with a name that is not the preset's: the firmware does not call it the default channel,
+     *     so the interval the radio already holds (120 s) survives its next restart and the app says nothing;
+     *  D. the default key and the preset's name, but no position precision: no channel sends positions, so the
+     *     interval survives again.
+     *
+     * Then everything is put back and the radio must read as it did when the test started.
+     */
+    @Test fun a_short_position_interval_on_the_default_channel_is_raised_and_the_app_says_so() {
+        assumeTrue("MESHSIM_HOST is not set, so the simulated-radio test is skipped", host != null)
+
+        var s = connect()
+        val found = AsFound.of(s.cache)
+        val asFound = view(s.cache)
+        log("as found: ${held(asFound)}")
+        assumeTrue("the peer is not a simulator (hardware model ${asFound["owner.hw_model"]}), nothing was written", asFound["owner.hw_model"] == PORTDUINO)
+        assumeTrue(
+            "the radio is not as the stock image comes (default key, unnamed primary with a position precision, LONG_FAST, one hour)",
+            asFound["channel0.key_length"] == 1 && asFound["channel0.name"] == null && asFound["channel0.position_precision"] == 13L &&
+                (asFound["lora.modem_preset"] ?: 0L) == 0L && asFound[INTERVAL] == 3_600L,
+        )
+        val reasonOneHour = PositionFloor.reason(PositionFloor.DEFAULT_FLOOR_SECS)
+        var readsAfterRestore: Map<String, Pair<Any?, Any?>>? = null
+
+        try {
+            // A. the default channel
+            log("A before: ${held(asFound)}")
+            assertNull("A: the stock radio says nothing about a floor at one hour", hintFor(s, 3_600))
+            val hintA = hintFor(s, 120)
+            log("A hint for 120 s: $hintA")
+            assertEquals("A: 120 s is under the floor of a radio on its default channel", reasonOneHour, hintA)
+
+            val editsA = app.edits { copy(positionBroadcastSecs = 120) }
+            assertEquals(listOf(AdminSetting.POSITION_INTERVAL), editsA.settings)
+            s.mgr.clearSettingsNotice()
+            s.mgr.clearLastPushResult()
+            assertEquals(AdminWriteResult.Sent(listOf(AdminSetting.POSITION_INTERVAL)), runBlocking { s.mgr.pushDeviceConfig(editsA) })
+            runBlocking { s.mgr.requestDeviceConfig() }
+            awaitInterval(s, 120, "A")
+            val afterWriteA = view(s.cache)
+            log("A right after the write, before the restart: ${held(afterWriteA)}")
+            assertEquals("the radio holds what it was sent until it restarts", 120L, afterWriteA[INTERVAL])
+            assertNull("nothing to say yet: the radio reports what it was sent", s.mgr.restartNote.value)
+            assertNull(s.mgr.settingsNotice.value)
+
+            s.awaitRebootAndForget()
+            s.reconnect()
+            val afterA = view(s.cache)
+            log("A after the restart: ${held(afterA)}")
+            assertEquals("the firmware put the interval back to one hour", 3_600L, afterA[INTERVAL])
+            assertTrue("and the note is there when the download is in", waitUntil(10_000) { s.mgr.restartNote.value != null })
+            log("A note: ${s.mgr.restartNote.value}")
+            assertEquals(
+                "The radio reports 3600 s for the position interval. 120 s was sent. $reasonOneHour",
+                s.mgr.restartNote.value,
+            )
+            assertNull("it is not the managed-radio note", s.mgr.settingsNotice.value)
+            assertEquals("nothing else changed", emptyMap<String, Pair<Any?, Any?>>(), diff(asFound, afterA))
+            s.close()
+
+            // B. a private key on the primary channel
+            val key = ByteArray(32).also { Random().nextBytes(it) } // never printed
+            s = arrangeChannel0(connect(), channel0With(found, key, name = "", precision = 13))
+            val beforeB = view(s.cache)
+            log("B before: ${held(beforeB)}")
+            assertEquals("B: a 32 byte key", 32, beforeB["channel0.key_length"])
+            assertEquals("B: the interval is as it was", 3_600L, beforeB[INTERVAL])
+            assertNull("B: no hint, this is not the default channel", hintFor(s, 120))
+
+            val editsB = app.edits { copy(positionBroadcastSecs = 120) }
+            assertEquals(listOf(AdminSetting.POSITION_INTERVAL), editsB.settings)
+            s.mgr.clearSettingsNotice()
+            s.mgr.clearLastPushResult()
+            assertEquals(AdminWriteResult.Sent(listOf(AdminSetting.POSITION_INTERVAL)), runBlocking { s.mgr.pushDeviceConfig(editsB) })
+            runBlocking { s.mgr.requestDeviceConfig() }
+            awaitInterval(s, 120, "B")
+            log("B right after the write, before the restart: ${held(view(s.cache))}")
+            s.awaitRebootAndForget()
+            s.reconnect()
+            val afterB = view(s.cache)
+            log("B after the restart: ${held(afterB)}")
+            assertEquals("the radio keeps 120 s", 120L, afterB[INTERVAL])
+            assertNull("and the app has nothing to say", s.mgr.restartNote.value)
+            assertNull(s.mgr.settingsNotice.value)
+            s.close()
+
+            // C. the default key, a name that is not the preset's
+            s = arrangeChannel0(connect(), channel0With(found, byteArrayOf(1), name = "Alpha", precision = 13))
+            val afterC = view(s.cache)
+            log("C after the restart that followed the channel change: ${held(afterC)}")
+            assertEquals("C: the default key", 1, afterC["channel0.key_length"])
+            assertEquals("C: named", "Alpha", afterC["channel0.name"])
+            assertEquals("C: the firmware does not raise the interval of a channel it does not call the default", 120L, afterC[INTERVAL])
+            assertNull("C: and the app says nothing", hintFor(s, 120))
+            s.close()
+
+            // D. the default key and the preset's name, no position precision on any channel
+            s = arrangeChannel0(connect(), channel0With(found, byteArrayOf(1), name = "LongFast", precision = 0))
+            val afterD = view(s.cache)
+            log("D after the restart that followed the channel change: ${held(afterD)}")
+            assertEquals("D: the default key", 1, afterD["channel0.key_length"])
+            assertEquals("D: the preset's name", "LongFast", afterD["channel0.name"])
+            assertEquals("D: no position precision", 0L, afterD["channel0.position_precision"] ?: 0L)
+            assertEquals("D: no channel sends positions, so nothing is raised", 120L, afterD[INTERVAL])
+            assertNull("D: and the app says nothing", hintFor(s, 120))
+        } finally {
+            // Put back what the test changed (best effort, even when an assertion failed above).
+            runCatching {
+                s.close()
+                val back = connect()
+                restore(back, found)
+                back.awaitRebootAndForget()
+                back.close()
+                val last = connect()
+                readsAfterRestore = diff(asFound, view(last.cache))
+                log("restored: ${readsAfterRestore!!.ifEmpty { "identical to what was found" }}")
+                log("restored: ${held(view(last.cache))}")
+                last.close()
+            }.onFailure { log("RESTORE FAILED, the radio was left changed: ${it.message}") }
+        }
+
+        assertEquals(
+            "after the test puts its changes back, every watched field reads as it did when the test started",
+            emptyMap<String, Pair<Any?, Any?>>(),
+            readsAfterRestore,
+        )
+    }
+
+    // endregion
 
     private companion object {
         /** HardwareModel.PORTDUINO in mesh.proto: the simulator's. */
