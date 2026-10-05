@@ -545,7 +545,11 @@ object MeshtasticProtoParser {
             1 -> minOf(offset + 8, buf.size)
             2 -> {
                 val (len, lenEnd) = readVarint(buf, offset) ?: return offset + 1
-                minOf(lenEnd + len.toInt(), buf.size)
+                // Compare as unsigned 64-bit before converting. A declared length of
+                // 2^31 or more turns negative as an Int, and the "next field" then lies
+                // BEFORE this one: the caller's loop reads the same field forever. A
+                // length that runs past the buffer ends the message.
+                if (len > (buf.size - lenEnd).toULong()) buf.size else lenEnd + len.toInt()
             }
             5 -> minOf(offset + 4, buf.size)
             else -> offset + 1
