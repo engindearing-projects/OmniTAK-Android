@@ -5,6 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -23,7 +24,8 @@ class RegionDownloaderTest {
 
     /** A sink that records every written XYZ-equivalent tile. */
     private class CountingSink : TileSink {
-        val store = HashMap<Triple<Int, Int, Int>, ByteArray>()
+        // Written from several Dispatchers.IO threads at once: a plain HashMap loses puts (#237).
+        val store = ConcurrentHashMap<Triple<Int, Int, Int>, ByteArray>()
         override fun put(z: Int, column: Int, tmsRow: Int, data: ByteArray) {
             store[Triple(z, column, tmsRow)] = data
         }
