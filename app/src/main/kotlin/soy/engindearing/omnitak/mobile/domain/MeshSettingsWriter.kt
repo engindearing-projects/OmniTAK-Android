@@ -1,6 +1,9 @@
 package soy.engindearing.omnitak.mobile.domain
 
 import android.util.Log
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import soy.engindearing.omnitak.mobile.data.AdminMessageParser
 import soy.engindearing.omnitak.mobile.data.AdminMessageSerializer
 import soy.engindearing.omnitak.mobile.data.AdminMessageSerializer.AdminWrite
@@ -30,11 +33,20 @@ import soy.engindearing.omnitak.mobile.data.RefusalReason
  * Transport-free on purpose: [send] hands a framed ToRadio to whatever link is
  * up and says whether it got out, and [destination] is the attached radio's
  * node number (null when there is no radio to address).
+ *
+ * The frames of a batch go out [frameSpacingMs] apart. The firmware keeps four
+ * inbound packets waiting for its router thread and drops the oldest when a
+ * fifth arrives, and nothing tells the app. Sent back to back over TCP to a
+ * simulated radio, a batch of six frames lost its device config write and a
+ * batch of seven lost its position config write: those changes never took
+ * effect, and no error was reported anywhere. The same batches with 100 ms
+ * between frames applied every write.
  */
 class MeshSettingsWriter(
     private val cache: RadioSettingsCache,
     private val destination: () -> UInt?,
     private val send: suspend (ByteArray) -> Boolean,
+    private val frameSpacingMs: Long = ADMIN_FRAME_SPACING_MS,
 ) {
 
     /** `set_config { device { rebroadcast_mode } }`: the radio's other device settings are carried over. */
@@ -111,25 +123,35 @@ class MeshSettingsWriter(
             return AdminWriteResult.NothingToChange
         }
 
-        if (!send(AdminMessageSerializer.buildBeginEditSettings(dest))) {
-            return AdminWriteResult.LinkFailed(sent = 0, total = plans.size)
+        // Once begin is out the batch runs to its commit even if the caller goes away (a screen that is left
+        // mid-push): a transaction left open would swallow the next edit from any client.
+        return withContext(NonCancellable) {
+            if (!send(AdminMessageSerializer.buildBeginEditSettings(dest))) {
+                return@withContext AdminWriteResult.LinkFailed(sent = 0, total = plans.size)
+            }
+            var sent = 0
+            for (plan in plans) {
+                pace()
+                // Stop at the first write that does not get out, but still close the transaction below.
+                if (!send(plan.write.frame)) break
+                cache.put(plan.key, plan.write.message)
+                sent++
+            }
+            // The radio holds its saves, and its reboot, until this arrives. Send it even after a failed write.
+            pace()
+            val committed = send(AdminMessageSerializer.buildCommitEditSettings(dest))
+            Log.i(TAG, "push: ${plans.map { it.setting }} -> sent $sent of ${plans.size}, committed=$committed")
+            if (sent == plans.size && committed) {
+                AdminWriteResult.Sent(plans.size)
+            } else {
+                AdminWriteResult.LinkFailed(sent = sent, total = plans.size)
+            }
         }
-        var sent = 0
-        for (plan in plans) {
-            // Stop at the first write that does not get out, but still close the transaction below.
-            if (!send(plan.write.frame)) break
-            cache.put(plan.key, plan.write.message)
-            sent++
-        }
-        // The radio holds its saves, and its reboot, until this arrives. Send it even after a failed write:
-        // an open transaction would swallow the next edit from any client.
-        val committed = send(AdminMessageSerializer.buildCommitEditSettings(dest))
-        Log.i(TAG, "push: ${plans.map { it.setting }} -> sent $sent of ${plans.size}, committed=$committed")
-        return if (sent == plans.size && committed) {
-            AdminWriteResult.Sent(plans.size)
-        } else {
-            AdminWriteResult.LinkFailed(sent = sent, total = plans.size)
-        }
+    }
+
+    /** Leave the radio time to take the frame before this one. */
+    private suspend fun pace() {
+        if (frameSpacingMs > 0) delay(frameSpacingMs)
     }
 
     // region One write ------------------------------------------------------
@@ -247,16 +269,23 @@ class MeshSettingsWriter(
 
     // endregion
 
-    private companion object {
-        const val TAG = "MeshSettings"
+    companion object {
+        private const val TAG = "MeshSettings"
+
+        /**
+         * Gap between admin frames sent in a row, for write batches and for read requests. Measured on a simulated
+         * radio: twelve read requests with no gap got four answers, with 20 ms between them eleven, with 50 ms or
+         * 100 ms all twelve. Write batches lost writes with no gap and lost none with 100 ms (see the class doc).
+         */
+        const val ADMIN_FRAME_SPACING_MS = 100L
 
         // Field numbers read back from the radio's own messages (config.proto, channel.proto, mesh.proto).
-        const val DEVICE_ROLE = 1
-        const val POSITION_BROADCAST_SECS = 1
-        const val LORA_MODEM_PRESET = 2
-        const val CHANNEL_SETTINGS = 2
-        const val SETTINGS_NAME = 3
-        const val USER_LONG_NAME = 2
-        const val USER_SHORT_NAME = 3
+        private const val DEVICE_ROLE = 1
+        private const val POSITION_BROADCAST_SECS = 1
+        private const val LORA_MODEM_PRESET = 2
+        private const val CHANNEL_SETTINGS = 2
+        private const val SETTINGS_NAME = 3
+        private const val USER_LONG_NAME = 2
+        private const val USER_SHORT_NAME = 3
     }
 }

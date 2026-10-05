@@ -1,6 +1,10 @@
 package soy.engindearing.omnitak.mobile.domain
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.currentTime
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -68,7 +72,7 @@ class MeshSettingsWriterTest {
     }
 
     private fun writer(cache: RadioSettingsCache, link: Link, destination: UInt? = node) =
-        MeshSettingsWriter(cache, destination = { destination }, send = { link.send(it) })
+        MeshSettingsWriter(cache, destination = { destination }, send = { link.send(it) }, frameSpacingMs = 0)
 
     /** The draft that matches [loadedCache]'s defaults exactly: nothing to push. */
     private val matchingDraft = MeshDeviceConfig(
@@ -382,7 +386,7 @@ class MeshSettingsWriterTest {
             }
         }
         val link = FailsOnce()
-        val w = MeshSettingsWriter(loadedCache(), { node }, { link.send(it) })
+        val w = MeshSettingsWriter(loadedCache(), { node }, { link.send(it) }, frameSpacingMs = 0)
         val result = w.pushDeviceConfig(matchingDraft.copy(role = MeshRole.ROUTER, positionBroadcastSecs = 60, channelName = "Bravo"))
 
         assertEquals(AdminWriteResult.LinkFailed(sent = 1, total = 3), result)
@@ -408,6 +412,50 @@ class MeshSettingsWriterTest {
         val before = link.frames.size
         assertEquals(AdminWriteResult.NothingToChange, w.pushDeviceConfig(matchingDraft.copy(positionBroadcastSecs = 300)))
         assertEquals(before, link.frames.size)
+    }
+
+    // endregion
+
+    // region pacing and cancellation ---------------------------------------------
+
+    @Test fun `the frames of a batch go out a gap apart, so the radio can take each one`() = runTest {
+        // The firmware keeps four inbound packets and drops the oldest when a fifth arrives. Virtual time here.
+        val times = mutableListOf<Long>()
+        val w = MeshSettingsWriter(loadedCache(), { node }, { times += currentTime; true }, frameSpacingMs = 100)
+
+        val result = w.pushDeviceConfig(matchingDraft.copy(role = MeshRole.ROUTER, positionBroadcastSecs = 60))
+
+        assertEquals(AdminWriteResult.Sent(2), result)
+        assertEquals("begin, two writes, commit", listOf(0L, 100L, 200L, 300L), times)
+    }
+
+    @Test fun `a single write is not delayed`() = runTest {
+        val times = mutableListOf<Long>()
+        val w = MeshSettingsWriter(loadedCache(), { node }, { times += currentTime; true }, frameSpacingMs = 100)
+        w.applyLoRaConfig(MeshRegion.UNSET, MeshChannelPreset.MEDIUM_FAST)
+        assertEquals(listOf(0L), times)
+    }
+
+    @Test fun `a push that has begun reaches its commit even when the caller goes away`() = runTest {
+        // A screen left mid-push cancels its scope. A transaction left open would swallow the next edit from any client.
+        val frames = mutableListOf<ByteArray>()
+        val begun = CompletableDeferred<Unit>()
+        val w = MeshSettingsWriter(
+            loadedCache(), { node },
+            {
+                frames += it
+                if (frames.size == 1) begun.complete(Unit)
+                true
+            },
+            frameSpacingMs = 100,
+        )
+
+        val push = launch { w.pushDeviceConfig(matchingDraft.copy(role = MeshRole.ROUTER, positionBroadcastSecs = 60)) }
+        begun.await()
+        push.cancel()
+        push.join()
+
+        assertEquals("begin, both writes, commit", listOf(64, 34, 34, 65), frames.map { adminFieldNumbers(it).single() })
     }
 
     // endregion

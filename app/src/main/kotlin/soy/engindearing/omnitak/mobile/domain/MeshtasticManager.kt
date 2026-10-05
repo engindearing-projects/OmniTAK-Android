@@ -712,6 +712,9 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
         ) + channelRequests
         var sent = 0
         for (bytes in requests) {
+            // Twelve requests back to back got only four answers from a simulated radio: it queues its replies for
+            // the phone in a short queue and drops what does not fit. A gap between them lets each answer out.
+            if (sent > 0) delay(MeshSettingsWriter.ADMIN_FRAME_SPACING_MS)
             val ok = when (transport) {
                 MeshConnectionType.TCP -> tcpClient.sendBytes(bytes)
                 MeshConnectionType.BLUETOOTH -> bleClient?.sendToRadio(bytes) ?: false
