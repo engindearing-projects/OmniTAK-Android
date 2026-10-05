@@ -20,8 +20,9 @@ import java.security.SecureRandom
  *
  * Each read has its own random, non-zero packet id and a deadline, and is answered once. A reused id, an
  * expired id, an id that was asked for a different entry, and a message with no id are all ignored.
- * `rx_time` and `hop_start` are deliberately not part of the rule: some firmware sets them on packets the radio
- * makes itself, and the request id is what carries the weight.
+ * `rx_time` and `hop_start` are deliberately not part of the rule. A radio with a clock puts `rx_time` on its own
+ * answers, and what other firmware puts in either field on a packet it makes itself was not measured, so a rule
+ * that used them could refuse every answer. The request id is what carries the weight.
  *
  * Pure Kotlin, safe to call from any thread.
  */

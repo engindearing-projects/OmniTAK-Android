@@ -124,7 +124,7 @@ class MeshtasticManagerReadBackTest {
     }
 
     @Test fun `rx_time and hop_start on an answer do not make it fail, only the marks of a received packet do`() = runBlocking {
-        // A radio with a clock stamps rx_time on what it makes itself, and some firmware sets hop_start too.
+        // A radio with a clock stamps rx_time on its own answers, and other firmware may set hop_start too.
         val q = quiet()
         q.mgr.requestDeviceConfig()
 
