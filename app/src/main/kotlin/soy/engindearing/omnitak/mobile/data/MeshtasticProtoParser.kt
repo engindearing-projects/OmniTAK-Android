@@ -328,6 +328,9 @@ object MeshtasticProtoParser {
      *    7 rx_time (fixed32) 8 rx_snr (float)       9 hop_limit (uint32)
      *   10 want_ack (bool)  11 priority (enum)     12 rx_rssi (int32)
      *   14 via_mqtt (bool)  15 hop_start (uint32)  16 public_key (bytes)
+     *   21 transport_mechanism (enum)
+     *
+     * Inside `Data`: 1 portnum, 2 payload, 6 request_id (fixed32).
      *
      * `from` and `to` also accept a varint. That is the layout before
      * 2021-02-17 (1.x firmware); it cannot collide with the fixed32 form, so
@@ -344,6 +347,9 @@ object MeshtasticProtoParser {
         var rxRssi: Int? = null
         var rxSnr: Float? = null
         var hopLimit: Int? = null
+        var requestId: UInt? = null
+        var viaMqtt = false
+        var transportMechanism = 0
 
         while (idx < bytes.size) {
             val (tag, afterTag) = readVarint(bytes, idx) ?: return null
@@ -379,8 +385,9 @@ object MeshtasticProtoParser {
                     if (wire != 2) { idx = skipField(bytes, idx, wire); continue }
                     val sub = readLengthDelimited(bytes, idx) ?: return null
                     val parsed = parseDataSubmessage(sub.first)
-                    portnum = parsed.first
-                    payload = parsed.second
+                    portnum = parsed.portnum
+                    payload = parsed.payload
+                    requestId = parsed.requestId
                     idx = sub.second
                 }
                 7 -> { // rx_time (fixed32, epoch seconds; 0 or absent when the radio has no clock)
@@ -405,8 +412,20 @@ object MeshtasticProtoParser {
                     val (v, after) = readVarint(bytes, idx) ?: return null
                     rxRssi = v.toInt(); idx = after
                 }
+                14 -> { // via_mqtt (bool)
+                    if (wire != 0) { idx = skipField(bytes, idx, wire); continue }
+                    val (v, after) = readVarint(bytes, idx) ?: return null
+                    viaMqtt = v != 0uL; idx = after
+                }
+                21 -> { // transport_mechanism (enum; 0 is the radio's own, anything else is a way in from outside)
+                    if (wire != 0) { idx = skipField(bytes, idx, wire); continue }
+                    val (v, after) = readVarint(bytes, idx) ?: return null
+                    // Any non-zero value stays non-zero however large it is.
+                    transportMechanism = if (v == 0uL) 0 else v.coerceAtMost(Int.MAX_VALUE.toULong()).toInt()
+                    idx = after
+                }
                 // Skipped on purpose: 5 encrypted, 10 want_ack, 11 priority,
-                // 14 via_mqtt, 15 hop_start, 16 public_key (bytes, not an RSSI).
+                // 15 hop_start (not used by the read-back rule), 16 public_key (bytes, not an RSSI).
                 else -> idx = skipField(bytes, idx, wire)
             }
         }
@@ -416,13 +435,18 @@ object MeshtasticProtoParser {
             portnum = portnum, payload = payload,
             rxTime = rxTime, rxRssi = rxRssi,
             rxSnr = rxSnr, hopLimit = hopLimit,
+            requestId = requestId, viaMqtt = viaMqtt, transportMechanism = transportMechanism,
         )
     }
 
-    private fun parseDataSubmessage(bytes: ByteArray): Pair<UInt, ByteArray> {
+    /** What the app reads from a `Data` message: the port, the payload and the id of the request it answers. */
+    private class DataParts(val portnum: UInt, val payload: ByteArray, val requestId: UInt?)
+
+    private fun parseDataSubmessage(bytes: ByteArray): DataParts {
         var idx = 0
         var portnum: UInt = 0u
         var payload = ByteArray(0)
+        var requestId: UInt? = null
         while (idx < bytes.size) {
             val (tag, afterTag) = readVarint(bytes, idx) ?: break
             val field = (tag shr 3).toInt()
@@ -439,10 +463,15 @@ object MeshtasticProtoParser {
                     val sub = readLengthDelimited(bytes, idx) ?: break
                     payload = sub.first; idx = sub.second
                 }
+                6 -> { // request_id (fixed32): the id of the packet this one answers
+                    if (wire != 5) { idx = skipField(bytes, idx, wire); continue }
+                    val (v, after) = readFixed32(bytes, idx) ?: break
+                    requestId = v; idx = after
+                }
                 else -> idx = skipField(bytes, idx, wire)
             }
         }
-        return portnum to payload
+        return DataParts(portnum, payload, requestId)
     }
 
     // endregion
@@ -573,6 +602,12 @@ data class MeshPacketDecoded(
     val rxRssi: Int? = null,
     val rxSnr: Float? = null,
     val hopLimit: Int? = null,
+    /** `Data.request_id`: the id of the request this packet answers, null when it answers none. */
+    val requestId: UInt? = null,
+    /** `via_mqtt`: the packet came in through an MQTT gateway. */
+    val viaMqtt: Boolean = false,
+    /** `transport_mechanism`: 0 for the radio's own, non-zero for a way in from outside. */
+    val transportMechanism: Int = 0,
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -580,7 +615,9 @@ data class MeshPacketDecoded(
         return from == other.from && to == other.to && channel == other.channel &&
             portnum == other.portnum && payload.contentEquals(other.payload) &&
             rxTime == other.rxTime && rxRssi == other.rxRssi &&
-            rxSnr == other.rxSnr && hopLimit == other.hopLimit
+            rxSnr == other.rxSnr && hopLimit == other.hopLimit &&
+            requestId == other.requestId && viaMqtt == other.viaMqtt &&
+            transportMechanism == other.transportMechanism
     }
 
     override fun hashCode(): Int {
@@ -593,6 +630,9 @@ data class MeshPacketDecoded(
         r = 31 * r + (rxRssi ?: 0)
         r = 31 * r + (rxSnr?.hashCode() ?: 0)
         r = 31 * r + (hopLimit ?: 0)
+        r = 31 * r + (requestId?.hashCode() ?: 0)
+        r = 31 * r + viaMqtt.hashCode()
+        r = 31 * r + transportMechanism
         return r
     }
 }

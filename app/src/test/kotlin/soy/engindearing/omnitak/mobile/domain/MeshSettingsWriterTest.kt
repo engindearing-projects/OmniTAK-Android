@@ -15,6 +15,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import soy.engindearing.omnitak.mobile.data.AdminMessageParser
+import soy.engindearing.omnitak.mobile.data.AdminReads
 import soy.engindearing.omnitak.mobile.data.AdminResponse
 import soy.engindearing.omnitak.mobile.data.AdminSetting
 import soy.engindearing.omnitak.mobile.data.AdminTestFrames
@@ -28,6 +29,7 @@ import soy.engindearing.omnitak.mobile.data.DeviceSettingsState
 import soy.engindearing.omnitak.mobile.data.FakeRadio
 import soy.engindearing.omnitak.mobile.data.MeshChannel
 import soy.engindearing.omnitak.mobile.data.MeshChannelPreset
+import soy.engindearing.omnitak.mobile.data.MeshPacketDecoded
 import soy.engindearing.omnitak.mobile.data.MeshRegion
 import soy.engindearing.omnitak.mobile.data.MeshRole
 import soy.engindearing.omnitak.mobile.data.ProtoMsg
@@ -61,7 +63,7 @@ class MeshSettingsWriterTest {
         destination: UInt? = 0x0A0B0C0Du,
         frameSpacingMs: Long = 0,
         readTimeoutMs: Long = 3_000,
-        private val latencyMs: Long = 0,
+        var latencyMs: Long = 0,
         val ledger: SentLedger = SentLedger(),
         /** 1-based numbers of the frames the link refuses. */
         val failAt: MutableSet<Int> = mutableSetOf(),
@@ -71,20 +73,33 @@ class MeshSettingsWriterTest {
         private var attempts = 0
         private val clock = scope
         private val answers: CoroutineScope = scope
+        private val node = destination ?: 0x0A0B0C0Du
+
+        /** The reads the writer has outstanding. Deadlines run on the test's virtual clock. */
+        val reads = AdminReads(clock = { scope.currentTime })
 
         val writer = MeshSettingsWriter(
             cache, { destination }, { frame -> send(frame) },
-            ledger = ledger, frameSpacingMs = frameSpacingMs, readTimeoutMs = readTimeoutMs,
+            ledger = ledger, frameSpacingMs = frameSpacingMs, readTimeoutMs = readTimeoutMs, reads = reads,
         )
 
         private suspend fun send(frame: ByteArray): Boolean {
             attempts++
             if (attempts in failAt) return false
             frameTimes += clock.currentTime
-            radio.handle(frame) { admin ->
-                if (latencyMs > 0) answers.launch { delay(latencyMs); cache.ingestAdminMessage(admin) } else cache.ingestAdminMessage(admin)
+            val wait = latencyMs // as it is now: a coroutine launched here starts later, when the test body suspends
+            radio.handle(frame) { admin, id ->
+                if (wait > 0) answers.launch { delay(wait); answer(admin, id) } else answer(admin, id)
             }
             return true
+        }
+
+        /** What the manager does with a frame from the radio: the rule, then the cache, then the read waiting for it. */
+        fun answer(admin: ByteArray, requestId: UInt) {
+            val packet = MeshPacketDecoded(from = node, to = node, channel = 0u, portnum = 6u, payload = admin, requestId = requestId)
+            val decision = reads.admit(packet, node)
+            decision.answer?.let { cache.put(it.key, it.bytes) }
+            decision.deliver()
         }
     }
 
@@ -223,6 +238,21 @@ class MeshSettingsWriterTest {
         val rig = Rig(this, latencyMs = 1_500)
         val result = rig.writer.pushDeviceConfig(DeviceEdits(positionBroadcastSecs = 300))
         assertEquals(AdminWriteResult.Sent(listOf(AdminSetting.POSITION_INTERVAL)), result)
+    }
+
+    @Test fun `a read ends with the answer to its own request, not with an older answer for the same entry`() = runTest {
+        val rig = Rig(this, latencyMs = 1_000)
+        // Twelve reads go out and their answers are a second away: the position config says flags 811.
+        rig.writer.readAll()
+        // Another client changes the flags. The write that follows asks again, and this answer is slower.
+        rig.radio.config[2] = ProtoMsg().varint(1, 900).varint(7, 999).varint(13, 1).build()
+        rig.latencyMs = 2_500
+
+        val result = rig.writer.pushDeviceConfig(DeviceEdits(positionBroadcastSecs = 300))
+
+        assertEquals(AdminWriteResult.Sent(listOf(AdminSetting.POSITION_INTERVAL)), result)
+        // The older answer got there first, at one second. It is the radio's own, but not the answer to this read.
+        sameBytes("position config", ProtoMsg().varint(1, 300).varint(7, 999).varint(13, 1).build(), rig.radio.config[2])
     }
 
     // endregion

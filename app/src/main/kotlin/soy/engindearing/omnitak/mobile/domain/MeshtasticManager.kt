@@ -22,6 +22,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayOutputStream
 import soy.engindearing.omnitak.mobile.data.AdminMessageParser
+import soy.engindearing.omnitak.mobile.data.AdminReads
 import soy.engindearing.omnitak.mobile.data.AdminResponse
 import soy.engindearing.omnitak.mobile.data.AdminWriteResult
 import soy.engindearing.omnitak.mobile.data.DeviceEdits
@@ -74,7 +75,11 @@ import soy.engindearing.omnitak.mobile.data.SentLedger
  * provides the matching TX path over the active TCP transport — BLE
  * TX hooks in as a follow-up.
  */
-class MeshtasticManager(private val context: Context? = null) : MeshFrameworkManager {
+class MeshtasticManager(
+    private val context: Context? = null,
+    /** Milliseconds on a monotonic clock, for the deadlines of reads. Tests supply their own. */
+    readClock: () -> Long = AdminReads.MONOTONIC_MS,
+) : MeshFrameworkManager {
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
@@ -259,11 +264,19 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
         _lastPushResult.value = null
     }
 
+    /**
+     * The reads this app has sent and not had answered, and the rule for what counts as the radio's answer to one
+     * ([AdminReads]). Every admin response goes through [AdminReads.admit] before it reaches the cache, the settings
+     * state or a write.
+     */
+    internal val adminReads = AdminReads(clock = readClock)
+
     private val settingsWriter = MeshSettingsWriter(
         cache = radioSettings,
         destination = { if (adminLinkUp()) adminDestination() else null },
         send = { bytes -> sendAdminFrame(bytes) },
         ledger = sentLedger,
+        reads = adminReads,
     )
 
     init {
@@ -289,6 +302,8 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
         if (wasConnected && !connected) {
             Log.i(TAG, "link dropped, forgetting the radio's settings")
             radioSettings.clear()
+            // A read sent on this link cannot be answered on another one, or by another radio.
+            adminReads.clear()
             // Nothing may be addressed to the radio that was on this link: the next one reports its own number.
             _myNodeNum = null
             runCatching { linkDownSink?.invoke() }
@@ -488,6 +503,8 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
             is FromRadioFrame.Packet -> handlePacket(parsed.packet)
             is FromRadioFrame.MyInfo -> {
                 _myNodeNum = parsed.nodeNum
+                // The first frame of a session: no read of an earlier one is waiting for an answer any more.
+                adminReads.clear()
                 Log.i(TAG, "my_node_num=${parsed.nodeNum}")
             }
             is FromRadioFrame.ConfigComplete -> Log.i(TAG, "config complete id=${parsed.id}")
@@ -602,23 +619,25 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
                 }
             }
             PORTNUM_ADMIN_APP -> {
-                // GAP-109 read-back — radio's response to one of our
-                // get_*_request admin messages. Only our own radio's answers
-                // count: the radio hands the phone any admin message addressed
-                // to it, so one from another node could otherwise change the
-                // draft that the next push writes.
-                val me = _myNodeNum
-                if (me == null || packet.from != me) {
-                    Log.w(TAG, "ignored an admin message from ${packet.from.toString(16)}: not our radio")
+                // GAP-109 read-back: the radio's answer to one of our get_*_request
+                // messages. The radio hands the phone any admin message addressed
+                // to it, so a packet being here is not evidence of what the radio
+                // holds. It counts only as the answer to a read of ours, from the
+                // radio itself ([AdminReads]); anything else is ignored, so
+                // nothing else reaches the cache, the settings state or a write.
+                val decision = adminReads.admit(packet, _myNodeNum)
+                val answer = decision.answer
+                if (decision.admission != AdminReads.Admission.ACCEPTED || answer == null) {
+                    Log.w(TAG, "ignored an admin message: ${decision.admission.reason}")
                     return
                 }
-                val response = AdminMessageParser.parse(packet.payload)
-                if (response != null) {
+                radioSettings.put(answer.key, answer.bytes)
+                AdminMessageParser.parse(packet.payload)?.let { response ->
                     Log.i(TAG, "RX admin response: $response")
                     report(response)
-                } else {
-                    Log.v(TAG, "RX admin packet from=${packet.from} payload=${packet.payload.size}B (unrecognised)")
                 }
+                // Last, so a write waiting for this answer goes on with the cache and the screen up to date.
+                decision.deliver()
             }
             PORTNUM_TEXT_MESSAGE_APP -> {
                 // GAP-122 — Meshtastic text message. Payload is plain UTF-8.

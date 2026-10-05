@@ -96,16 +96,45 @@ internal object AdminTestFrames {
         return ProtoMsg().bytes(4, info.build()).build()
     }
 
-    /** FromRadio.packet = 2 { from = 1, to = 2, decoded = 4 { portnum = 1, payload = 2 } }. */
-    fun packetFrame(from: Int, to: Int, portnum: Int, payload: ByteArray): ByteArray {
+    /**
+     * FromRadio.packet = 2 { from = 1, to = 2, decoded = 4 { portnum = 1, payload = 2, request_id = 6 },
+     * rx_time = 7, rx_snr = 8, rx_rssi = 12, via_mqtt = 14, hop_start = 15, transport_mechanism = 21 }.
+     *
+     * The radio's own answer to a local request has a request id and none of the receive fields, which is
+     * how it is built by default. The receive fields are there for tests of what the app refuses.
+     */
+    fun packetFrame(
+        from: Int, to: Int, portnum: Int, payload: ByteArray,
+        requestId: Int? = null,
+        rxTime: Int = 0, rxSnr: Float = 0f, rxRssi: Int = 0, viaMqtt: Boolean = false, hopStart: Int = 0,
+        transportMechanism: Int = 0,
+    ): ByteArray {
         val data = ProtoMsg().varint(1, portnum).bytes(2, payload)
+        if (requestId != null) data.fixed32(6, requestId)
         val packet = ProtoMsg().fixed32(1, from).fixed32(2, to).msg(4, data)
+        if (rxTime != 0) packet.fixed32(7, rxTime)
+        if (rxSnr != 0f) packet.fixed32(8, java.lang.Float.floatToRawIntBits(rxSnr))
+        if (rxRssi != 0) packet.varint(12, rxRssi)
+        if (viaMqtt) packet.bool(14, true)
+        if (hopStart != 0) packet.varint(15, hopStart)
+        if (transportMechanism != 0) packet.varint(21, transportMechanism)
         return ProtoMsg().msg(2, packet).build()
     }
 
     /** An admin response as the radio sends it: FromRadio.packet carrying `AdminMessage { <field> = message }`. */
-    fun adminResponseFrame(from: Int, to: Int, adminField: Int, message: ByteArray): ByteArray =
-        packetFrame(from, to, portnum = 6, payload = ProtoMsg().bytes(adminField, message).build())
+    fun adminResponseFrame(
+        from: Int, to: Int, adminField: Int, message: ByteArray,
+        requestId: Int? = null,
+        rxTime: Int = 0, rxSnr: Float = 0f, rxRssi: Int = 0, viaMqtt: Boolean = false, hopStart: Int = 0,
+        transportMechanism: Int = 0,
+    ): ByteArray = packetFrame(
+        from, to, portnum = 6, payload = ProtoMsg().bytes(adminField, message).build(),
+        requestId = requestId, rxTime = rxTime, rxSnr = rxSnr, rxRssi = rxRssi, viaMqtt = viaMqtt, hopStart = hopStart,
+        transportMechanism = transportMechanism,
+    )
+
+    /** The packet id of a ToRadio frame the app sent (MeshPacket.id, field 6): what the radio's answer quotes. */
+    fun packetIdOf(toRadio: ByteArray): Int = decode(toRadio).packet.single(6).fixed32.toInt()
 
     // endregion
 

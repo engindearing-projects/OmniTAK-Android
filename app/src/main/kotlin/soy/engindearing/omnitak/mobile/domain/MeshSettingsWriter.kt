@@ -6,8 +6,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import soy.engindearing.omnitak.mobile.data.AdminMessageSerializer
 import soy.engindearing.omnitak.mobile.data.AdminMessageSerializer.AdminWrite
+import soy.engindearing.omnitak.mobile.data.AdminReads
 import soy.engindearing.omnitak.mobile.data.AdminSetting
 import soy.engindearing.omnitak.mobile.data.AdminWriteResult
 import soy.engindearing.omnitak.mobile.data.DeviceEdits
@@ -30,10 +32,11 @@ import soy.engindearing.omnitak.mobile.data.SentLedger
  * changed ([AdminMessageSerializer]). That message is not taken from memory:
  * another client may have changed it since the app last looked (a rotated
  * channel key would be put back by the next rename). Each step asks the radio
- * for the entry it is about to patch, waits for the answer, and patches that.
- * If no answer comes within [readTimeoutMs] nothing is changed and the result
- * says so. A managed radio ignores every local admin message, reads included,
- * so it ends here too.
+ * for the entry it is about to patch, waits for the answer to that request, and
+ * patches that. The request carries its own random packet id ([AdminReads]), and
+ * only an answer that quotes it, from the radio itself, ends the wait: not
+ * whatever else arrives for the same entry. If no answer comes within
+ * [readTimeoutMs] nothing is changed and the result says so.
  *
  * A sequence runs inside `begin_edit_settings` / `commit_edit_settings`, a
  * single write included, so a transaction left open by a dropped link is
@@ -64,8 +67,9 @@ import soy.engindearing.omnitak.mobile.data.SentLedger
  *
  * Transport-free on purpose: [send] hands a framed ToRadio to whatever link is
  * up and says whether it got out, [destination] is the attached radio's node
- * number (null when there is no radio to address), and the radio's answers
- * arrive in [cache] the way every report does.
+ * number (null when there is no radio to address). The radio's answers do not
+ * come back through [send]: whoever receives frames hands each one to [reads]
+ * ([AdminReads.admit]), and an accepted answer completes the read waiting for it.
  */
 class MeshSettingsWriter(
     private val cache: RadioSettingsCache,
@@ -74,6 +78,7 @@ class MeshSettingsWriter(
     private val ledger: SentLedger = SentLedger(),
     private val frameSpacingMs: Long = ADMIN_FRAME_SPACING_MS,
     private val readTimeoutMs: Long = READ_TIMEOUT_MS,
+    private val reads: AdminReads = AdminReads(),
 ) {
     private val turn = Mutex()
 
@@ -182,19 +187,28 @@ class MeshSettingsWriter(
      */
     suspend fun readAll(): Int = turn.withLock {
         val dest = destination() ?: return@withLock 0
-        val requests = listOf(
-            AdminMessageSerializer.buildGetOwnerRequest(dest),
-            AdminMessageSerializer.buildGetConfigRequest(dest, GET_CONFIG_DEVICE),
-            AdminMessageSerializer.buildGetConfigRequest(dest, GET_CONFIG_POSITION),
-            AdminMessageSerializer.buildGetConfigRequest(dest, GET_CONFIG_LORA),
-        ) + (0 until RadioSettingsCache.MAX_CHANNELS).map { AdminMessageSerializer.buildGetChannelRequest(dest, it) }
+        val keys = listOf(Key.Owner, Key.Config(RadioSettingsCache.CONFIG_DEVICE), Key.Config(RadioSettingsCache.CONFIG_POSITION),
+            Key.Config(RadioSettingsCache.CONFIG_LORA)) + (0 until RadioSettingsCache.MAX_CHANNELS).map { Key.Channel(it) }
         var sent = 0
-        for (request in requests) {
+        for (key in keys) {
             if (sent > 0 && frameSpacingMs > 0) delay(frameSpacingMs)
-            if (!send(request)) break
+            // Each request is recorded, so the radio's answer to it is recognised when it comes.
+            val request = reads.open(key, readTimeoutMs)
+            if (!send(readRequest(dest, key, request.id))) {
+                reads.cancel(request.id)
+                break
+            }
             sent++
         }
         sent
+    }
+
+    /** The ToRadio frame that asks the radio for [key], with [id] as its packet id. */
+    private fun readRequest(dest: UInt, key: Key, id: UInt): ByteArray = when (key) {
+        // Config variants are numbered from 1 in the oneof and from 0 in ConfigType.
+        is Key.Config -> AdminMessageSerializer.buildGetConfigRequest(dest, key.variant - 1, id)
+        is Key.Channel -> AdminMessageSerializer.buildGetChannelRequest(dest, key.index, id)
+        Key.Owner -> AdminMessageSerializer.buildGetOwnerRequest(dest, id)
     }
 
     // region One sequence ---------------------------------------------------------
@@ -294,34 +308,37 @@ class MeshSettingsWriter(
             return null
         }
 
-        /** Ask the radio for [key] and wait for its answer: the entry is dropped first, so only a newer one counts. */
+        /**
+         * Ask the radio for [key] and wait for the answer to this request. The request has a packet id of its own,
+         * and only an answer that quotes it ([AdminReads.admit]) ends the wait, with that answer's own bytes: an
+         * older answer for the same entry, or anything else that arrives meanwhile, does not.
+         */
         private suspend fun read(key: Key): ByteArray? {
-            cache.remove(key)
-            val request = when (key) {
-                // Config variants are numbered from 1 in the oneof and from 0 in ConfigType.
-                is Key.Config -> AdminMessageSerializer.buildGetConfigRequest(dest, key.variant - 1)
-                is Key.Channel -> AdminMessageSerializer.buildGetChannelRequest(dest, key.index)
-                Key.Owner -> AdminMessageSerializer.buildGetOwnerRequest(dest)
-            }
-            if (!frame(request)) {
+            pace()
+            val request = reads.open(key, readTimeoutMs, awaited = true)
+            if (!send(readRequest(dest, key, request.id))) {
+                reads.cancel(request.id)
                 stop = Stop.LINK
                 return null
             }
-            var waited = 0L
-            while (true) {
-                cache.get(key)?.let { return it }
-                if (waited >= readTimeoutMs) break
-                delay(POLL_MS)
-                waited += POLL_MS
+            val answer = withTimeoutOrNull(readTimeoutMs) { request.answer?.await() }
+            reads.cancel(request.id)
+            if (answer == null) {
+                stop = Stop.NO_ANSWER
+                return null
             }
-            stop = Stop.NO_ANSWER
-            return null
+            return answer
+        }
+
+        /** Wait out the gap that follows a frame sent before this one, and count this one. */
+        private suspend fun pace() {
+            if (framesSent > 0 && frameSpacingMs > 0) delay(frameSpacingMs)
+            framesSent++
         }
 
         /** Send one frame, a frame gap after the one before. */
         private suspend fun frame(bytes: ByteArray): Boolean {
-            if (framesSent > 0 && frameSpacingMs > 0) delay(frameSpacingMs)
-            framesSent++
+            pace()
             return send(bytes)
         }
 
@@ -384,13 +401,7 @@ class MeshSettingsWriter(
         /** How long a read waits for the radio's answer before the write is refused. */
         const val READ_TIMEOUT_MS = 3_000L
 
-        private const val POLL_MS = 20L
         private const val MAX_INTERVAL_SECS = 24 * 60 * 60
-
-        // ConfigType (admin.proto) numbers for get_config_request.
-        private const val GET_CONFIG_DEVICE = 0
-        private const val GET_CONFIG_POSITION = 1
-        private const val GET_CONFIG_LORA = 5
 
         private const val CHANNEL_ROLE = 3 // Channel.role (channel.proto)
     }

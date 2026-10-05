@@ -30,9 +30,14 @@ internal class FakeRadio(
     var inTransaction = false
     var onSetConfig: (variant: Int, radio: FakeRadio) -> Unit = { _, _ -> }
 
-    /** Handle one ToRadio frame. [deliver] gets each AdminMessage the radio answers with. */
-    fun handle(frame: ByteArray, deliver: (ByteArray) -> Unit) {
-        val admin = AdminTestFrames.decode(frame).admin
+    /**
+     * Handle one ToRadio frame. [deliver] gets each AdminMessage the radio answers with, and the id of the
+     * request it answers (a radio quotes the packet id of the request in `Data.request_id`).
+     */
+    fun handle(frame: ByteArray, deliver: (admin: ByteArray, requestId: UInt) -> Unit) {
+        val decoded = AdminTestFrames.decode(frame)
+        val admin = decoded.admin
+        val requestId = decoded.packet.single(6).fixed32
         val field = admin.first()
         val name = when (field.number) {
             1 -> "get_channel:${field.varint.toInt() - 1}"
@@ -49,11 +54,11 @@ internal class FakeRadio(
         if (!answers) return
 
         when (field.number) {
-            1 -> deliver(ProtoMsg().bytes(2, channels[field.varint.toInt() - 1] ?: ByteArray(0)).build())
-            3 -> deliver(ProtoMsg().bytes(4, owner).build())
+            1 -> deliver(ProtoMsg().bytes(2, channels[field.varint.toInt() - 1] ?: ByteArray(0)).build(), requestId)
+            3 -> deliver(ProtoMsg().bytes(4, owner).build(), requestId)
             5 -> {
                 val variant = field.varint.toInt() + 1
-                deliver(ProtoMsg().msg(6, ProtoMsg().bytes(variant, config[variant] ?: ByteArray(0))).build())
+                deliver(ProtoMsg().msg(6, ProtoMsg().bytes(variant, config[variant] ?: ByteArray(0))).build(), requestId)
             }
             32 -> owner = applyOwner(owner, field.bytes)
             33 -> {

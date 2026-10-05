@@ -83,9 +83,9 @@ class RadioSettingsCacheTest {
         feed(cache, configFrame(4, network))
         assertEquals("nothing was stored from the download frames", 0, cache.size)
 
-        // In the answer to a get_config_request.
-        feed(cache, adminResponseFrame(from = me, to = me, adminField = 6, message = ProtoMsg().bytes(8, security).build()))
-        feed(cache, adminResponseFrame(from = me, to = me, adminField = 6, message = ProtoMsg().bytes(4, network).build()))
+        // In the answer to a get_config_request: a mesh packet is not taken by the cache at all.
+        feed(cache, adminResponseFrame(from = me, to = me, adminField = 6, message = ProtoMsg().bytes(8, security).build(), requestId = 7))
+        feed(cache, adminResponseFrame(from = me, to = me, adminField = 6, message = ProtoMsg().bytes(4, network).build(), requestId = 7))
         assertEquals("nothing was stored from the admin responses", 0, cache.size)
 
         // And not by being handed over directly.
@@ -153,55 +153,28 @@ class RadioSettingsCacheTest {
 
     // endregion
 
-    // region admin responses -------------------------------------------------
+    // region mesh packets ---------------------------------------------------
 
-    @Test fun `get_config_response, get_channel_response and get_owner_response all feed the cache`() {
+    @Test fun `a mesh packet never reaches the cache by itself, an admin response included`() {
+        // The radio hands the phone any admin message addressed to it, so a packet is not evidence of what the
+        // radio holds. The only way in for an answer is put, after the manager has applied the read-back rule.
         val cache = RadioSettingsCache()
-        feed(cache, adminResponseFrame(from = me, to = me, adminField = 6, message = ProtoMsg().bytes(2, positionConfig(60)).build()))
-        feed(cache, adminResponseFrame(from = me, to = me, adminField = 2, message = channelMessage(index = 3, name = "Local", role = 2)))
-        feed(cache, adminResponseFrame(from = me, to = me, adminField = 4, message = userMessage(longName = "Reply Name")))
-
-        assertSame("position", positionConfig(60), cache.config(2))
-        assertSame("channel 3", channelMessage(index = 3, name = "Local", role = 2), cache.channel(3))
-        assertSame("owner", userMessage(longName = "Reply Name"), cache.owner())
+        for (from in listOf(me, other)) {
+            for (id in listOf(null, 7)) {
+                feed(cache, adminResponseFrame(from = from, to = me, adminField = 6, message = ProtoMsg().bytes(6, loraConfig()).build(), requestId = id))
+                feed(cache, adminResponseFrame(from = from, to = me, adminField = 4, message = userMessage(), requestId = id))
+                feed(cache, adminResponseFrame(from = from, to = me, adminField = 2, message = channelMessage(), requestId = id))
+            }
+        }
+        feed(cache, packetFrame(from = me, to = me, portnum = 1, payload = ByteArray(3)))
+        assertEquals(0, cache.size)
     }
 
-    @Test fun `a later response replaces what the download said`() {
+    @Test fun `put replaces what the download said`() {
         val cache = RadioSettingsCache()
         feed(cache, configFrame(6, loraConfig(preset = 6)))
-        feed(cache, adminResponseFrame(from = me, to = me, adminField = 6, message = ProtoMsg().bytes(6, loraConfig(preset = 4)).build()))
+        assertTrue(cache.put(RadioSettingsCache.Key.Config(6), loraConfig(preset = 4)))
         assertSame("lora", loraConfig(preset = 4), cache.config(6))
-    }
-
-    @Test fun `an admin message from another node is not taken as the radio's own settings`() {
-        // The radio hands the phone anything addressed to it. A response that does not come from our node
-        // must not become the base of the next write.
-        val cache = RadioSettingsCache()
-        feed(cache, adminResponseFrame(from = other, to = me, adminField = 6, message = ProtoMsg().bytes(6, loraConfig(region = 0)).build()))
-        feed(cache, adminResponseFrame(from = other, to = me, adminField = 4, message = userMessage()))
-        feed(cache, adminResponseFrame(from = other, to = me, adminField = 2, message = channelMessage()))
-        assertEquals(0, cache.size)
-    }
-
-    @Test fun `an admin response is ignored until the radio has reported its node number`() {
-        val cache = RadioSettingsCache()
-        feed(cache, adminResponseFrame(from = me, to = me, adminField = 6, message = ProtoMsg().bytes(6, loraConfig()).build()), myNodeNum = null)
-        assertEquals(0, cache.size)
-    }
-
-    @Test fun `a packet on another port is not an admin response`() {
-        val cache = RadioSettingsCache()
-        val payload = ProtoMsg().bytes(6, ProtoMsg().bytes(6, loraConfig()).build()).build()
-        feed(cache, packetFrame(from = me, to = me, portnum = 1, payload = payload))
-        assertEquals(0, cache.size)
-    }
-
-    @Test fun `an admin message that is not a response, or is damaged, leaves the cache alone`() {
-        val cache = RadioSettingsCache()
-        feed(cache, adminResponseFrame(from = me, to = me, adminField = 34, message = ProtoMsg().bytes(6, loraConfig()).build()))
-        assertEquals("a set_config echo is not a response", 0, cache.size)
-        assertFalse(cache.ingestAdminMessage(byteArrayOf(0x32, 0x7f, 0x01)))
-        assertEquals(0, cache.size)
     }
 
     // endregion

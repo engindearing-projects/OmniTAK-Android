@@ -20,13 +20,15 @@ package soy.engindearing.omnitak.mobile.data
  *  - the radio's own User record.
  *
  * Filled from the config download (`FromRadio.config`, `FromRadio.channel`,
- * and the `FromRadio.node_info` that carries our own node number) and from the
- * admin responses to `get_*_request`. Emptied when the link drops and when a
- * new download starts, so a write can never start from another session's, or
- * another radio's, settings. It holds what the radio said and nothing else:
- * what the app sent is not put here as if the radio had accepted it. A write
- * asks the radio for the entry it is about to patch (removing the old copy
- * first) and takes the answer, so what it patches is current.
+ * and the `FromRadio.node_info` that carries our own node number), which are
+ * not mesh packets, and by [put] with the answers [AdminReads] has accepted
+ * as the radio's own reply to a read of ours. A mesh packet never reaches the
+ * cache by itself: [onFromRadio] ignores them. Emptied when the link drops and
+ * when a new download starts, so nothing here is another session's, or another
+ * radio's, settings. It holds what the radio said and nothing else: what the
+ * app sent is not put here as if the radio had accepted it. A write does not
+ * patch what is stored here, which may be old: it asks the radio for the entry
+ * it is about to patch and patches the answer to that request.
  *
  * Only what the app patches is kept. Everything else in the download is
  * dropped as it arrives, the security config (the radio's private key) and the
@@ -89,12 +91,12 @@ class RadioSettingsCache {
      * Take what one frame from the radio has to say. Safe to call with every
      * frame: anything that is not a settings frame is ignored.
      *
-     * [myNodeNum] is the node number the radio reported in `my_info`. A
-     * NodeInfo only counts when it is ours, and an admin response only when it
-     * claims to come from our own node: the radio forwards any packet addressed
-     * to us to the phone, so another node could send an admin message that
-     * looks like a settings response, and the next write would carry it back to
-     * the radio.
+     * [myNodeNum] is the node number the radio reported in `my_info`; a NodeInfo
+     * only counts when it is ours. Mesh packets (`FromRadio.packet`) are not
+     * taken here, admin responses included: the radio forwards the phone any
+     * packet addressed to this node, so a packet is not evidence of what the
+     * radio holds. The one way in for an admin response is the manager, after
+     * [AdminReads.admit] has accepted it as the answer to a read of ours.
      */
     fun onFromRadio(frame: FromRadioFrame, myNodeNum: UInt?) {
         when (frame) {
@@ -108,13 +110,7 @@ class RadioSettingsCache {
                     put(Key.Owner, user)
                 }
             }
-            is FromRadioFrame.Packet -> {
-                val packet = frame.packet
-                if (packet.portnum == PORTNUM_ADMIN_APP && myNodeNum != null && packet.from == myNodeNum) {
-                    ingestAdminMessage(packet.payload)
-                }
-            }
-            is FromRadioFrame.ConfigComplete, FromRadioFrame.Unknown -> Unit
+            is FromRadioFrame.Packet, is FromRadioFrame.ConfigComplete, FromRadioFrame.Unknown -> Unit
         }
     }
 
@@ -141,21 +137,6 @@ class RadioSettingsCache {
         return put(Key.Channel(index.toInt()), channel)
     }
 
-    /** An `AdminMessage` payload: store whichever of its three `get_*_response` variants it carries. */
-    fun ingestAdminMessage(admin: ByteArray): Boolean {
-        val fields = ProtoFields.parse(admin) ?: return false
-        var stored = false
-        for (field in fields) {
-            val inner = field.bytes() ?: continue
-            when (field.number) {
-                ADMIN_GET_CHANNEL_RESPONSE -> if (ingestChannel(inner)) stored = true
-                ADMIN_GET_OWNER_RESPONSE -> if (put(Key.Owner, inner)) stored = true
-                ADMIN_GET_CONFIG_RESPONSE -> if (ingestConfig(inner)) stored = true
-            }
-        }
-        return stored
-    }
-
     /** Counts and keys only, never contents. Safe to log. */
     override fun toString(): String = synchronized(lock) {
         val configs = entries.keys.filterIsInstance<Key.Config>().map { it.variant }.sorted()
@@ -170,18 +151,11 @@ class RadioSettingsCache {
         const val CONFIG_LORA = 6
 
         /** The only Config variants the cache keeps: the ones the app patches. */
-        private val PATCHED_CONFIGS = setOf(CONFIG_DEVICE, CONFIG_POSITION, CONFIG_LORA)
+        internal val PATCHED_CONFIGS = setOf(CONFIG_DEVICE, CONFIG_POSITION, CONFIG_LORA)
 
         /** Firmware slot count; a Channel index past it is not a real channel. */
         const val MAX_CHANNELS = 8
 
         private const val CHANNEL_INDEX = 1 // Channel.index
-
-        // AdminMessage (admin.proto): the three responses that carry a settings message.
-        private const val ADMIN_GET_CHANNEL_RESPONSE = 2
-        private const val ADMIN_GET_OWNER_RESPONSE = 4
-        private const val ADMIN_GET_CONFIG_RESPONSE = 6
-
-        private const val PORTNUM_ADMIN_APP = 6u
     }
 }

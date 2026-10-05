@@ -54,7 +54,9 @@ class MeshtasticManagerRadioSettingsTest {
         val frames = mutableListOf<ByteArray>()
         val send: suspend (ByteArray) -> Boolean = { frame ->
             frames += frame
-            radio.handle(frame) { admin -> mgr.dispatchFrame(AdminTestFrames.packetFrame(from = from, to = from, portnum = 6, payload = admin)) }
+            radio.handle(frame) { admin, id ->
+                mgr.dispatchFrame(AdminTestFrames.packetFrame(from = from, to = from, portnum = 6, payload = admin, requestId = id.toInt()))
+            }
             true
         }
     }
@@ -130,41 +132,23 @@ class MeshtasticManagerRadioSettingsTest {
         assertEquals(AdminResponse.LoraConfig(MeshChannelPreset.LONG_FAST, MeshRegion.US), seen[2])
     }
 
-    @Test fun `an admin response from our radio updates the cache and reaches the store`() {
-        val (mgr, _) = connected()
+    @Test fun `the radio's answers to a read of ours update the cache and reach the store`() = runBlocking {
+        val (mgr, link) = connected()
+        link.radio.config[6] = loraConfig(preset = 4, region = 3) // another client changed the LoRa config since the download
         val seen = mutableListOf<AdminResponse>()
         mgr.adminResponseSink = { seen += it }
 
-        mgr.dispatchFrame(
-            adminResponseFrame(from = me, to = me, adminField = 6, message = ProtoMsg().bytes(6, loraConfig(preset = 4, region = 3)).build()),
-        )
+        mgr.requestDeviceConfig()
 
         assertTrue(loraConfig(preset = 4, region = 3).contentEquals(mgr.radioSettings.config(6)))
-        assertEquals(listOf<AdminResponse>(AdminResponse.LoraConfig(MeshChannelPreset.MEDIUM_FAST, MeshRegion.EU_868)), seen)
-    }
-
-    @Test fun `an admin response from another node changes neither the cache nor the store`() {
-        // The radio hands the phone any admin message addressed to it. One from another node must not become
-        // the draft that the next push writes, or the chat titles.
-        val (mgr, _) = connected()
-        val seen = mutableListOf<AdminResponse>()
-        mgr.adminResponseSink = { seen += it }
-        val loraBefore = mgr.radioSettings.config(6)!!.copyOf()
-
-        mgr.dispatchFrame(adminResponseFrame(from = other, to = me, adminField = 6, message = ProtoMsg().bytes(6, loraConfig(region = 0)).build()))
-        mgr.dispatchFrame(adminResponseFrame(from = other, to = me, adminField = 2, message = channelMessage(name = "Evil")))
-        mgr.dispatchFrame(adminResponseFrame(from = other, to = me, adminField = 4, message = userMessage(longName = "Evil")))
-        mgr.dispatchFrame(adminResponseFrame(from = 0, to = me, adminField = 6, message = ProtoMsg().bytes(1, deviceConfig(role = 2)).build()))
-
-        assertTrue("the sink heard nothing: $seen", seen.isEmpty())
-        assertTrue(loraBefore.contentEquals(mgr.radioSettings.config(6)))
+        assertTrue("the LoRa answer reached the store: $seen", AdminResponse.LoraConfig(MeshChannelPreset.MEDIUM_FAST, MeshRegion.EU_868) in seen)
     }
 
     @Test fun `an admin response before the radio has said who it is is ignored`() {
         val mgr = MeshtasticManager()
         val seen = mutableListOf<AdminResponse>()
         mgr.adminResponseSink = { seen += it }
-        mgr.dispatchFrame(adminResponseFrame(from = me, to = me, adminField = 2, message = channelMessage(name = "Early")))
+        mgr.dispatchFrame(adminResponseFrame(from = me, to = me, adminField = 2, message = channelMessage(name = "Early"), requestId = 7))
         assertTrue(seen.isEmpty())
     }
 
@@ -333,7 +317,7 @@ class MeshtasticManagerRadioSettingsTest {
         assertNull("nothing to say yet: the radio has not reported", mgr.settingsNotice.value)
 
         // The re-read after the push (or the download after the radio restarts) reports the role.
-        mgr.dispatchFrame(adminResponseFrame(from = me, to = me, adminField = 6, message = ProtoMsg().bytes(1, original).build()))
+        mgr.requestDeviceConfig()
 
         assertEquals("The radio did not take: role. It may be managed.", mgr.settingsNotice.value)
         mgr.clearSettingsNotice()
@@ -344,7 +328,7 @@ class MeshtasticManagerRadioSettingsTest {
         val (mgr, link) = connected()
         mgr.pushDeviceConfig(DeviceEdits(role = MeshRole.TAK))
 
-        mgr.dispatchFrame(adminResponseFrame(from = me, to = me, adminField = 6, message = ProtoMsg().bytes(1, link.radio.config.getValue(1)).build()))
+        mgr.requestDeviceConfig()
 
         assertNull(mgr.settingsNotice.value)
     }
@@ -396,7 +380,7 @@ class MeshtasticManagerRadioSettingsTest {
         assertEquals(sent, mgr.lastPushResult.value)
 
         // The re-read right after the push says the radio kept its role.
-        mgr.dispatchFrame(adminResponseFrame(from = me, to = me, adminField = 6, message = ProtoMsg().bytes(1, original).build()))
+        mgr.requestDeviceConfig()
         assertEquals(note, mgr.settingsNotice.value)
 
         // Then the radio restarts to save the push, and over TCP the link drops with it.
