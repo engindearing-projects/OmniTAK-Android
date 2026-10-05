@@ -15,6 +15,7 @@ import com.google.android.gms.location.Priority
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 
 data class SelfFix(
     val lat: Double,
@@ -23,6 +24,13 @@ data class SelfFix(
     val speedKmh: Double,
     val accuracyM: Float,
     val timeMs: Long,
+    /** #205 - true only for the fix replayed from DataStore at cold start
+     *  ([SelfFixPersistence.restoredFixOrNull]). The map draws it (stale-marked)
+     *  but it must never go out as PPLI: the wire stamps time=now, so a restored
+     *  position would read as a fresh one. A live fix always replaces it
+     *  ([SelfFixPersistence.newerOf]). Defaults to false so every real GPS fix,
+     *  manual drop and test fixture is live without saying so. */
+    val restored: Boolean = false,
 )
 
 class LocationProvider(private val context: Context) {
@@ -93,6 +101,10 @@ class LocationProvider(private val context: Context) {
      * until GPS reacquires. Newer-wins: a live fix that has already
      * arrived is never replaced by the (older) persisted seed. No
      * permission required — this only replays a position we recorded.
+     *
+     * #205 - the seed arrives flagged [SelfFix.restored]
+     * ([SelfFixPersistence.restoredFixOrNull]): it is drawn, but PPLI holds
+     * until a live fix replaces it.
      */
     fun seedFromPersisted(persisted: SelfFix) {
         offerFix(persisted)
@@ -125,9 +137,15 @@ class LocationProvider(private val context: Context) {
     }
 
     /** Single write gate for [_fix]: an incoming fix only lands if it is
-     *  at least as recent as the current one (issue #75 newer-wins). */
+     *  at least as recent as the current one (issue #75 newer-wins), and a
+     *  live fix always beats a restored one (#205, see
+     *  [SelfFixPersistence.newerOf]). update{} makes the read-merge-write
+     *  atomic: the restored seed is offered from appScope (Default
+     *  dispatcher) while GPS callbacks land on the main looper, and a plain
+     *  `value = newerOf(value, ..)` could let the seed overwrite a live fix
+     *  that arrived between the read and the write. */
     private fun offerFix(candidate: SelfFix) {
-        _fix.value = SelfFixPersistence.newerOf(_fix.value, candidate)
+        _fix.update { current -> SelfFixPersistence.newerOf(current, candidate) }
     }
 
     private fun hasPermission(): Boolean {

@@ -1,6 +1,8 @@
 package soy.engindearing.omnitak.mobile.data
 
 import android.content.Context
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
@@ -47,10 +49,13 @@ data class UserPrefs(
     // that it never changes so TAK servers see a stable contact across
     // restarts. iOS uses the same convention with an `IOS-` prefix.
     val selfUid: String = "",
-    // Self-position used for PPLI broadcast. NaN sentinels mean "no fix
-    // yet" — GAP-030b wires real GPS via FusedLocationProviderClient
-    // (LocationProvider) and the broadcaster suppresses PPLI until a
-    // real fix arrives, fixing issue #10 (HUD showing San Francisco).
+    // Last persisted GPS fix (lat/lon here, hae + time below). NaN sentinels
+    // mean "never persisted" — GAP-030b wires real GPS via
+    // FusedLocationProviderClient (LocationProvider). #205 - this is ONLY the
+    // store the map's restored seed is rebuilt from
+    // (SelfFixPersistence.restoredFixOrNull): PPLI never reads it and holds
+    // until a live fix arrives (issue #10: HUD showing San Francisco; #205:
+    // a stale position broadcast after a restart).
     val selfLat: Double = Double.NaN,
     val selfLon: Double = Double.NaN,
     // Issue #75 — the rest of the persisted self-fix. Together with
@@ -178,6 +183,22 @@ data class UserPrefs(
      *  the point goes stale (fresh <1m full opacity, aging 1–5m, stale >5m). Off
      *  by default — opt-in so the default map look is unchanged. */
     val stalenessOverlayEnabled: Boolean = false,
+    /** #212: relay mesh → server: what the mesh hears is also sent up to the TAK
+     *  server(s) while a server AND a mesh are both connected. Off by default.
+     *  Until the operator first changes a pref it takes the legacy
+     *  [relayGatewayEnabled] value (see [resolveRelayDirection]). */
+    val relayToServerEnabled: Boolean = false,
+    /** #212: relay server → mesh: server contacts are also sent down onto the
+     *  mesh radio. Spends LoRa airtime, so off by default and hard-throttled
+     *  (see [MeshServerRelay]). Takes the legacy [relayGatewayEnabled] value
+     *  until first written. Forced off in effect while MeshCore is the active
+     *  mesh ([MeshServerRelay.RelayDirections.effective]); the stored choice is
+     *  kept. */
+    val relayToMeshEnabled: Boolean = false,
+    // #212: [relayGatewayEnabled] below is superseded by the two direction
+    // switches above. It is kept for ONE release (read, and written back
+    // unchanged; nothing else reads it) as the migration fallback for their
+    // keys. Delete it, its key and the fallback in resolveRelayDirection after.
     /** #179 — relay/gateway mode. When on AND the device is connected to BOTH a
      *  TAK server and a mesh, CoT is bridged both ways: mesh-only nodes appear
      *  server-side and server contacts reach the mesh (ATAK Meshtastic-gateway
@@ -186,7 +207,12 @@ data class UserPrefs(
     val relayGatewayEnabled: Boolean = false,
 )
 
-class UserPrefsStore(private val context: Context) {
+class UserPrefsStore internal constructor(private val dataStore: DataStore<Preferences>) {
+    // The public entry point stays `UserPrefsStore(context)`; the DataStore
+    // constructor exists so unit tests can run the store against a
+    // file-backed DataStore on the JVM (no Context needed).
+    constructor(context: Context) : this(context.userPrefsDataStore)
+
     private val KEY_CALLSIGN = stringPreferencesKey("callsign")
     private val KEY_TEAM = stringPreferencesKey("team")
     private val KEY_ECHELON = stringPreferencesKey("echelon")
@@ -235,12 +261,16 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_KEEP_SCREEN_ON  = booleanPreferencesKey("keep_screen_on")
     private val KEY_SELF_MARKER_TRIANGLE = booleanPreferencesKey("selfMarkerTriangle")
     private val KEY_STALENESS_OVERLAY = booleanPreferencesKey("staleness_overlay_enabled")
+    // #212: one switch per relay direction. KEY_RELAY_GATEWAY below is the
+    // pre-split single switch: the fallback for these two, kept for one release.
+    private val KEY_RELAY_TO_SERVER = booleanPreferencesKey("relay_to_server_enabled")
+    private val KEY_RELAY_TO_MESH = booleanPreferencesKey("relay_to_mesh_enabled")
     private val KEY_RELAY_GATEWAY = booleanPreferencesKey("relay_gateway_enabled")
 
-    val prefs: Flow<UserPrefs> = context.userPrefsDataStore.data.map { p -> readFrom(p) }
+    val prefs: Flow<UserPrefs> = dataStore.data.map { p -> readFrom(p) }
 
     suspend fun update(block: (UserPrefs) -> UserPrefs) {
-        context.userPrefsDataStore.edit { p ->
+        dataStore.edit { p ->
             val next = block(readFrom(p))
             p[KEY_CALLSIGN] = next.callsign
             p[KEY_TEAM] = next.team
@@ -288,6 +318,8 @@ class UserPrefsStore(private val context: Context) {
             p[KEY_KEEP_SCREEN_ON]  = next.keepScreenOn
             p[KEY_SELF_MARKER_TRIANGLE] = next.selfMarkerTriangle
             p[KEY_STALENESS_OVERLAY] = next.stalenessOverlayEnabled
+            p[KEY_RELAY_TO_SERVER] = next.relayToServerEnabled
+            p[KEY_RELAY_TO_MESH] = next.relayToMeshEnabled
             p[KEY_RELAY_GATEWAY] = next.relayGatewayEnabled
         }
     }
@@ -359,9 +391,14 @@ class UserPrefsStore(private val context: Context) {
         update { it.copy(selectedMeshFramework = value) }
     }
 
-    /** #179 — persist the mesh↔server relay/gateway toggle (default off). */
-    suspend fun setRelayGatewayEnabled(value: Boolean) {
-        update { it.copy(relayGatewayEnabled = value) }
+    /** #212: persist the mesh → server relay switch (default off). */
+    suspend fun setRelayToServerEnabled(value: Boolean) {
+        update { it.copy(relayToServerEnabled = value) }
+    }
+
+    /** #212: persist the server → mesh relay switch (default off). */
+    suspend fun setRelayToMeshEnabled(value: Boolean) {
+        update { it.copy(relayToMeshEnabled = value) }
     }
 
     /**
@@ -375,11 +412,25 @@ class UserPrefsStore(private val context: Context) {
      * been minting since 0.1; existing installs keep their value.
      */
     suspend fun ensureSelfUid(): String {
-        val current = prefs.first()
-        if (current.selfUid.isNotBlank()) return current.selfUid
-        val generated = "ANDROID-${java.util.UUID.randomUUID()}"
-        update { it.copy(selfUid = generated) }
-        return generated
+        // Fast path: once a uid exists it never changes, a plain read is enough.
+        prefs.first().selfUid.takeIf { it.isNotBlank() }?.let { return it }
+        // #205 - read AND write inside ONE DataStore edit. Several first-run
+        // callers can ask at the same moment (the PPLI broadcaster when a link
+        // comes up, the chat screen, a marker drop, mission sync). Reading
+        // outside the edit let each of them see "blank", mint its own uuid and
+        // return it, while only the last writer's uid stayed on disk. edit{}
+        // calls are serialized, so the second caller finds the first one's uid.
+        var uid = ""
+        dataStore.edit { p ->
+            val existing = p[KEY_SELF_UID].orEmpty()
+            if (existing.isNotBlank()) {
+                uid = existing
+            } else {
+                uid = "ANDROID-${java.util.UUID.randomUUID()}"
+                p[KEY_SELF_UID] = uid
+            }
+        }
+        return uid
     }
 
     private fun readFrom(p: androidx.datastore.preferences.core.Preferences): UserPrefs = UserPrefs(
@@ -432,6 +483,8 @@ class UserPrefsStore(private val context: Context) {
         keepScreenOn   = p[KEY_KEEP_SCREEN_ON]  ?: false,
         selfMarkerTriangle = p[KEY_SELF_MARKER_TRIANGLE] ?: false,
         stalenessOverlayEnabled = p[KEY_STALENESS_OVERLAY] ?: false,
+        relayToServerEnabled = resolveRelayDirection(p[KEY_RELAY_TO_SERVER], p[KEY_RELAY_GATEWAY]),
+        relayToMeshEnabled = resolveRelayDirection(p[KEY_RELAY_TO_MESH], p[KEY_RELAY_GATEWAY]),
         relayGatewayEnabled = p[KEY_RELAY_GATEWAY] ?: false,
     )
 

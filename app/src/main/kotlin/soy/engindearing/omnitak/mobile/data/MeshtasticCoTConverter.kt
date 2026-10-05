@@ -64,6 +64,11 @@ object MeshtasticCoTConverter {
             callsign = callsign,
             remarks = remarks,
             rawXml = xml,
+            // The map's age label and fade read this. A node-list entry can be
+            // days old, so use when the radio last heard the node (capped at now
+            // for clock skew), not when we read the list. 0 when unknown, which
+            // ContactStore stamps with the receive time.
+            receivedAtMs = node.lastHeardEpoch?.let { minOf(it * 1_000L, nowMs) } ?: 0L,
         )
     }
 
@@ -82,7 +87,7 @@ object MeshtasticCoTConverter {
         val sb = StringBuilder("Meshtastic Node | ID: !${node.idHex}")
         node.snr?.let { sb.append(" | SNR: ${"%.1f".format(it)}dB") }
         node.hopDistance?.let { sb.append(" | Hops: $it") }
-        node.batteryLevel?.let { sb.append(" | Bat: $it%") }
+        node.batteryLabel?.let { sb.append(" | Bat: $it") }
         return sb.toString()
     }
 
@@ -100,7 +105,7 @@ object MeshtasticCoTConverter {
         val nodeIdUpper = "%08X".format(node.id.toInt())
         val shortEsc = escape(node.shortName)
         val longEsc = escape(callsign)
-        val lastHeardIso = CotXml.isoMillis(node.lastHeardEpoch * 1_000L)
+        val lastHeardIso = node.lastHeardEpoch?.let { CotXml.isoMillis(it * 1_000L) }
         val snr = node.snr ?: 0.0
         val hops = node.hopDistance ?: 0
         val battery = node.batteryLevel ?: -1
@@ -120,7 +125,7 @@ object MeshtasticCoTConverter {
             append("<snr>$snr</snr>")
             append("<hop_distance>$hops</hop_distance>")
             append("<battery>$battery</battery>")
-            append("<last_heard>$lastHeardIso</last_heard>")
+            if (lastHeardIso != null) append("<last_heard>$lastHeardIso</last_heard>")
             append("</__meshtastic__>")
             append("<takv device=\"Meshtastic\" platform=\"OmniTAK\" os=\"Android\" version=\"${soy.engindearing.omnitak.mobile.BuildConfig.VERSION_NAME}\"/>")
             append("</detail>")

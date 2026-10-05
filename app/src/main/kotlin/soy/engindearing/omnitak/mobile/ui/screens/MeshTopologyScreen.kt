@@ -285,9 +285,9 @@ private fun TopologyRow(node: MeshNode, isOwnNode: Boolean) {
                     fontFamily = FontFamily.Monospace,
                 )
             }
-            node.batteryLevel?.let {
+            node.batteryLabel?.let {
                 Text(
-                    "Bat $it%",
+                    "Bat $it",
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
                     style = MaterialTheme.typography.labelSmall,
                     fontFamily = FontFamily.Monospace,
@@ -310,8 +310,9 @@ private fun hopColor(hops: Int): Color = when {
     else -> Color(0xFFFF3B30)        // red — distant
 }
 
-fun relativeTime(epochSeconds: Long, nowMs: Long = System.currentTimeMillis()): String {
-    if (epochSeconds <= 0) return "—"
+fun relativeTime(epochSeconds: Long?, nowMs: Long = System.currentTimeMillis()): String {
+    // Unknown (null, or the 0 the firmware sends for "never heard") reads as a dash.
+    if (epochSeconds == null || epochSeconds <= 0) return "—"
     val seconds = (nowMs / 1_000) - epochSeconds
     return when {
         seconds < 0 -> "just now"

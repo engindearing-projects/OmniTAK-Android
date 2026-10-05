@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayOutputStream
 import soy.engindearing.omnitak.mobile.data.AdminMessageParser
 import soy.engindearing.omnitak.mobile.data.AdminMessageSerializer
@@ -162,7 +163,12 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
                 if (current is ConnectionState.Connected || current is ConnectionState.Connecting) continue
                 _reconnectAttempt.value += 1
                 Log.i(TAG, "BLE auto-reconnect: retrying $target (attempt ${_reconnectAttempt.value})")
-                connectBle(target)
+                // #203 — one attempt must never be able to end the loop. The
+                // BLE client bounds every wait it makes, so this cap should
+                // never fire; it is here so that a wait which does hang costs
+                // one attempt instead of all of them.
+                val finished = withTimeoutOrNull(BLE_RECONNECT_ATTEMPT_CAP_MS) { connectBle(target) }
+                if (finished == null) Log.w(TAG, "BLE auto-reconnect: attempt ${_reconnectAttempt.value} did not finish, moving on")
             }
         }
     }
@@ -267,18 +273,40 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
         frameCollector = scope.launch {
             client.frames.collect { frame -> dispatchFrame(frame) }
         }
-        val ok = client.connectToAddress(deviceAddress)
-        if (ok) {
-            // #203 — a successful connect (manual tap or automatic retry)
-            // means whatever streak of failures preceded it is over.
-            _reconnectAttempt.value = 0
-            // Critical Meshtastic handshake: ask the radio to dump its
-            // config + node database. Without this the radio doesn't
-            // push any state and the node list stays empty.
-            client.sendToRadio(buildWantConfig())
-            Log.i(TAG, "TX want_config_id (BLE)")
+        // The handshake rides on the connect: ask the radio to dump its
+        // config + node database. Without it the radio doesn't push any state
+        // and the node list stays empty, so the client does not keep a session
+        // it could not deliver it on.
+        var result = client.connect(deviceAddress, handshake = buildWantConfig())
+        // #203 — a connect that died on a Bluetooth stack error before the
+        // link was up (status 133 and its relatives) usually works on the
+        // next try, so try again right away instead of leaving it to the
+        // reconnect loop's next pass.
+        var quickRetries = 0
+        while (result == MeshtasticBleClient.ConnectResult.FAILED_BEFORE_LINK_UP && quickRetries < BLE_QUICK_RETRIES) {
+            quickRetries++
+            delay(BLE_QUICK_RETRY_DELAY_MS)
+            // Checked after the wait: not if the operator disconnected, picked
+            // another radio or switched to TCP in the meantime.
+            if (reconnectTargetAddress != deviceAddress || _activeTransport.value != MeshConnectionType.BLUETOOTH) break
+            Log.i(TAG, "BLE connect: quick retry $quickRetries for $deviceAddress")
+            result = client.connect(deviceAddress, handshake = buildWantConfig())
         }
-        return ok
+        if (result != MeshtasticBleClient.ConnectResult.CONNECTED) return false
+        Log.i(TAG, "TX want_config_id (BLE)")
+        // #203 — a session that is up (manual tap or automatic retry) means
+        // whatever streak of failures preceded it is over.
+        _reconnectAttempt.value = 0
+        return true
+    }
+
+    /**
+     * [connectBle] on the manager's own scope, for callers whose own scope
+     * can end mid-connect. The BLE pane launched the connect in the screen's
+     * scope: leaving the pane cancelled it, which now ends the attempt.
+     */
+    fun connectBleInBackground(deviceAddress: String) {
+        scope.launch { connectBle(deviceAddress) }
     }
 
     /**
@@ -365,7 +393,7 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
         _activeTransport.value = null
     }
 
-    private fun dispatchFrame(frame: ByteArray) {
+    internal fun dispatchFrame(frame: ByteArray) {
         bytesRx += frame.size
         when (val parsed = MeshtasticProtoParser.parseFromRadio(frame)) {
             is FromRadioFrame.NodeInfoFrame -> upsertNode(parsed.node)
@@ -401,6 +429,7 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
             snr = node.snr ?: existing.snr,
             hopDistance = node.hopDistance ?: existing.hopDistance,
             batteryLevel = node.batteryLevel ?: existing.batteryLevel,
+            lastHeardEpoch = node.lastHeardEpoch ?: existing.lastHeardEpoch,
             shortName = node.shortName.ifBlank { existing.shortName },
             longName = node.longName.ifBlank { existing.longName },
             role = node.role ?: existing.role,
@@ -418,8 +447,12 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
                 val pos = MeshtasticProtoParser.parsePosition(packet.payload) ?: return
                 val nodeId = packet.from.toLong() and 0xFFFFFFFFL
                 val existing = _nodes.value[nodeId]
+                // A packet that just came off the radio means the node was heard
+                // now. The radio's rx_time is preferred, but it is absent when the
+                // radio has no clock, so fall back to the phone's.
+                val heardAt = packet.rxTime ?: (System.currentTimeMillis() / 1000)
                 if (existing != null) {
-                    upsertNode(existing.copy(position = pos, lastHeardEpoch = packet.rxTime ?: existing.lastHeardEpoch))
+                    upsertNode(existing.copy(position = pos, lastHeardEpoch = heardAt))
                 } else {
                     upsertNode(
                         MeshNode(
@@ -427,7 +460,7 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
                             shortName = "%04X".format((nodeId and 0xFFFFL).toInt()),
                             longName = "Node %08X".format(nodeId.toInt()),
                             position = pos,
-                            lastHeardEpoch = packet.rxTime ?: (System.currentTimeMillis() / 1000),
+                            lastHeardEpoch = heardAt,
                             snr = packet.rxSnr?.toDouble(),
                         ),
                     )
@@ -813,6 +846,16 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
         /** How often the BLE auto-reconnect loop checks whether the last
          *  radio is back in range. */
         private const val BLE_RECONNECT_INTERVAL_MS: Long = 20_000
+
+        /** #203 — upper bound on one automatic reconnect attempt, above the
+         *  BLE client's own deadlines (a pairing, the setup after it, quick
+         *  retries and the handshake write). */
+        private const val BLE_RECONNECT_ATTEMPT_CAP_MS: Long = 180_000
+
+        /** #203 — immediate retries after a connect that failed on a stack
+         *  error before the link was up. */
+        private const val BLE_QUICK_RETRIES: Int = 2
+        private const val BLE_QUICK_RETRY_DELAY_MS: Long = 300
         private const val PORTNUM_TEXT_MESSAGE_APP = 1
         private const val PORTNUM_POSITION_APP = 3
         private const val PORTNUM_ADMIN_APP = 6

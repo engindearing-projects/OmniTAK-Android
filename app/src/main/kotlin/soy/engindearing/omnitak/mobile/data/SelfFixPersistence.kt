@@ -12,8 +12,9 @@ package soy.engindearing.omnitak.mobile.data
  *  1. persisting the last real fix (lat/lon/hae/time) to DataStore
  *     (throttled via [shouldPersist]),
  *  2. seeding [LocationProvider] from the persisted fix on cold start
- *     ([restoredFixOrNull]) so every consumer — 2D puck, Cesium self
- *     entity, HUD card, PPLI prefs-fallback — renders immediately,
+ *     ([restoredFixOrNull]) so every display consumer — 2D puck, Cesium
+ *     self entity, HUD card — renders immediately. The seed is flagged
+ *     [SelfFix.restored] and PPLI never sends it (#205),
  *  3. marking the marker visually stale when the fix is older than
  *     [STALE_AFTER_MS] ([isStale]), and
  *  4. never letting an old fix clobber a newer one ([newerOf]).
@@ -58,9 +59,10 @@ object SelfFixPersistence {
      * Rebuild a [SelfFix] from persisted prefs, or null when no fix was
      * ever persisted (NaN sentinels — GAP-030b). The restored fix keeps
      * its original wall-clock time so consumers can derive staleness, but
-     * deliberately carries NO speed and NaN accuracy: the PPLI broadcaster
-     * maps NaN accuracy to ce=9999999 ("unknown"), so a restored position
-     * is never broadcast pretending to have live GPS confidence.
+     * deliberately carries NO speed and NaN accuracy, and is flagged
+     * [SelfFix.restored] (#205): the map shows it, the PPLI broadcaster
+     * holds back until a live fix replaces it, so a restored position is
+     * never broadcast pretending to be where the operator is right now.
      */
     fun restoredFixOrNull(prefs: UserPrefs): SelfFix? {
         if (prefs.selfLat.isNaN() || prefs.selfLon.isNaN()) return null
@@ -71,15 +73,25 @@ object SelfFixPersistence {
             speedKmh = 0.0,
             accuracyM = Float.NaN,
             timeMs = prefs.selfFixTimeMs,
+            restored = true,
         )
     }
 
     /** Newer-wins merge: a candidate fix only replaces the current one if
      *  it is at least as recent. Protects the live GPS fix from being
      *  clobbered by a late-arriving persisted seed (and vice versa lets a
-     *  fused cached fix upgrade a stale seed). */
+     *  fused cached fix upgrade a stale seed).
+     *
+     *  #205 - provenance beats the clock: a live fix always replaces a
+     *  restored one and a restored seed never displaces a live one, whatever
+     *  the timestamps say. Without that, a restored fix stamped in the future
+     *  (device clock moved back) would pin itself as the current fix and the
+     *  broadcaster would hold PPLI for as long as live GPS kept arriving. */
     fun newerOf(current: SelfFix?, candidate: SelfFix): SelfFix {
         if (current == null) return candidate
+        if (current.restored != candidate.restored) {
+            return if (candidate.restored) current else candidate
+        }
         return if (candidate.timeMs >= current.timeMs) candidate else current
     }
 }

@@ -28,6 +28,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import soy.engindearing.omnitak.mobile.domain.AggregateHealth
+import soy.engindearing.omnitak.mobile.domain.ServerHealthSummary
 import soy.engindearing.omnitak.mobile.i18n.Loc
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalBackground
@@ -41,7 +43,13 @@ import soy.engindearing.omnitak.mobile.ui.theme.TacticalBackground
 @Composable
 fun ATAKStatusBar(
     serverName: String,
-    isConnected: Boolean,
+    // #209: the server connections folded through the one projection the
+    // Servers screen also uses (ServerHealthProjection), so the two can't
+    // disagree. One or no enabled server: a single dot in the overall
+    // colour. More than one: the "N/M ●●●" cluster, where the count takes
+    // the overall colour (green all up, amber some up, red none) and each
+    // dot is that server's own health.
+    health: ServerHealthSummary,
     messagesReceived: Int,
     messagesSent: Int,
     gpsAccuracyMeters: Int?,
@@ -49,11 +57,6 @@ fun ATAKStatusBar(
     onServerTap: () -> Unit,
     onMenuTap: () -> Unit,
     modifier: Modifier = Modifier,
-    // Multi-server indicator: one flag per enabled server (true = connected).
-    // When >1 server is enabled this replaces the single dot with a
-    // "N/M ●●●" cluster so the operator can see at a glance how many of
-    // their servers are live. Empty/size-1 falls back to the single dot.
-    serverConnectedFlags: List<Boolean> = emptyList(),
     // "Top info bar" settings toggle. False collapses this down to just the
     // connection dot — the dot itself is never hidden by the toggle, only
     // the server name / counters / GPS / clock / menu around it.
@@ -68,11 +71,7 @@ fun ATAKStatusBar(
             modifier = modifier.padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (serverConnectedFlags.size > 1) {
-                MultiServerIndicator(flags = serverConnectedFlags)
-            } else {
-                ConnectionDot(isConnected = isConnected)
-            }
+            ServerHealthIndicator(health)
             if (positionReportingOff) {
                 Spacer(Modifier.width(6.dp))
                 PpliOffChip()
@@ -88,11 +87,7 @@ fun ATAKStatusBar(
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (serverConnectedFlags.size > 1) {
-            MultiServerIndicator(flags = serverConnectedFlags)
-        } else {
-            ConnectionDot(isConnected = isConnected)
-        }
+        ServerHealthIndicator(health)
         Spacer(Modifier.width(8.dp))
 
         Row(
@@ -177,40 +172,51 @@ private fun PpliOffChip() {
     )
 }
 
+/** One enabled server (or none): a single dot. More than one: the "N/M" cluster. */
 @Composable
-private fun ConnectionDot(isConnected: Boolean) {
+private fun ServerHealthIndicator(health: ServerHealthSummary) {
+    if (health.enabledCount > 1) {
+        MultiServerIndicator(health)
+    } else {
+        ConnectionDot(health.aggregate)
+    }
+}
+
+@Composable
+private fun ConnectionDot(health: AggregateHealth) {
     Box(
         modifier = Modifier
             .size(8.dp)
             .clip(CircleShape)
-            .background(if (isConnected) TacticalAccent else Color(0xFFE53935)),
+            .background(health.lightColor()),
     )
 }
 
 /**
  * Multi-server status cluster: "N/M" connected count followed by one small
- * dot per enabled server (green = connected, red = down). Shown on the map
- * status bar when the operator has more than one TAK server enabled.
+ * dot per enabled server. The count takes the overall light (green = all
+ * up, amber = some up, red = none) and each dot is that server's own health
+ * (green connected, amber connecting, red failed, grey stopped). Shown on
+ * the map status bar when the operator has more than one TAK server enabled.
  */
 @Composable
-private fun MultiServerIndicator(flags: List<Boolean>) {
-    val connected = flags.count { it }
+private fun MultiServerIndicator(health: ServerHealthSummary) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
-            "$connected/${flags.size}",
-            color = if (connected > 0) TacticalAccent else Color(0xFFE53935),
+            "${health.connectedCount}/${health.enabledCount}",
+            color = health.aggregate.lightColor(),
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Bold,
             fontSize = 12.sp,
         )
         Spacer(Modifier.width(5.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-            flags.forEach { up ->
+            health.enabledServers.forEach { server ->
                 Box(
                     modifier = Modifier
                         .size(6.dp)
                         .clip(CircleShape)
-                        .background(if (up) TacticalAccent else Color(0xFFE53935)),
+                        .background(server.dotColor()),
                 )
             }
         }

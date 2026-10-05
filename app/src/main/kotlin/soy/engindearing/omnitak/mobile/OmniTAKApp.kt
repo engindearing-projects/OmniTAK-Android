@@ -118,25 +118,6 @@ class OmniTAKApp : Application() {
         // location FGS type keeps background GPS flowing for both.
         appScope.launch {
             var pendingStart: Job? = null
-            fun currentLinkLabel(): String? {
-                val server = serverManager.connectionState.value as? ConnectionState.Connected
-                val meshUp = meshtastic.activeConnectionState.value is ConnectionState.Connected ||
-                    meshcore.activeConnectionState.value is ConnectionState.Connected
-                return when {
-                    server != null && meshUp -> "${server.serverName} + mesh"
-                    server != null -> server.serverName
-                    meshUp -> "mesh radio"
-                    // Field feedback (2026-08) — link dropped (radio power-off /
-                    // out of range) but the BLE auto-reconnect loop is still
-                    // trying every 20s. Keeping a label here is what keeps the
-                    // FGS alive below, which in turn is what keeps that retry
-                    // loop running once the screen locks — without it Doze
-                    // stalls the delay()/BLE calls and reconnect silently stops
-                    // working the moment the app leaves the foreground.
-                    meshtastic.autoReconnectPending.value -> "reconnecting to mesh radio…"
-                    else -> null
-                }
-            }
             combine(
                 serverManager.connectionState,
                 meshtastic.activeConnectionState,
@@ -184,13 +165,14 @@ class OmniTAKApp : Application() {
 
         // Issue #75 — self-marker persistence across screen-off + process
         // death. Seed the in-memory fix from the persisted one so every
-        // consumer (2D puck, Cesium self entity, HUD card, PPLI
-        // prefs-fallback) renders immediately on cold start — stale-marked
-        // downstream via SelfFix.timeMs — then persist real fixes
-        // (throttled) so the NEXT cold start has them. Seed-then-collect
-        // in one coroutine: the collector starts only after the seed is
-        // applied, and the seeded fix never re-persists itself because
-        // shouldPersist requires a strictly newer timestamp.
+        // display consumer (2D puck, Cesium self entity, HUD card) renders
+        // immediately on cold start — stale-marked downstream via
+        // SelfFix.timeMs — then persist real fixes (throttled) so the NEXT
+        // cold start has them. The seed is flagged SelfFix.restored and PPLI
+        // never sends it: it holds until a live fix replaces it (#205).
+        // Seed-then-collect in one coroutine: the collector starts only
+        // after the seed is applied, and the seeded fix never re-persists
+        // itself because shouldPersist requires a strictly newer timestamp.
         appScope.launch {
             val saved = userPrefsStore.prefs.first()
             SelfFixPersistence.restoredFixOrNull(saved)?.let {
@@ -296,6 +278,41 @@ class OmniTAKApp : Application() {
     // the CSR network call on a scope that survives the scanner sheet leaving
     // composition (the bug: rememberCoroutineScope cancels mid-enrollment when
     // the scanner pops, throwing "The coroutine left the composition").
+    /**
+     * What the connection service is holding open right now, or null when
+     * nothing needs it. Names the link in the persistent notification.
+     */
+    private fun currentLinkLabel(): String? {
+        val server = serverManager.connectionState.value as? ConnectionState.Connected
+        val meshUp = meshtastic.activeConnectionState.value is ConnectionState.Connected ||
+            meshcore.activeConnectionState.value is ConnectionState.Connected
+        return when {
+            server != null && meshUp -> "${server.serverName} + mesh"
+            server != null -> server.serverName
+            meshUp -> "mesh radio"
+            // Field feedback (2026-08) — link dropped (radio power-off /
+            // out of range) but the BLE auto-reconnect loop is still
+            // trying every 20s. Keeping a label here is what keeps the
+            // FGS alive below, which in turn is what keeps that retry
+            // loop running once the screen locks — without it Doze
+            // stalls the delay()/BLE calls and reconnect silently stops
+            // working the moment the app leaves the foreground.
+            meshtastic.autoReconnectPending.value -> "reconnecting to mesh radio…"
+            else -> null
+        }
+    }
+
+    /**
+     * Start the connection service again if a link is up. Called when the
+     * activity comes to the foreground, the one moment a foreground start is
+     * always allowed: it brings the service back after Android ended it at a
+     * time limit or refused to start it from the background (#223), and lets
+     * it move to the location type right after that permission is granted.
+     */
+    fun refreshConnectionService() {
+        currentLinkLabel()?.let { label -> TAKConnectionService.start(this, label) }
+    }
+
     internal val appScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     // Eagerly-cached prefs snapshot for non-suspending sinks (cotSink,
@@ -721,7 +738,12 @@ class OmniTAKApp : Application() {
             meshConnected = {
                 activeMeshManager.activeConnectionState.value is ConnectionState.Connected
             },
-            relayEnabled = { cachedPrefs.value.relayGatewayEnabled },
+            // #212: one switch per direction; to-mesh is forced off while
+            // MeshCore is the active mesh (see RelayDirections.effective).
+            relayDirections = {
+                soy.engindearing.omnitak.mobile.domain.MeshServerRelay.RelayDirections
+                    .from(cachedPrefs.value)
+            },
         )
     }
 

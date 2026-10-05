@@ -83,7 +83,7 @@ object MeshCoreCoTConverter {
         val nodeIdUpper = "%012X".format(node.id)
         val shortEsc = escape(node.shortName)
         val longEsc = escape(callsign)
-        val lastHeardIso = CotXml.isoMillis(node.lastHeardEpoch * 1_000L)
+        val lastHeardIso = node.lastHeardEpoch?.let { CotXml.isoMillis(it * 1_000L) }
         val snr = node.snr ?: 0.0
         val hops = node.hopDistance ?: 0
         val battery = node.batteryLevel ?: -1
@@ -103,7 +103,7 @@ object MeshCoreCoTConverter {
             append("<snr>$snr</snr>")
             append("<hop_distance>$hops</hop_distance>")
             append("<battery>$battery</battery>")
-            append("<last_heard>$lastHeardIso</last_heard>")
+            if (lastHeardIso != null) append("<last_heard>$lastHeardIso</last_heard>")
             append("</__meshcore__>")
             append("<takv device=\"MeshCore\" platform=\"OmniTAK\" os=\"Android\" version=\"${soy.engindearing.omnitak.mobile.BuildConfig.VERSION_NAME}\"/>")
             append("</detail>")
