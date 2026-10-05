@@ -212,23 +212,43 @@ class MeshtasticBleClient(context: Context) {
 
     // region Connect / Disconnect ---------------------------------------
 
+    /** How one [connect] attempt ended. */
+    enum class ConnectResult {
+        /** The session is up. */
+        CONNECTED,
+
+        /** The attempt failed; the failure is on [lastFailure]. */
+        FAILED,
+
+        /**
+         * It failed on an error from the Bluetooth stack before the link was
+         * up (status 133 and its relatives). Those usually clear at once, so
+         * the caller may try again right away instead of waiting for its
+         * next scheduled attempt.
+         */
+        FAILED_BEFORE_LINK_UP,
+
+        /** A newer connect or a disconnect took over; nothing was recorded. */
+        SUPERSEDED,
+    }
+
     /**
      * Connect to the radio at [address]: one attempt on a link of its own.
      * Suspends until the session is ready or the attempt has failed; it
      * always returns, and never leaves [state] on Connecting.
      *
      * A newer call replaces an attempt that is still in flight: the older
-     * one returns false and leaves [state] to the newer one.
+     * one returns [ConnectResult.SUPERSEDED] and leaves [state] to the newer
+     * one.
      */
-    suspend fun connectToAddress(address: String): Boolean {
-        val adapter = bluetoothAdapter ?: return false
-        val device = runCatching { adapter.getRemoteDevice(address) }.getOrNull() ?: return false
+    suspend fun connect(address: String): ConnectResult {
+        val adapter = bluetoothAdapter ?: return ConnectResult.FAILED
+        val device = runCatching { adapter.getRemoteDevice(address) }.getOrNull() ?: return ConnectResult.FAILED
 
         val attempt = runCatching { newLink(address, device) }.getOrElse { e ->
             Log.w(TAG, "BLE link could not be created: ${e.message}")
-            return false
+            return ConnectResult.FAILED
         }
-        lastAttemptFailedBeforeLinkUp = false
         val previous = synchronized(linkLock) {
             val old = link
             link = attempt
@@ -263,7 +283,7 @@ class MeshtasticBleClient(context: Context) {
 
         // On success the link's observer (onLinkReady) already flipped us to
         // Connected and started the read loops.
-        if (attempt.sessionUp && isCurrent(attempt)) return true
+        if (attempt.sessionUp && isCurrent(attempt)) return ConnectResult.CONNECTED
 
         val bondState = attempt.bondState()
         val servicesSeen = attempt.servicesSeen
@@ -284,7 +304,7 @@ class MeshtasticBleClient(context: Context) {
                 link !== attempt -> null
                 // Setup finished between the deadline passing and this line:
                 // onLinkReady has the session, so it is a success.
-                attempt.sessionUp -> return true
+                attempt.sessionUp -> return ConnectResult.CONNECTED
                 else -> {
                     link = null
                     failures.record(draft, bondState).also { _state.value = ConnectionState.Failed(it.message) }
@@ -295,21 +315,11 @@ class MeshtasticBleClient(context: Context) {
         // Replaced by a newer attempt, disconnected by the operator, or the
         // session came up and dropped again before we got here: the state and
         // the failure record belong to whoever did that.
-        if (failure == null) return false
+        if (failure == null) return ConnectResult.SUPERSEDED
         stopBackgroundJobs()
-        lastAttemptFailedBeforeLinkUp = isQuickRetryable(facts)
         Log.w(TAG, "BLE connect to $address failed: ${failure.message}")
-        return false
+        return if (isQuickRetryable(facts)) ConnectResult.FAILED_BEFORE_LINK_UP else ConnectResult.FAILED
     }
-
-    /**
-     * True when the last [connectToAddress] failed on an error from the
-     * Bluetooth stack before the link was up (status 133 and its relatives).
-     * Those usually clear at once, so the caller may try again right away
-     * instead of waiting for its next scheduled attempt.
-     */
-    @Volatile var lastAttemptFailedBeforeLinkUp: Boolean = false
-        private set
 
     /**
      * Waits for a request on [l] and gives up when it has made no progress
@@ -398,7 +408,7 @@ class MeshtasticBleClient(context: Context) {
     private fun onLinkReady(l: Link) {
         val handedOver = synchronized(linkLock) {
             // A link that came up without the Meshtastic characteristics is
-            // not a session; connectToAddress reports it as a failed attempt.
+            // not a session; connect() reports it as a failed attempt.
             if (link !== l || !l.usable) {
                 false
             } else {
@@ -433,7 +443,7 @@ class MeshtasticBleClient(context: Context) {
 
     /** The GATT link of [l] is gone. */
     private fun onLinkDown(l: Link, reason: Int) {
-        // Before the session is up, connectToAddress owns the outcome.
+        // Before the session is up, connect() owns the outcome.
         if (!l.sessionUp) return
         val bondState = l.bondState()
         // A teardown of ours (operator disconnect, replaced by a new attempt,
@@ -788,9 +798,9 @@ class MeshtasticBleClient(context: Context) {
             // can cancel, so a retry scheduled just before retire() would open
             // a new GATT client on a link that is already gone. A connect that
             // fails on a stack error is tried again by the caller instead (see
-            // lastAttemptFailedBeforeLinkUp), on a link of its own.
+            // ConnectResult.FAILED_BEFORE_LINK_UP), on a link of its own.
             connect(device)
-                // Backstop only: connectToAddress's own deadline fires first.
+                // Backstop only: connect()'s own deadline fires first.
                 .timeout(NORDIC_BACKSTOP_TIMEOUT_MS)
                 .useAutoConnect(false)
                 .done { complete(ConnectEnd.Ready) }
@@ -1299,7 +1309,7 @@ class MeshtasticBleClient(context: Context) {
         internal const val PAIRING_TIMEOUT_MS: Long = 60_000
 
         /** Nordic's own connect timeout. Deliberately above a pairing plus the
-         *  setup after it: [connectToAddress] decides when an attempt is over,
+         *  setup after it: [connect] decides when an attempt is over,
          *  and this only matters if that wait is somehow not running. */
         internal const val NORDIC_BACKSTOP_TIMEOUT_MS: Long = 90_000
 

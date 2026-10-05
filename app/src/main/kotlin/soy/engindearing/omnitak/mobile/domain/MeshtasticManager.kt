@@ -273,22 +273,24 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
         frameCollector = scope.launch {
             client.frames.collect { frame -> dispatchFrame(frame) }
         }
-        var ok = client.connectToAddress(deviceAddress)
+        var result = client.connect(deviceAddress)
         // #203 — a connect that died on a Bluetooth stack error before the
         // link was up (status 133 and its relatives) usually works on the
         // next try, so try again right away instead of leaving it to the
         // reconnect loop's next pass. Not if the operator disconnected or
         // picked another radio in the meantime.
         var quickRetries = 0
-        while (!ok && quickRetries < BLE_QUICK_RETRIES && client.lastAttemptFailedBeforeLinkUp &&
-            reconnectTargetAddress == deviceAddress && _activeTransport.value == MeshConnectionType.BLUETOOTH
+        while (result == MeshtasticBleClient.ConnectResult.FAILED_BEFORE_LINK_UP &&
+            quickRetries < BLE_QUICK_RETRIES &&
+            reconnectTargetAddress == deviceAddress &&
+            _activeTransport.value == MeshConnectionType.BLUETOOTH
         ) {
             quickRetries++
             delay(BLE_QUICK_RETRY_DELAY_MS)
             Log.i(TAG, "BLE connect: quick retry $quickRetries for $deviceAddress")
-            ok = client.connectToAddress(deviceAddress)
+            result = client.connect(deviceAddress)
         }
-        if (!ok) return false
+        if (result != MeshtasticBleClient.ConnectResult.CONNECTED) return false
         // Critical Meshtastic handshake: ask the radio to dump its config +
         // node database. Without this the radio doesn't push any state and
         // the node list stays empty, so a session whose handshake was not
