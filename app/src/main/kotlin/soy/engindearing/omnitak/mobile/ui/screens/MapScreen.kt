@@ -132,6 +132,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     val msgReceived by app.serverManager.messagesReceived.collectAsState()
     val msgSent by app.serverManager.messagesSent.collectAsState()
     val contacts by app.contactStore.contacts.collectAsState()
+    // #215: which contacts have gone quiet. Decided once in ContactAging; the map below and the
+    // Teams list further down both read this, so they cannot disagree.
+    val agingState by app.contactAging.state.collectAsState()
     // Start from the preferences the app already has, not from the defaults.
     // This screen is composed again on every return to the map tab, onto a map
     // view that is already running: one pass with the default basemap, marker
@@ -493,6 +496,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             // the operator opts back in.
             contacts.values.filter { c ->
                 when {
+                    // #215: not heard from for the max age: off the map (still in the store).
+                    agingState.isHidden(c.uid) -> false
                     !c.uid.startsWith("MESHTASTIC-") -> true
                     !meshNodesVisible -> false
                     c.uid in pairedMeshUids -> meshPairedVisible
@@ -1219,7 +1224,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         soy.engindearing.omnitak.mobile.ui.components.LassoOverlay(
             active = lassoMode,
             mapboxMap = mapboxMap,
-            markers = (contacts.values).map { c ->
+            // #215: a contact hidden as not heard from is not on screen, so the lasso must not catch it.
+            markers = (contacts.values).filterNot { agingState.isHidden(it.uid) }.map { c ->
                 soy.engindearing.omnitak.mobile.domain.LassoMarker(
                     id = c.uid,
                     coordinate = soy.engindearing.omnitak.mobile.domain.LassoLatLng(
@@ -2326,8 +2332,13 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         }
 
         if (teamsPanelOpen) {
+            val agingNowMs by app.contactAging.nowMs.collectAsState()
             ContactsPanel(
-                contacts = contacts.values.toList(),
+                contacts = contacts.values.filterNot { agingState.isHidden(it.uid) },
+                // #215: the contacts the map is not showing, with the setting they were decided with.
+                notHeardFrom = contacts.values.filter { agingState.isHidden(it.uid) },
+                maxAgeMinutes = agingState.maxAgeMinutes,
+                nowMs = agingNowMs,
                 onSelect = { c ->
                     panTarget = LatLng(c.lat, c.lon)
                     panTargetTick += 1
