@@ -14,7 +14,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraPosition
@@ -124,8 +123,9 @@ fun TacticalMap(
      *  setting (useful when lock is off and the operator just wants to
      *  quickly reset orientation). */
     snapNorthTrigger: Int = 0,
-    /** Fired once the MapLibre map is ready. Issue #16 — lasso uses
-     *  this to grab the [MapLibreMap] reference for screen↔geo
+    /** Fired once per composition of this map, as soon as the MapLibre map
+     *  is ready: at once when the retained view already has one. Issue #16 —
+     *  lasso uses this to grab the [MapLibreMap] reference for screen↔geo
      *  projection during freehand selection. */
     onMapReady: ((org.maplibre.android.maps.MapLibreMap) -> Unit)? = null,
     /** Fired after every style (re)load with the live map + style, so the
@@ -178,13 +178,21 @@ fun TacticalMap(
     // marker "Center on me" fallback only reacts to real taps.
     val initialRecenterTrigger = remember { recenterTrigger }
 
-    // #177 — keep the live callbacks/state the retained MapView's one-time
-    // listeners read in sync with the current composition. SideEffect runs on
-    // every successful recomposition, so a MapView reused after a Settings detour
+    // #177 — keep the live callbacks the retained MapView's one-time listeners
+    // call in sync with the current composition. SideEffect runs on every
+    // successful recomposition, so a MapView reused after a Settings detour
     // always fires THIS composition's callbacks, never the dead one that first
-    // created it. Must be in sync before AndroidView re-delivers map/style below.
+    // created it. (The state those listeners read is written further down, in
+    // an effect that runs before the others.)
     val bindings = RetainedMapView.bindings
+    // This composition's claim on the retained view. The view outlives the
+    // Activity, and when an Activity is finished and opened again the new one
+    // is created before the old one has been stopped and destroyed, so for a
+    // moment two compositions hold a reference to the view. Only the one that
+    // took it last may drive it.
+    val holder = remember { Any() }
     SideEffect {
+        if (!RetainedMapView.isHeldBy(holder)) return@SideEffect
         bindings.onMapReady = onMapReady
         bindings.onStyleReady = onStyleReady
         bindings.onCameraIdle = onCameraIdle
@@ -192,20 +200,21 @@ fun TacticalMap(
         bindings.onMapSingleTap = onMapSingleTap
         bindings.onContactTap = onContactTap
         bindings.onSelfMarkerTap = onSelfMarkerTap
-        bindings.northUpLocked = northUpLocked
-        bindings.selfFix = selfFix
-        bindings.puckActive = puckActive
-        bindings.contacts = contacts
     }
 
     // #177 — retain the native MapView across navigation so returning to the map
     // (e.g. from Settings) doesn't tear down and re-initialise the MapLibre
     // engine. acquire() reuses the existing instance (detaching it from any prior
-    // parent first) or builds it once. Use the application context so the
-    // long-lived view never leaks an Activity.
+    // parent first) or builds it once. The view is built with the application
+    // context so that it is not tied to an Activity.
     val appContext = context.applicationContext
+    // Whether this composition is the one that built the view. The view tells
+    // its builder when the map is ready; every later composition has to be told
+    // separately (see the effect below the factory).
+    val builtHere = remember { booleanArrayOf(false) }
     val mapView = remember {
-        RetainedMapView.acquire(appContext) { ctx ->
+        RetainedMapView.acquire(appContext, holder) { ctx ->
+            builtHere[0] = true
             MapLibre.getInstance(ctx)
             MapView(ctx).apply {
                 onCreate(null)
@@ -392,13 +401,21 @@ fun TacticalMap(
             // iOS is immune to this class of bug because Mapbox v11
             // AnnotationManagers survive style swaps natively — Android's hand-
             // inserted style layers do not.
+            //
+            // This listener lives as long as the view, which is longer than the
+            // composition that registers it, so everything it puts back comes
+            // from `bindings` (written by whichever composition shows the map,
+            // before its other effects run) and the application context.
+            // Reading this composition's own state here redrew the drawings,
+            // measurement and grid as they were the first time the operator
+            // left the map tab, on every later style reload.
                 addOnDidFinishLoadingStyleListener {
                     getMapAsync { map ->
                         map.getStyle { style ->
-                            ContactMarkerRenderer.update(map, context, bindings.contacts)
-                            MeasurementLayer.update(map, currentMeasurementPoints)
-                            DrawingShapeRenderer.apply(map, currentDrawings)
-                            currentGridCenter?.let { GridLayer.update(map, it) }
+                            ContactMarkerRenderer.update(map, ctx, bindings.contacts)
+                            MeasurementLayer.update(map, bindings.measurementPoints)
+                            DrawingShapeRenderer.apply(map, bindings.drawings)
+                            bindings.gridCenter?.let { GridLayer.update(map, it) }
                             // #197 — this listener fires on EVERY successful style
                             // load, including ones MapLibre triggers internally
                             // (not just the app's own setStyle calls), so it is
@@ -408,9 +425,10 @@ fun TacticalMap(
                             // when nothing was skipped is a harmless no-op.
                             if (bindings.puckActive && map.locationComponent.isLocationComponentActivated) {
                                 val spec = selfPuckSpecFor(
-                                    selfMarkerStyleFor(currentUseMilStd, currentSelfMarkerTriangle),
+                                    selfMarkerStyleFor(bindings.useMilStdSelfSymbol, bindings.selfMarkerTriangle),
                                 )
-                                val cameraMode = if (currentFollowMe) CameraMode.TRACKING_COMPASS else CameraMode.NONE
+                                val cameraMode =
+                                    if (bindings.followMeActive) CameraMode.TRACKING_COMPASS else CameraMode.NONE
                                 applyLocationRenderMode(map, spec, cameraMode)
                             }
                         }
@@ -419,6 +437,46 @@ fun TacticalMap(
             } // MapView(ctx).apply
         } // RetainedMapView.acquire factory
     } // remember
+
+    // The state the view's long-lived listeners read. Written here, in the
+    // first effect of the composable and keyed on the values, so that it is
+    // this pass's state before any later effect can reload the style: a JSON
+    // style finishes loading inside setStyle, and the style-reload listener
+    // runs there. (A SideEffect would write it after every effect of the pass,
+    // one reload too late.)
+    DisposableEffect(
+        mapView, northUpLocked, selfFix, puckActive, contacts, measurementPoints, drawings,
+        gridCenter, useMilStdSelfSymbol, selfMarkerTriangle, followMeActive,
+    ) {
+        if (RetainedMapView.isHeldBy(holder)) {
+            bindings.northUpLocked = northUpLocked
+            bindings.selfFix = selfFix
+            bindings.puckActive = puckActive
+            bindings.contacts = contacts
+            bindings.measurementPoints = measurementPoints
+            bindings.drawings = drawings
+            bindings.gridCenter = gridCenter
+            bindings.useMilStdSelfSymbol = useMilStdSelfSymbol
+            bindings.selfMarkerTriangle = selfMarkerTriangle
+            bindings.followMeActive = followMeActive
+        }
+        onDispose { }
+    }
+
+    // The view reports "map ready" once, when it is built, to the composition
+    // that built it. A composition that is handed the existing view (every
+    // return to the map tab, every switch back from the 3D globe, every new
+    // Activity) was never told, so the screen above it sat on a null map for
+    // the rest of the session: its overlay, lasso, plugin-overlay and "frame
+    // this overlay" code all quietly did nothing. Tell it here.
+    val currentMapReady by rememberUpdatedState(onMapReady)
+    DisposableEffect(mapView) {
+        var disposed = false
+        if (!builtHere[0]) {
+            mapView.getMapAsync { map -> if (!disposed) currentMapReady?.invoke(map) }
+        }
+        onDispose { disposed = true }
+    }
 
     // Flip the location layer on when permission is granted after the
     // map is already alive.
@@ -460,20 +518,22 @@ fun TacticalMap(
         if (fix != null && puckActive) {
             mapView.getMapAsync { map ->
                 val style = map.style
-                if (style != null && map.locationComponent.isLocationComponentActivated) {
-                    map.locationComponent.forceLocationUpdate(fix.toLocation())
-                    val staleNow =
-                        SelfFixPersistence.isStale(fix.timeMs, System.currentTimeMillis())
-                    if (puckAppearance.dimmed != staleNow) {
-                        map.locationComponent.applyStyle(
-                            buildPuckOptions(
-                                context, style, currentUseMilStd, currentTeamColor,
-                                dimmed = staleNow,
-                                selfMarkerTriangle = currentSelfMarkerTriangle,
-                                echelonAmplifier = echelonAmplifierFor(currentSelfEchelon),
-                            ),
-                        )
-                        puckAppearance.dimmed = staleNow
+                if (style != null) {
+                    map.withReadyLocationComponent("self fix") { component ->
+                        component.forceLocationUpdate(fix.toLocation())
+                        val staleNow =
+                            SelfFixPersistence.isStale(fix.timeMs, System.currentTimeMillis())
+                        if (puckAppearance.dimmed != staleNow) {
+                            component.applyStyle(
+                                buildPuckOptions(
+                                    context, style, currentUseMilStd, currentTeamColor,
+                                    dimmed = staleNow,
+                                    selfMarkerTriangle = currentSelfMarkerTriangle,
+                                    echelonAmplifier = echelonAmplifierFor(currentSelfEchelon),
+                                ),
+                            )
+                            puckAppearance.dimmed = staleNow
+                        }
                     }
                 }
             }
@@ -488,15 +548,17 @@ fun TacticalMap(
         if (puckActive) {
             mapView.getMapAsync { map ->
                 val style = map.style
-                if (style != null && map.locationComponent.isLocationComponentActivated) {
-                    map.locationComponent.applyStyle(
-                        buildPuckOptions(
-                            context, style, currentUseMilStd, currentTeamColor,
-                            dimmed = puckAppearance.dimmed,
-                            selfMarkerTriangle = currentSelfMarkerTriangle,
-                            echelonAmplifier = echelonAmplifierFor(currentSelfEchelon),
-                        ),
-                    )
+                if (style != null) {
+                    map.withReadyLocationComponent("echelon") { component ->
+                        component.applyStyle(
+                            buildPuckOptions(
+                                context, style, currentUseMilStd, currentTeamColor,
+                                dimmed = puckAppearance.dimmed,
+                                selfMarkerTriangle = currentSelfMarkerTriangle,
+                                echelonAmplifier = echelonAmplifierFor(currentSelfEchelon),
+                            ),
+                        )
+                    }
                 }
             }
         }
@@ -506,18 +568,63 @@ fun TacticalMap(
     // Each time [recenterTrigger] changes, briefly flip camera to
     // TRACKING to pan to the user, then restore NONE so the user can
     // still pan freely.
+    //
+    // Two things send the map to the operator's position: a press on "Center
+    // on me", and the composition that builds the view opening the map (with
+    // location on and a fix known, the first map of a process has always
+    // opened there, marker shown or hidden). Composing the map onto the view
+    // that already exists is not one of them (#7). The marker branch used to
+    // act on the value it was composed with there too, so every return to the
+    // map tab threw the operator's view away for their own position at zoom 15.
+    val currentCameraFollowsFix by rememberUpdatedState(cameraFollowsFix)
     DisposableEffect(mapView, recenterTrigger) {
-        if (recenterTrigger != null && puckActive) {
+        val reason = RetainedMapRules.recenterReason(recenterTrigger, initialRecenterTrigger, builtHere[0])
+        val pressed = reason == RetainedMapRules.Recenter.PRESSED
+        // False once this request has been superseded or the map has left the
+        // screen: a wait for the map or the style must not act after that.
+        var wanted = true
+        if (reason == RetainedMapRules.Recenter.OPENING) {
+            // Decided when the map is ready, from the state at that moment and
+            // not from this pass: the first pass of a cold start can still hold
+            // the default preferences (marker shown), and the fix kept from the
+            // last session arrives after it.
             mapView.getMapAsync { map ->
-                if (map.locationComponent.isLocationComponentActivated) {
-                    map.locationComponent.cameraMode = CameraMode.TRACKING
-                    map.locationComponent.zoomWhileTracking(15.0)
+                map.getStyle {
+                    if (wanted) {
+                        val tracking = currentPuckActive && map.withReadyLocationComponent("open on own position") { component ->
+                            component.cameraMode = CameraMode.TRACKING
+                            component.zoomWhileTracking(15.0)
+                        }
+                        // Marker hidden: no location component to track with.
+                        // Go to the fix at the zoom the map already has, which
+                        // is what the tracking transition does.
+                        if (!tracking && currentCameraFollowsFix) {
+                            bindings.selfFix?.let { fix ->
+                                map.animateCamera(CameraUpdateFactory.newLatLng(LatLng(fix.lat, fix.lon)), 750)
+                            }
+                        }
+                    }
                 }
             }
-        } else if (recenterTrigger != null && recenterTrigger != initialRecenterTrigger) {
+        } else if (pressed && puckActive) {
+            mapView.getMapAsync { map ->
+                // getStyle runs this now when a style is loaded, which is the
+                // normal case. With no style (none set yet, or the last one
+                // failed to parse) it runs after the next one has loaded and
+                // the location component has been moved onto it, so the press
+                // is not lost and cannot reach a component with no style.
+                map.getStyle {
+                    if (wanted) {
+                        map.withReadyLocationComponent("recenter") { component ->
+                            component.cameraMode = CameraMode.TRACKING
+                            component.zoomWhileTracking(15.0)
+                        }
+                    }
+                }
+            }
+        } else if (pressed) {
             // #210 - marker hidden, so there is no LocationComponent to track
-            // with: pan and zoom straight to the raw fix. (The initial value
-            // is skipped so composing the map never moves the camera.)
+            // with: pan and zoom straight to the raw fix.
             val fix = selfFix
             if (cameraFollowsFix && fix != null) {
                 mapView.getMapAsync { map ->
@@ -528,7 +635,7 @@ fun TacticalMap(
                 }
             }
         }
-        onDispose { }
+        onDispose { wanted = false }
     }
 
     // Programmatic zoom — the +/− FABs in MapScreen tick these counters
@@ -639,15 +746,17 @@ fun TacticalMap(
                     // so a basemap swap wipes them. Re-register + re-apply so
                     // the puck survives style reloads with its current
                     // (dimmed or live) appearance.
-                    if (currentPuckActive && map.locationComponent.isLocationComponentActivated) {
-                        map.locationComponent.applyStyle(
-                            buildPuckOptions(
-                                context, style, currentUseMilStd, currentTeamColor,
-                                dimmed = puckAppearance.dimmed,
-                                selfMarkerTriangle = currentSelfMarkerTriangle,
-                                echelonAmplifier = echelonAmplifierFor(currentSelfEchelon),
-                            ),
-                        )
+                    if (currentPuckActive) {
+                        map.withReadyLocationComponent("style reload") { component ->
+                            component.applyStyle(
+                                buildPuckOptions(
+                                    context, style, currentUseMilStd, currentTeamColor,
+                                    dimmed = puckAppearance.dimmed,
+                                    selfMarkerTriangle = currentSelfMarkerTriangle,
+                                    echelonAmplifier = echelonAmplifierFor(currentSelfEchelon),
+                                ),
+                            )
+                        }
                     }
                     currentStyleReady?.invoke(map, style)
                     // Apply 3D tilt AFTER the style (which carries the
@@ -700,9 +809,7 @@ fun TacticalMap(
         val target = panTarget
         if (panTargetTick > 0 && target != null) {
             mapView.getMapAsync { map ->
-                if (map.locationComponent.isLocationComponentActivated) {
-                    map.locationComponent.cameraMode = CameraMode.NONE
-                }
+                map.withReadyLocationComponent("pan") { it.cameraMode = CameraMode.NONE }
                 map.animateCamera(
                     CameraUpdateFactory.newLatLngZoom(target, 14.0),
                     600,
@@ -715,18 +822,28 @@ fun TacticalMap(
     // "Follow me" toggle — pins the camera to the user's location and
     // rotates with compass heading. Flipping off returns to free-pan.
     DisposableEffect(mapView, followMeActive, puckActive) {
+        // False once the toggle has changed again or the map has left the
+        // screen: a wait for the style must not act after that.
+        var wanted = true
         if (puckActive) {
             mapView.getMapAsync { map ->
-                if (map.locationComponent.isLocationComponentActivated) {
-                    map.locationComponent.cameraMode = if (followMeActive) {
-                        CameraMode.TRACKING_COMPASS
-                    } else {
-                        CameraMode.NONE
+                // This runs when the map is composed too. With no style loaded
+                // (none set yet, or the last one failed to parse) wait for the
+                // next one before touching the component.
+                map.getStyle {
+                    if (wanted) {
+                        map.withReadyLocationComponent("follow me") { component ->
+                            component.cameraMode = if (followMeActive) {
+                                CameraMode.TRACKING_COMPASS
+                            } else {
+                                CameraMode.NONE
+                            }
+                        }
                     }
                 }
             }
         }
-        onDispose { }
+        onDispose { wanted = false }
     }
 
     // #210 - follow-me while the marker is hidden. There is no LocationComponent
@@ -761,11 +878,53 @@ fun TacticalMap(
         onDispose { }
     }
 
+    // Leaving the screen. #177 — the MapView is retained (RetainedMapView) so
+    // it can be shown again without a cold MapLibre rebuild, so there is no
+    // onDestroy() here. We only:
+    //   1. silence the LocationComponent (its compass animator keeps firing
+    //      across nav transitions and crashes when it touches a detached
+    //      style — the original reason for the teardown), and
+    //   2. detach the view from its Compose parent so the next AndroidView can
+    //      attach it (a View may have only one parent).
+    // The map object with its style and camera stays; detaching ends the
+    // render thread and resets the renderer, and both start again on the next
+    // attach.
+    //
+    // This is its own effect, keyed on the view alone, so it runs when the map
+    // really leaves the composition and at no other time. It used to sit in the
+    // lifecycle effect below, which restarts whenever its lifecycle owner
+    // changes: were that ever to happen under a composition that stays, the
+    // view would be taken out of a screen still showing it. It is declared
+    // before that effect so that, on the way out, the observer is removed
+    // first.
+    //
+    // All of it only while this composition still has the view. If a newer one
+    // took it, it is attached and running there: silencing the location layer
+    // or detaching the view now would blank the map on screen.
+    DisposableEffect(mapView) {
+        onDispose {
+            if (RetainedMapView.isHeldBy(holder)) {
+                runCatching {
+                    mapView.getMapAsync { map ->
+                        if (map.locationComponent.isLocationComponentActivated) {
+                            map.locationComponent.isLocationComponentEnabled = false
+                        }
+                    }
+                }
+                RetainedMapView.release(holder, mapView)
+            }
+        }
+    }
+
+    // onPause/onStop/onStart/onResume follow the host's lifecycle.
     DisposableEffect(lifecycleOwner, mapView) {
         val observer = LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_START -> mapView.onStart()
-                Lifecycle.Event.ON_RESUME -> {
+            // Nothing is forwarded once a newer composition has the view (a new
+            // Activity opened before this one finished closing): this one's
+            // late onPause/onStop would freeze the map that is on screen there.
+            when (RetainedMapRules.viewCallFor(event, RetainedMapView.isHeldBy(holder))) {
+                RetainedMapRules.ViewCall.START -> mapView.onStart()
+                RetainedMapRules.ViewCall.RESUME -> {
                     mapView.onResume()
                     // Issue #75 (root cause) — ON_PAUSE below silences the
                     // LocationComponent to kill its compass animator, but
@@ -789,7 +948,7 @@ fun TacticalMap(
                         }
                     }
                 }
-                Lifecycle.Event.ON_PAUSE -> {
+                RetainedMapRules.ViewCall.PAUSE -> {
                     // Silence the LocationComponent on pause — its compass
                     // animator keeps firing across lifecycle transitions
                     // and crashes when it touches a detached style
@@ -803,35 +962,23 @@ fun TacticalMap(
                     }
                     mapView.onPause()
                 }
-                Lifecycle.Event.ON_STOP -> mapView.onStop()
-                Lifecycle.Event.ON_DESTROY -> mapView.onDestroy()
-                else -> Unit
+                RetainedMapRules.ViewCall.STOP -> mapView.onStop()
+                // No onDestroy(), ever. ON_DESTROY is the Activity (or its nav
+                // entry) being destroyed, not the view: RetainedMapView keeps
+                // the view and hands it to the next Activity. Through 0.45.0
+                // this destroyed it and the next Activity got the destroyed
+                // view back: no style, a location layer still "activated" on
+                // the cleared one, and an IllegalStateException ("Calling
+                // getSourceAs when a newer style is loading/has loaded") as
+                // soon as anything touched it. Every Activity rebuild in a
+                // live process did it: the system switching to dark mode, a
+                // font size change, the app swiped out of Recents and reopened
+                // while its connection service kept the process alive.
+                RetainedMapRules.ViewCall.NOTHING -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            // #177 — the MapView is now retained (RetainedMapView) so it can be
-            // re-attached instantly on return without a cold MapLibre rebuild.
-            // Therefore DO NOT onDestroy() here — that would defeat the retention
-            // and leave a destroyed view to re-attach. We only:
-            //   1. silence the LocationComponent (its compass animator keeps
-            //      firing across nav transitions and crashes when it touches a
-            //      detached style — the original reason for the teardown), and
-            //   2. detach the view from its Compose parent so the next
-            //      AndroidView can re-attach it (a View may have only one parent).
-            // onPause/onStop are still driven by the lifecycle observer above for
-            // real Activity lifecycle events; here we just keep the GL surface
-            // warm. The view is destroyed only when the process ends.
-            runCatching {
-                mapView.getMapAsync { map ->
-                    if (map.locationComponent.isLocationComponentActivated) {
-                        map.locationComponent.isLocationComponentEnabled = false
-                    }
-                }
-            }
-            RetainedMapView.detach(mapView)
-        }
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     // Issue #77 — push contact updates on every recomposition that delivers a new
@@ -1183,6 +1330,39 @@ private fun SelfFix.toLocation(): android.location.Location =
 /** Stale self-marker opacity (0–255). ~45% — subtle, but unmistakably
  *  dimmer than the live marker (issue #75). */
 private const val STALE_MARKER_ALPHA = 115
+
+/**
+ * Touch MapLibre's LocationComponent only when it can take it, and never let
+ * its style check take the app down.
+ *
+ * Any call that reaches the component's layers on a style that has been
+ * cleared throws `IllegalStateException("Calling getSourceAs when a newer
+ * style is loading/has loaded")` on the main thread (#197, #251). "Activated"
+ * is not enough to know it is safe: the component stays activated when its
+ * style is cleared. `MapLibreMap.getStyle()` is null unless the current style
+ * is fully loaded, and MapLibre moves the component onto a newly loaded style
+ * before any callback or listener of the app runs, so a non-null style is the
+ * gate. The catch is for whatever that reasoning misses.
+ *
+ * Returns true when [block] ran, false when it was skipped. A caller whose
+ * action must not be lost wraps this in `map.getStyle { ... }`, which waits
+ * for the style.
+ */
+private inline fun org.maplibre.android.maps.MapLibreMap.withReadyLocationComponent(
+    what: String,
+    block: (org.maplibre.android.location.LocationComponent) -> Unit,
+): Boolean {
+    if (style == null) return false
+    val component = locationComponent
+    if (!component.isLocationComponentActivated) return false
+    return try {
+        block(component)
+        true
+    } catch (e: IllegalStateException) {
+        Log.w(TAG, "$what: the map style changed under the location component, skipped", e)
+        false
+    }
+}
 
 /**
  * #197 — applies a [SelfPuckSpec]'s render mode (and the given camera mode)

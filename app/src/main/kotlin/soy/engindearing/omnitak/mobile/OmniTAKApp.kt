@@ -319,6 +319,13 @@ class OmniTAKApp : Application() {
     // mesh broadcast lambdas). Initialized to defaults until DataStore emits.
     private val cachedPrefs = MutableStateFlow(soy.engindearing.omnitak.mobile.data.UserPrefs())
 
+    /**
+     * The saved preferences as last read, or the defaults until the first read
+     * has finished. For a screen that would otherwise draw one frame from the
+     * defaults before its own collector delivers the real ones.
+     */
+    val latestPrefs: soy.engindearing.omnitak.mobile.data.UserPrefs get() = cachedPrefs.value
+
     /** Single plugin host instance shared by [loadBundledPlugins] and the
      *  screens that consume registrations (MapScreen overlays/radial,
      *  SettingsScreen rows). Holds the registered hooks. */

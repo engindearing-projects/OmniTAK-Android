@@ -132,10 +132,16 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     val msgReceived by app.serverManager.messagesReceived.collectAsState()
     val msgSent by app.serverManager.messagesSent.collectAsState()
     val contacts by app.contactStore.contacts.collectAsState()
+    // Start from the preferences the app already has, not from the defaults.
+    // This screen is composed again on every return to the map tab, onto a map
+    // view that is already running: one pass with the default basemap, marker
+    // style and "marker visible" reloaded the style to the default and back,
+    // and let the map's long-lived listeners act on settings the operator
+    // never chose.
+    val userPrefs by app.userPrefsStore.prefs.collectAsState(initial = app.latestPrefs)
     // Layers toggle: mesh-origin contacts are persisted because the
     // operator's last choice should survive a process restart. Default
     // visible — matches iOS.
-    val userPrefs by app.userPrefsStore.prefs.collectAsState(initial = soy.engindearing.omnitak.mobile.data.UserPrefs())
     val meshNodesVisible = userPrefs.meshNodesLayerVisible
     // Field feedback (PatoG, 2026-08) — split "paired radios" (Meshtastic
     // role TAK: the phone next to them already broadcasts the operator's
@@ -356,17 +362,24 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         }
     }
     // When the globe takes over, TacticalMap leaves composition and its
-    // MapView is destroyed — drop the stale handle so auto-follow,
-    // center-on-drone and lasso projection no-op cleanly instead of
-    // driving a destroyed map. TacticalMap.onMapReady repopulates it
-    // when the 2D engine comes back.
+    // MapView comes off screen (it is kept, see RetainedMapView) — drop the
+    // handle so auto-follow, center-on-drone and lasso projection no-op
+    // cleanly instead of driving a map nobody can see. TacticalMap.onMapReady
+    // hands it back when the 2D engine returns.
     LaunchedEffect(userPrefs.cesiumGlobeEnabled) {
         if (userPrefs.cesiumGlobeEnabled) mapboxMap = null
     }
 
     // Re-apply KML overlays to the live style whenever the set changes.
     // (Re-application after a style RELOAD is handled by TacticalMap.onStyleReady.)
-    LaunchedEffect(kmlOverlays) {
+    //
+    // This and the three overlay effects below are keyed on mapboxMap as well.
+    // The handle is null when this screen is first composed and arrives a
+    // moment later, at once when the map view already exists (every return to
+    // the map tab). Without the key they ran once against null and never
+    // again, so whatever had changed while the map was off screen (an import,
+    // a download that finished) was not drawn until the next change.
+    LaunchedEffect(kmlOverlays, mapboxMap) {
         mapboxMap?.getStyle { style ->
             soy.engindearing.omnitak.mobile.ui.components.KmlOverlayRenderer
                 .apply(style, kmlOverlays, app.kmlOverlayStore)
@@ -401,7 +414,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     // CURRENTLY visible — TacticalMap's own style-loaded clamp can't see
     // the overlay list, so this effect is the authoritative, full
     // recompute (basemap max AND overlay maxes together).
-    LaunchedEffect(mbtilesOverlays, userPrefs.mapProvider, userPrefs.customTileUrl) {
+    LaunchedEffect(mbtilesOverlays, userPrefs.mapProvider, userPrefs.customTileUrl, mapboxMap) {
         val map = mapboxMap
         map?.getStyle { style ->
             soy.engindearing.omnitak.mobile.ui.components.KmlOverlayRenderer
@@ -417,7 +430,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         }
     }
     // Re-apply single-image raster overlays when the set changes.
-    LaunchedEffect(rasterImagery) {
+    LaunchedEffect(rasterImagery, mapboxMap) {
         mapboxMap?.getStyle { style ->
             soy.engindearing.omnitak.mobile.ui.components.KmlOverlayRenderer
                 .applyRaster(style, rasterImagery, app.rasterOverlayStore)
@@ -426,7 +439,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     // #120 — re-apply downloaded offline regions (cached MBTiles) when the
     // set changes. OfflineTilePolicy decides whether cache wins (offline) or
     // simply layers in (online). Device-pending: the on-map render itself.
-    LaunchedEffect(offlineRegions) {
+    LaunchedEffect(offlineRegions, mapboxMap) {
         mapboxMap?.getStyle { style ->
             val decision = soy.engindearing.omnitak.mobile.data.offline.OfflineTilePolicy.decide(
                 offlineRegions, app.offlineRegionStore.networkAvailable(),

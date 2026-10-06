@@ -1,8 +1,10 @@
 package soy.engindearing.omnitak.mobile.ui.components
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import soy.engindearing.omnitak.mobile.data.KmlVectorOverlay
 
 /**
  * Locks the GeoJSON line/polygon parse that feeds the #80-class native KML
@@ -54,5 +56,36 @@ class KmlShapeRendererTest {
     @Test fun malformed_geojson_yields_empty_not_crash() {
         val s = KmlShapeRenderer.parseShapes("not json")
         assertTrue(s.lines.isEmpty() && s.polygons.isEmpty())
+    }
+
+    // The map view is kept across visits to other tabs, and the map screen asks
+    // for its KML shapes again every time it is composed. Shapes that are
+    // already on that map must not be read from disk and parsed again.
+
+    private fun overlay(id: String, visible: Boolean = true, colorHex: String = "#FF00FF") = KmlVectorOverlay(
+        id = id, name = id, fileName = "$id.geojson", colorHex = colorHex, visible = visible,
+        featureCount = 1, minLat = 0.0, minLon = 0.0, maxLat = 1.0, maxLon = 1.0,
+    )
+
+    @Test fun the_same_overlays_on_the_same_map_are_not_drawn_again() {
+        val shown = listOf(overlay("a"), overlay("b"))
+        assertFalse(KmlShapeRenderer.needsApply(sameMap = true, applied = shown, wanted = listOf(overlay("a"), overlay("b"))))
+        assertFalse("nothing shown, nothing wanted", KmlShapeRenderer.needsApply(true, emptyList(), emptyList()))
+    }
+
+    @Test fun anything_that_changes_what_is_drawn_draws_again() {
+        val shown = listOf(overlay("a"), overlay("b"))
+        assertTrue("an overlay added", KmlShapeRenderer.needsApply(true, shown, shown + overlay("c")))
+        assertTrue("an overlay removed", KmlShapeRenderer.needsApply(true, shown, listOf(overlay("a"))))
+        assertTrue("an overlay hidden", KmlShapeRenderer.needsApply(true, shown, listOf(overlay("a"), overlay("b", visible = false))))
+        assertTrue("a colour changed", KmlShapeRenderer.needsApply(true, shown, listOf(overlay("a"), overlay("b", colorHex = "#00FF00"))))
+        assertTrue("a different order is a different draw order", KmlShapeRenderer.needsApply(true, shown, shown.reversed()))
+    }
+
+    @Test fun a_different_map_or_a_first_call_always_draws() {
+        val shown = listOf(overlay("a"))
+        assertTrue("another map instance has none of these shapes", KmlShapeRenderer.needsApply(sameMap = false, applied = shown, wanted = shown))
+        assertTrue("nothing applied yet", KmlShapeRenderer.needsApply(sameMap = true, applied = null, wanted = shown))
+        assertTrue(KmlShapeRenderer.needsApply(sameMap = true, applied = null, wanted = emptyList()))
     }
 }
