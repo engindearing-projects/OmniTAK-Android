@@ -293,4 +293,127 @@ class DeviceSettingsStateTest {
     }
 
     // endregion
+
+    // region the position floor, before the push ---------------------------------------------------------------
+
+    /** What the stock radio reports: the default channel, interval one hour. */
+    private fun stock() = factory().report(AdminResponse.PositionConfig(3_600))
+
+    private val reasonOneHour = PositionFloor.reason(PositionFloor.DEFAULT_FLOOR_SECS)
+
+    private fun hint(state: DeviceSettingsState, facts: PositionFacts?, change: MeshDeviceConfig.() -> MeshDeviceConfig): String? =
+        state.positionIntervalHint(facts, state.draft.change())
+
+    @Test fun `a short interval chosen for a radio on the default channel gets the reason`() {
+        val state = stock()
+        assertEquals(reasonOneHour, hint(state, PositionFixtures.facts()) { copy(positionBroadcastSecs = 120) })
+    }
+
+    @Test fun `the interval the radio reports shows the hint too, when it is under the floor`() {
+        // The radio holds what it was sent until it restarts, so it can report a short interval.
+        val state = factory().report(AdminResponse.PositionConfig(120))
+        assertEquals(reasonOneHour, state.positionIntervalHint(PositionFixtures.facts()))
+    }
+
+    @Test fun `an interval at or over the floor, or 0, gets no hint`() {
+        val state = stock()
+        val facts = PositionFixtures.facts()
+        assertNull("the floor itself", hint(state, facts) { copy(positionBroadcastSecs = 3_600) })
+        assertNull("over it", hint(state, facts) { copy(positionBroadcastSecs = 7_200) })
+        assertEquals("just under it", reasonOneHour, hint(state, facts) { copy(positionBroadcastSecs = 3_599) })
+        assertNull("0 is left alone by the firmware", hint(state, facts) { copy(positionBroadcastSecs = 0) })
+        assertNull("the radio's own value, at the floor, unedited", state.positionIntervalHint(facts))
+    }
+
+    @Test fun `a primary channel with a 32 byte key gets no hint`() {
+        val facts = PositionFixtures.facts(mapOf(0 to PositionFixtures.channel(key = PositionFixtures.privateKey())))
+        assertNull(hint(stock(), facts) { copy(positionBroadcastSecs = 120) })
+    }
+
+    @Test fun `a renamed channel on the default key gets no hint, the firmware does not call it the default channel`() {
+        val facts = PositionFixtures.facts(mapOf(0 to PositionFixtures.channel(name = "Alpha")))
+        assertNull(hint(stock(), facts) { copy(positionBroadcastSecs = 120) })
+    }
+
+    @Test fun `no position precision on any channel gets no hint`() {
+        val facts = PositionFixtures.facts(mapOf(0 to PositionFixtures.channel(precision = 0)))
+        assertNull(hint(stock(), facts) { copy(positionBroadcastSecs = 120) })
+    }
+
+    @Test fun `a router's floor is twelve hours`() {
+        val state = stock()
+        val facts = PositionFixtures.facts(role = 2)
+        assertEquals(PositionFloor.reason(PositionFloor.ROUTER_FLOOR_SECS), hint(state, facts) { copy(positionBroadcastSecs = 3_600) })
+        assertNull(hint(state, facts) { copy(positionBroadcastSecs = 43_200) })
+        assertEquals("ROUTER_LATE too", PositionFloor.reason(PositionFloor.ROUTER_FLOOR_SECS), hint(state, PositionFixtures.facts(role = 11)) { copy(positionBroadcastSecs = 600) })
+    }
+
+    @Test fun `choosing the router role in the same push moves the floor, and leaving it moves it back`() {
+        val state = stock()
+        val client = PositionFixtures.facts(role = 0)
+        assertNull("a client at one hour", hint(state, client) { copy(positionBroadcastSecs = 3_600) })
+        assertEquals(
+            "a router once pushed",
+            PositionFloor.reason(PositionFloor.ROUTER_FLOOR_SECS),
+            hint(state, client) { copy(role = MeshRole.ROUTER, positionBroadcastSecs = 3_600) },
+        )
+        val router = PositionFixtures.facts(role = 2)
+        assertNull(
+            "a router leaving the role",
+            hint(state.report(AdminResponse.DeviceConfig(MeshRole.ROUTER, RebroadcastMode.ALL)), router) { copy(role = MeshRole.CLIENT, positionBroadcastSecs = 3_600) },
+        )
+    }
+
+    @Test fun `a rename in the same push decides it too`() {
+        val state = stock()
+        val facts = PositionFixtures.facts()
+        assertEquals(reasonOneHour, hint(state, facts) { copy(positionBroadcastSecs = 120) })
+        assertNull("renamed: no longer the default channel", hint(state, facts) { copy(positionBroadcastSecs = 120, channelName = "Alpha") })
+        assertEquals("renamed to the preset's name", reasonOneHour, hint(state, facts) { copy(positionBroadcastSecs = 120, channelName = "LongFast") })
+    }
+
+    @Test fun `a preset in the same push decides it too`() {
+        val named = PositionFixtures.facts(mapOf(0 to PositionFixtures.channel(name = "MediumFast")))
+        val state = stock().report(AdminResponse.Channel(0, "MediumFast", 1))
+        assertNull("the radio is on LONG_FAST: this name is not the default", hint(state, named) { copy(positionBroadcastSecs = 120) })
+        assertEquals(
+            "moved to MEDIUM_FAST, it is",
+            reasonOneHour,
+            hint(state, named) { copy(positionBroadcastSecs = 120, channelPreset = MeshChannelPreset.MEDIUM_FAST) },
+        )
+    }
+
+    @Test fun `nothing is said while what the decision needs is not loaded`() {
+        val state = stock()
+        val short = { s: DeviceSettingsState -> s.draft.copy(positionBroadcastSecs = 120) }
+        assertNull("no facts", state.positionIntervalHint(null, short(state)))
+        assertNull("no LoRa config", state.positionIntervalHint(PositionFixtures.facts(lora = null), short(state)))
+        assertNull("no device config", state.positionIntervalHint(PositionFixtures.facts(role = null), short(state)))
+        assertNull(
+            "channel 0 not reported",
+            state.positionIntervalHint(PositionFacts(List(8) { null }, PositionFacts.LoraFacts(true, 0), 0), short(state)),
+        )
+        assertNull(
+            "the radio has not reported its interval, so the draft's is a leftover",
+            DeviceSettingsState(radio = RadioSettings(role = MeshRole.CLIENT))
+                .positionIntervalHint(PositionFixtures.facts(), MeshDeviceConfig(positionBroadcastSecs = 30)),
+        )
+        assertNull(
+            "no radio at all",
+            DeviceSettingsState(radio = null).positionIntervalHint(PositionFixtures.facts(), MeshDeviceConfig(positionBroadcastSecs = 30)),
+        )
+    }
+
+    // endregion
+
+    // region the rebroadcast mode ---------------------------------------------------------------------------------
+
+    @Test fun `the radio's rebroadcast mode is kept, so a write of it can be compared with what the radio reports`() {
+        val state = freshInstall.report(AdminResponse.DeviceConfig(role = MeshRole.CLIENT, rebroadcastMode = RebroadcastMode.KNOWN_ONLY))
+        assertEquals(RebroadcastMode.KNOWN_ONLY, state.radio!!.rebroadcastMode)
+        assertEquals("a mode with no name here is not a mode", null, state.report(AdminResponse.DeviceConfig(MeshRole.CLIENT, null)).radio!!.rebroadcastMode)
+        assertTrue("and it is not something the screen edits", state.edits().isEmpty)
+    }
+
+    // endregion
 }

@@ -2,6 +2,7 @@ package soy.engindearing.omnitak.mobile.domain
 
 import android.content.Context
 import android.util.Log
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -39,15 +40,21 @@ import soy.engindearing.omnitak.mobile.data.TakPacketParser
 import soy.engindearing.omnitak.mobile.data.TakPacketSerializer
 import soy.engindearing.omnitak.mobile.data.TakPacketV2Codec
 import soy.engindearing.omnitak.mobile.data.MeshWire
+import soy.engindearing.omnitak.mobile.data.AdminSetting
+import soy.engindearing.omnitak.mobile.data.DeviceSettingsState
 import soy.engindearing.omnitak.mobile.data.FromRadioFrame
+import soy.engindearing.omnitak.mobile.data.InterruptedWrite
 import soy.engindearing.omnitak.mobile.data.MeshConnectionType
 import soy.engindearing.omnitak.mobile.data.MeshNode
 import soy.engindearing.omnitak.mobile.data.MeshtasticBleClient
 import soy.engindearing.omnitak.mobile.data.MeshtasticProtoParser
 import soy.engindearing.omnitak.mobile.data.MeshtasticTcpClient
+import soy.engindearing.omnitak.mobile.data.PositionFacts
 import soy.engindearing.omnitak.mobile.data.ProtoFields
+import soy.engindearing.omnitak.mobile.data.RadioSettings
 import soy.engindearing.omnitak.mobile.data.RadioSettingsCache
 import soy.engindearing.omnitak.mobile.data.SentLedger
+import soy.engindearing.omnitak.mobile.data.SentSettings
 
 /**
  * Application-scoped Meshtastic state holder. Owns the TCP and BLE
@@ -232,6 +239,24 @@ class MeshtasticManager(
      */
     internal val radioSettings = RadioSettingsCache()
 
+    private val positionFactsLock = Any()
+    private val _positionFacts = MutableStateFlow(PositionFacts.read(radioSettings))
+
+    /**
+     * What the radio reported about the settings that decide the firmware's position floor: its channels, its
+     * LoRa config and its role ([PositionFacts]). Read from [radioSettings] each time that changes, so it is
+     * what the radio said and never the app's own list of saved channels. Parts the radio has not reported are
+     * null, and the screen says nothing about the floor until they are in.
+     */
+    val positionFacts: StateFlow<PositionFacts> = _positionFacts.asStateFlow()
+
+    init {
+        // Under a lock, so the last change to the cache is the last one to be read into the flow.
+        radioSettings.onChange = {
+            synchronized(positionFactsLock) { _positionFacts.value = PositionFacts.read(radioSettings) }
+        }
+    }
+
     /** Test seam: when set, settings writes go here instead of the BLE/TCP transport. Null in the app. */
     @Volatile internal var adminSendOverride: (suspend (ByteArray) -> Boolean)? = null
 
@@ -260,8 +285,54 @@ class MeshtasticManager(
      */
     val lastPushResult: StateFlow<String?> = _lastPushResult.asStateFlow()
 
+    /**
+     * Forget what the last push said, what it sent and the note about what the radio did with it
+     * ([restartNote]). Called when the operator edits a field or pushes again: all of it was about the
+     * settings as they were before.
+     */
     fun clearLastPushResult() {
         _lastPushResult.value = null
+        synchronized(noteLock) {
+            lastPush = null
+            _restartNote.value = null
+        }
+    }
+
+    /**
+     * Guards [lastPush] and [restartNote]: the download that judges a push comes in on the frame thread, and the
+     * operator's edit or push that forgets it on another, and a note must not outlive the edit that cleared it.
+     */
+    private val noteLock = Any()
+
+    /** What the last Device settings push sent, and to which radio. Judged when that radio's download is in. */
+    @Volatile private var lastPush: SentSettings? = null
+
+    /**
+     * What the radio reported in this session, setting by setting, the way the settings screen reads it. Starts
+     * empty with every download; what [lastPush] is compared with.
+     */
+    @Volatile private var reported = RadioSettings()
+
+    private val _restartNote = MutableStateFlow<String?>(null)
+
+    /**
+     * Set when the radio is back after a push and reports a value other than the one that was sent: one sentence
+     * for each, with both values, and the reason when the firmware's position floor explains an interval
+     * ([PositionFloor]). Null while there is nothing to say. It stays through link drops and reconnects of the
+     * same radio, until the operator edits or pushes ([clearLastPushResult]) or a different radio connects. A value
+     * the radio kept says nothing.
+     */
+    val restartNote: StateFlow<String?> = _restartNote.asStateFlow()
+
+    /**
+     * The download of the radio that [lastPush] went to is in: compare what it reports with what was sent. Judged
+     * again at every download of that radio until the operator edits or pushes, so a download that came before
+     * the radio had restarted (and still held what it received) does not hide what the next one shows.
+     */
+    private fun judgeLastPush() = synchronized(noteLock) {
+        val sent = lastPush ?: return@synchronized
+        if (sent.node != _myNodeNum) return@synchronized
+        _restartNote.value = sent.check(reported, PositionFacts.read(radioSettings))
     }
 
     /** True from the end of a config download (`config_complete_id`) until the next one starts or the link drops. */
@@ -292,7 +363,145 @@ class MeshtasticManager(
         // Longer over Bluetooth: an answer waits there for the drain or the poll of the BLE client.
         readTimeoutMs = { MeshSettingsWriter.readTimeoutFor(_activeTransport.value) },
         reads = adminReads,
+        onTransactionEnd = { node, leftOpen, settings, values -> sequenceEnded(node, leftOpen, settings, values) },
     )
+
+    // region An edit transaction a lost link left open --------------------------------------------------
+
+    /** Guards the state below. */
+    private val transactionLock = Any()
+
+    /**
+     * The sequence that began an edit transaction on a radio and did not get its commit out ([InterruptedWrite]),
+     * until a link-up decides what to do about it: close it, or say it is gone.
+     */
+    private var interrupted: InterruptedWrite? = null
+
+    /** `my_info.reboot_count` of the latest link-up, which a sequence that ends on that link is remembered with. */
+    @Volatile private var rebootCount: UInt = 0u
+
+    /** The interrupted sequence of a radio that does not count its restarts, until its download says what the radio holds. */
+    private var awaitingDownload: InterruptedWrite? = null
+
+    /** The writer's hold while a decision is pending: released when it is made, when the link drops or after [settleTimeoutMs]. */
+    private var decisionGate: CompletableDeferred<Unit>? = null
+
+    private fun sequenceEnded(
+        node: UInt, leftOpen: Boolean, settings: List<AdminSetting>, values: Map<AdminSetting, InterruptedWrite.WrittenValue>,
+    ) = synchronized(transactionLock) {
+        if (leftOpen) {
+            Log.w(TAG, "a sequence ended without its commit: ${settings.size} setting(s) written, the transaction may be open")
+            interrupted = InterruptedWrite(node, rebootCount, settings, values)
+        } else if (interrupted?.node == node) {
+            // The commit of a later sequence closed it.
+            interrupted = null
+        }
+    }
+
+    /**
+     * The radio has said who it is (`my_info`) and an earlier sequence may have left a transaction open on one. What
+     * the firmware does with it (AdminModule.cpp, [InterruptedWrite]): the transaction survives a disconnect, nothing
+     * is saved or restarted while it is open, and a restart clears it and the changes with it.
+     *
+     *  - another radio: forget it, send nothing;
+     *  - a radio that counts its restarts (either count is not 0): the same count means it has not restarted, so the
+     *    commit goes out now, first, and the result line says the change was saved; a different count means it has
+     *    restarted, so nothing is sent and the result line says the change was not saved;
+     *  - a radio that does not (both counts are 0, as on nRF52 and the simulator) cannot say, and a commit to a radio
+     *    that did restart saves nothing new and restarts it a second time. So nothing is decided until its download
+     *    is in ([decideFromDownload]), and nothing is sent until then: the writer is held, so no other admin frame
+     *    goes out before the decision is made. With nothing written yet there is nothing to decide, and nothing is
+     *    sent: a transaction that is still open is closed by the next write, as before.
+     */
+    private fun settleInterrupted(node: UInt, count: UInt) {
+        val rec = synchronized(transactionLock) { interrupted } ?: return
+        // What the sequence wrote is judged here from now on. The ledger would blame a radio that restarted since for
+        // ignoring it ("It may be managed"), when the writes were simply lost with the restart.
+        if (rec.node == node) sentLedger.forget(node)
+        when {
+            rec.node != node -> forgetInterrupted(rec)
+            rec.rebootCount != 0u || count != 0u ->
+                if (rec.rebootCount == count) {
+                    closeInterrupted(rec, holdForDecision(), InterruptedWrite.SAVED)
+                } else {
+                    forgetInterrupted(rec)
+                    _lastPushResult.value = InterruptedWrite.NOT_SAVED
+                }
+            rec.settings.isEmpty() -> forgetInterrupted(rec)
+            else -> {
+                val gate = holdForDecision()
+                synchronized(transactionLock) { awaitingDownload = rec }
+                // Bounded: a download that never completes must not hold the writer for ever.
+                scope.launch {
+                    delay(settleTimeoutMs)
+                    synchronized(transactionLock) {
+                        if (awaitingDownload === rec) {
+                            awaitingDownload = null
+                            if (interrupted === rec) interrupted = null
+                        }
+                    }
+                    gate.complete(Unit)
+                }
+            }
+        }
+    }
+
+    /** The download is complete: judge the interrupted sequence of a radio that does not count its restarts. */
+    private fun decideFromDownload() {
+        val (rec, gate) = synchronized(transactionLock) {
+            val rec = awaitingDownload ?: return
+            awaitingDownload = null
+            rec to (decisionGate ?: return)
+        }
+        when (rec.verdict(reported)) {
+            InterruptedWrite.Verdict.HOLDS -> closeInterrupted(rec, gate, InterruptedWrite.SAVED)
+            InterruptedWrite.Verdict.GONE -> {
+                forgetInterrupted(rec)
+                _lastPushResult.value = InterruptedWrite.NOT_SAVED
+                gate.complete(Unit)
+            }
+            InterruptedWrite.Verdict.UNKNOWN -> {
+                forgetInterrupted(rec)
+                _lastPushResult.value = InterruptedWrite.CHECK
+                gate.complete(Unit)
+            }
+        }
+    }
+
+    /** Hold every other admin frame back until the returned gate is completed. */
+    private fun holdForDecision(): CompletableDeferred<Unit> = CompletableDeferred<Unit>().also { gate ->
+        synchronized(transactionLock) { decisionGate = gate }
+        settingsWriter.holdUntil(gate)
+    }
+
+    /** Send the commit, first, and say what happened. If the frame does not go out the sequence is kept for the next link-up. */
+    private fun closeInterrupted(rec: InterruptedWrite, gate: CompletableDeferred<Unit>, text: String) {
+        scope.launch {
+            try {
+                if (settingsWriter.commitLeftOpen()) {
+                    forgetInterrupted(rec)
+                    _lastPushResult.value = text
+                }
+            } finally {
+                gate.complete(Unit)
+            }
+        }
+    }
+
+    private fun forgetInterrupted(rec: InterruptedWrite) = synchronized(transactionLock) {
+        if (interrupted === rec) interrupted = null
+    }
+
+    /** The link dropped before a decision was made: release the writer. The sequence is kept for the next link-up. */
+    private fun abandonDecision() {
+        val gate = synchronized(transactionLock) {
+            awaitingDownload = null
+            decisionGate
+        }
+        gate?.complete(Unit)
+    }
+
+    // endregion
 
     init {
         // The cache must not outlive the link it was read over: a write built
@@ -320,6 +529,9 @@ class MeshtasticManager(
             // A read sent on this link cannot be answered on another one, or by another radio.
             adminReads.clear()
             downloadComplete = false
+            reported = RadioSettings()
+            // A decision about an interrupted transaction was waiting for this link's download: release the writer.
+            abandonDecision()
             // Nothing may be addressed to the radio that was on this link: the next one reports its own number.
             _myNodeNum = null
             runCatching { linkDownSink?.invoke() }
@@ -524,12 +736,26 @@ class MeshtasticManager(
                 // and the download that follows is not finished.
                 adminReads.clear()
                 downloadComplete = false
+                // This download reports from nothing, and a note about a push is only for the radio it went to.
+                reported = RadioSettings()
+                synchronized(noteLock) {
+                    if (lastPush?.node != parsed.nodeNum) {
+                        lastPush = null
+                        _restartNote.value = null
+                    }
+                }
+                // First of everything the app sends to this radio: close an edit transaction a lost link left open,
+                // or say it is gone. The writer is held until that is decided.
+                settleInterrupted(parsed.nodeNum, parsed.rebootCount)
+                rebootCount = parsed.rebootCount
                 Log.i(TAG, "my_node_num=${parsed.nodeNum}")
             }
             is FromRadioFrame.ConfigComplete -> {
                 Log.i(TAG, "config complete id=${parsed.id}")
                 downloadCompletedNanos = System.nanoTime()
                 downloadComplete = true
+                judgeLastPush()
+                decideFromDownload()
             }
             is FromRadioFrame.ConfigFrame -> {
                 Log.i(TAG, "RX FromRadio.config (post-want_config_id dump): ${parsed.response ?: "variant with no decoded value"}")
@@ -780,6 +1006,7 @@ class MeshtasticManager(
         runCatching { adminResponseSink?.invoke(response) }
             .onFailure { Log.w(TAG, "adminResponseSink failed: ${it.message}") }
         val node = _myNodeNum ?: return
+        reported = DeviceSettingsState(radio = reported).withReport(response).radio ?: reported
         val kept = sentLedger.check(node, response)
         if (kept.isNotEmpty()) {
             _settingsNotice.value = "The radio did not take: ${kept.joinToString(", ") { it.label }}. It may be managed."
@@ -933,8 +1160,15 @@ class MeshtasticManager(
      * started it is left before it finishes (the writer runs a started
      * sequence to its commit, and its result still comes back).
      */
-    suspend fun pushDeviceConfig(edits: DeviceEdits): AdminWriteResult =
-        settingsWriter.pushDeviceConfig(edits).also { _lastPushResult.value = it.describe() }
+    suspend fun pushDeviceConfig(edits: DeviceEdits): AdminWriteResult {
+        // A new push replaces what the last one sent and what was said about it.
+        synchronized(noteLock) {
+            lastPush = null
+            _restartNote.value = null
+        }
+        return settingsWriter.pushDeviceConfig(edits) { synchronized(noteLock) { lastPush = it } }
+            .also { _lastPushResult.value = it.describe() }
+    }
 
     /**
      * #172: import a [MeshChannel] (from a scanned/pasted

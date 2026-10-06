@@ -118,6 +118,12 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
     // What the last push said. The manager keeps it, because a push ends with the radio restarting and the link
     // dropping, and the result has to stay readable through that and after it, until the next edit or push.
     val lastPush by mesh.lastPushResult.collectAsState()
+    // What the radio holds after it restarted, when that is not what the push sent. Kept by the manager for the
+    // same reason as lastPush: the link drops with the restart, and the note comes with the download after it.
+    val restartNote by mesh.restartNote.collectAsState()
+    // What the radio reported about its channels, LoRa config and role: the firmware's position floor is decided
+    // from them, never from the app's own list of saved channels.
+    val positionFacts by mesh.positionFacts.collectAsState()
     var savedToast by remember { mutableStateOf<String?>(null) }
 
     // A change the operator makes to the draft. What the last push said, and the note that the radio did not take a
@@ -258,6 +264,15 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
                     edited { it.copy(positionBroadcastSecs = v) }
                 },
             )
+            // The radio puts a short interval back to the floor when it restarts, on its default channel: say so
+            // before the push, not after it.
+            state.positionIntervalHint(positionFacts, draft)?.let { hint ->
+                Text(
+                    hint,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
 
             MeshSection("Primary channel")
             OutlinedTextField(
@@ -356,6 +371,17 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
                 Text(
                     msg,
                     color = TacticalAccent,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+
+            // The radio came back from the restart holding a value other than the one that was sent. It stays until
+            // the next edit or push.
+            restartNote?.let { msg ->
+                Text(
+                    msg,
+                    color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 4.dp),
                 )

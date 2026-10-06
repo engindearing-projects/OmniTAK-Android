@@ -79,8 +79,15 @@ internal object AdminTestFrames {
 
     // region Frames from the radio ---------------------------------------------
 
-    /** FromRadio.my_info = 3 { my_node_num = 1 }. */
-    fun myInfoFrame(nodeNum: Int): ByteArray = ProtoMsg().msg(3, ProtoMsg().varint(1, nodeNum.toLong() and 0xFFFFFFFFL)).build()
+    /**
+     * FromRadio.my_info = 3 { my_node_num = 1, reboot_count = 8 }. A radio that does not count its restarts (anything
+     * but ESP32 firmware) leaves the count off the wire, which is what [rebootCount] 0 builds.
+     */
+    fun myInfoFrame(nodeNum: Int, rebootCount: Int = 0): ByteArray {
+        val info = ProtoMsg().varint(1, nodeNum.toLong() and 0xFFFFFFFFL)
+        if (rebootCount != 0) info.varint(8, rebootCount.toLong() and 0xFFFFFFFFL)
+        return ProtoMsg().msg(3, info).build()
+    }
 
     /** FromRadio.config_complete_id = 7: the last frame of a config download. */
     fun configCompleteFrame(id: Int = 1): ByteArray = ProtoMsg().varint(7, id).build()

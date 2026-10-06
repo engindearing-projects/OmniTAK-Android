@@ -22,6 +22,8 @@ data class RadioSettings(
     val longName: String? = null,
     val shortName: String? = null,
     val role: MeshRole? = null,
+    /** Not on the Device settings screen: kept so that a write of it can be compared with what the radio reports. */
+    val rebroadcastMode: RebroadcastMode? = null,
     val positionBroadcastSecs: Int? = null,
     val channelName: String? = null,
     val channelPreset: MeshChannelPreset? = null,
@@ -102,6 +104,30 @@ data class DeviceSettingsState(
         )
     }
 
+    /**
+     * The line shown next to the interval control, or null for none: the radio's position channel is its default
+     * channel, and the interval the screen shows (the radio's own, or the one the operator chose) is above 0 and
+     * under the floor the radio will hold after the push ([PositionFloor]).
+     *
+     * Decided from what the radio reported ([facts]) and from the edits on this screen that change the answer: the
+     * role (the floor is twelve hours for a router), a rename of the primary channel and a preset (the firmware
+     * decides when it restarts, from the radio as it will then be). Nothing is said while the radio's interval, role,
+     * LoRa config or the channels the rule has to look at are not loaded.
+     */
+    fun positionIntervalHint(facts: PositionFacts?, candidate: MeshDeviceConfig = draft): String? {
+        val r = radio ?: return null
+        if (facts == null || r.positionBroadcastSecs == null) return null
+        val edits = edits(candidate)
+        val role = edits.role?.let { AdminMessageSerializer.roleProtoOrdinal(it) } ?: facts.role ?: return null
+        val onDefaultChannel = facts.onDefaultChannel(
+            channelName = edits.channelName,
+            modemPreset = edits.channelPreset?.let { AdminMessageSerializer.presetProtoOrdinal(it) },
+        ) ?: return null
+        val floor = PositionFloor.floorSecs(role)
+        val shown = candidate.positionBroadcastSecs
+        return PositionFloor.reason(floor).takeIf { onDefaultChannel && shown > 0 && shown < floor }
+    }
+
     /** Fold in one report from the connected radio. */
     fun withReport(report: AdminResponse): DeviceSettingsState {
         val old = radio ?: RadioSettings()
@@ -115,7 +141,7 @@ data class DeviceSettingsState(
             )
             is AdminResponse.DeviceConfig -> copy(
                 draft = draft.copy(role = sync(draft.role, old.role, report.role)),
-                radio = old.copy(role = report.role),
+                radio = old.copy(role = report.role, rebroadcastMode = report.rebroadcastMode),
             )
             is AdminResponse.PositionConfig -> copy(
                 draft = draft.copy(
