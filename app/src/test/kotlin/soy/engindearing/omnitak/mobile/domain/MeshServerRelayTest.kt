@@ -456,9 +456,10 @@ class MeshServerRelayTest {
 
     @Test
     fun `with MeshCore active a server contact is never written to the mesh`() = runTest {
-        // The hazard behind forcing to-mesh off: MeshCoreManager.sendCoTOverMesh
-        // treats every non-chat event as the operator's own position and
-        // overwrites the radio's advert location with it.
+        // The hazard behind forcing to-mesh off: the only place MeshCore has
+        // for a position is the radio's own advert, so a relayed contact
+        // written there would move the operator's advertised position.
+        // MeshCoreManager refuses it as well (MeshCoreOutboundTest, #234).
         val sent = Sent()
         val relay = relayWith(sent) {
             RelayDirections.effective(

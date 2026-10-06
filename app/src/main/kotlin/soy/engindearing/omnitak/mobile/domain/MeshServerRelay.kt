@@ -190,11 +190,13 @@ class MeshServerRelay(
 
             /**
              * Can the active mesh framework take server contacts down onto the
-             * air? MeshCore cannot: [MeshCoreManager.sendCoTOverMesh] treats every
-             * non-chat event as the operator's OWN position and writes it into the
-             * radio's advert location (SET_ADVERT_LATLON + SEND_SELF_ADVERT), so a
-             * relayed server contact would move the operator's advertised position
-             * onto that contact.
+             * air? MeshCore cannot: the only place it has for a position is the
+             * radio's own advert (SET_ADVERT_LATLON + SEND_SELF_ADVERT), and a
+             * relayed server contact written there would move the operator's
+             * advertised position onto that contact.
+             * [MeshCoreManager.sendCoTOverMesh] refuses anything but the
+             * operator's own position for that reason (#234); this keeps the
+             * relay from offering a direction that would send nothing.
              */
             fun meshAcceptsServerContacts(framework: MeshFramework): Boolean =
                 framework != MeshFramework.MESHCORE

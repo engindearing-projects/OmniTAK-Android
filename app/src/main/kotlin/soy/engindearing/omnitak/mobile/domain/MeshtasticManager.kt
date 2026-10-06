@@ -674,7 +674,7 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
      * writes go through the toRadio characteristic on
      * [MeshtasticBleClient.sendToRadio] (chunked at the negotiated MTU).
      */
-    override suspend fun sendCoTOverMesh(event: CoTEvent, channelIndex: UInt): Boolean {
+    override suspend fun sendCoTOverMesh(event: CoTEvent, channelIndex: UInt, ownPosition: Boolean): Boolean {
         // #171 — tactical MARKER CoT types ride TAKPacketV2 on port 78 so the
         // raw CoT type, color and iconset survive the hop (the v1 port-72 path
         // is PLI + GeoChat only and would degrade a marker to a text line).
