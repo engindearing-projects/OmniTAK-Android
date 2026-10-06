@@ -104,6 +104,14 @@ data class CoTEvent(
      * locally-built event before the source is attached).
      */
     val source: CoTSource? = null,
+    /**
+     * #215: the CoT `how` attribute: how the position was produced. `m-…` means a
+     * machine reported it (a device sending its own position, `m-g` = GPS); `h-…` means
+     * a person entered it (a dropped marker, a report, a drawing). Null when the event
+     * did not carry one or came through a path that does not read it. The max-age rule
+     * uses it to tell a teammate's own position reports from markers anyone placed.
+     */
+    val how: String? = null,
 ) {
     val affiliation: CoTAffiliation
         get() {

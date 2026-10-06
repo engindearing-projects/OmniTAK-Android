@@ -61,6 +61,25 @@ class ContactStore {
         _contacts.update { if (uid in it) it - uid else it }
     }
 
+    /**
+     * #215: Remove every contact [shouldRemove] says yes to, and return how many went.
+     *
+     * The decision is made inside the update loop, on the map that update is replacing. A report
+     * that lands while this runs is judged on its new received-at stamp and survives; deciding
+     * from an earlier snapshot and then calling [remove] by uid would drop a contact that had
+     * just been refreshed. [shouldRemove] can run more than once per call (the loop retries
+     * when another writer got in first), so it must not have side effects.
+     */
+    fun removeIf(shouldRemove: (CoTEvent) -> Boolean): Int {
+        var removed = 0
+        _contacts.update { current ->
+            val kept = current.filterValues { !shouldRemove(it) }
+            removed = current.size - kept.size
+            if (removed == 0) current else kept
+        }
+        return removed
+    }
+
     /** Drop everything — used on connection teardown or manual reset. */
     fun clear() {
         _contacts.value = emptyMap()

@@ -24,6 +24,7 @@ import soy.engindearing.omnitak.mobile.data.SelfFixPersistence
 import soy.engindearing.omnitak.mobile.data.TAKServerStore
 import soy.engindearing.omnitak.mobile.data.UserPrefsStore
 import soy.engindearing.omnitak.mobile.domain.ChatStore
+import soy.engindearing.omnitak.mobile.domain.ContactAging
 import soy.engindearing.omnitak.mobile.domain.ContactStore
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
 import soy.engindearing.omnitak.mobile.domain.DataPackageBootstrap
@@ -92,6 +93,10 @@ class OmniTAKApp : Application() {
                 localMarkerStore.persist(localMarkers)
             }
         }
+
+        // #215: hide a teammate that has stopped reporting, then remove it. One
+        // collector decides; the map and the Teams list both read its State.
+        appScope.launch { contactAging.run() }
 
         // Issue #5 — start a foreground service while we're holding a
         // connection so Doze doesn't kill the read loop within ~10s of
@@ -346,6 +351,18 @@ class OmniTAKApp : Application() {
     }
 
     val contactStore: ContactStore by lazy { ContactStore() }
+
+    /** #215: the max-age rule on [contactStore]: which contacts the map and the Teams list
+     *  treat as not heard from, and the removal of those at twice the max age. Started in
+     *  [onCreate]. The setting comes straight from the preferences flow (not [cachedPrefs]),
+     *  so nothing is hidden or removed before the saved value has been read. */
+    val contactAging: ContactAging by lazy {
+        ContactAging(
+            store = contactStore,
+            maxAgeMinutes = userPrefsStore.prefs.map { it.contactMaxAgeMinutes }.distinctUntilChanged(),
+            selfUid = { cachedPrefs.value.selfUid },
+        )
+    }
 
     /** #119 — Persists locally-dropped point markers across process death. */
     val localMarkerStore: LocalMarkerStore by lazy { LocalMarkerStore(this) }

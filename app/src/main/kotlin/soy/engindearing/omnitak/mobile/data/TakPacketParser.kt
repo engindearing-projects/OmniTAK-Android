@@ -382,6 +382,8 @@ object TakPacketParser {
             teamName = teamName,
             teamRole = teamRole,
             rawXml = rawXml,
+            // #215: a TAKPacket PLI is a device reporting its own position.
+            how = "m-g",
         )
     }
 

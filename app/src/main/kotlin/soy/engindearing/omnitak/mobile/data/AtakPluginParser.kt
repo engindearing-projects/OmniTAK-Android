@@ -232,6 +232,9 @@ object AtakPluginParser {
             // pipelines (ContactStore, marker rendering) can mine the
             // structured Detail fields we don't carry on CoTEvent today.
             rawXml = cotXml,
+            // #215: the same `how` the XML above carries, so the max-age rule can
+            // tell a teammate's own position report from a placed marker.
+            how = how ?: "m-g",
         )
     }
 
