@@ -2456,6 +2456,8 @@ private fun MeasurementOverlay(
             color = TacticalAccent,
             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
             style = MaterialTheme.typography.bodyMedium,
+            // The readout gets the width the buttons leave, never the other way round.
+            modifier = Modifier.weight(1f, fill = false),
         )
         androidx.compose.foundation.layout.Spacer(Modifier.width(12.dp))
         androidx.compose.material3.TextButton(onClick = onUndo, enabled = points.isNotEmpty()) {
@@ -2510,6 +2512,10 @@ private fun RangeRingsOverlay(
             color = TacticalAccent,
             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
             style = MaterialTheme.typography.bodyMedium,
+            // The ring summary is long. Without a weight it took the whole
+            // row on a phone and left Clear and Done no width at all, so the
+            // tool could not be closed from its own banner.
+            modifier = Modifier.weight(1f, fill = false),
         )
         androidx.compose.foundation.layout.Spacer(Modifier.width(12.dp))
         androidx.compose.material3.TextButton(onClick = onClear, enabled = center != null) {
