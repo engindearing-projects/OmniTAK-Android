@@ -183,6 +183,11 @@ data class UserPrefs(
      *  the point goes stale (fresh <1m full opacity, aging 1–5m, stale >5m). Off
      *  by default — opt-in so the default map look is unchanged. */
     val stalenessOverlayEnabled: Boolean = false,
+    /** #213 - how big the names under map markers and the position box are
+     *  drawn, as a whole percent. One of [LabelSize.CHOICES]; any other stored
+     *  value reads as the nearest choice. 100 is the size the app has always
+     *  drawn, so an upgrade changes nothing until the operator picks another. */
+    val labelScalePercent: Int = LabelSize.DEFAULT_PERCENT,
     /** #212: relay mesh → server: what the mesh hears is also sent up to the TAK
      *  server(s) while a server AND a mesh are both connected. Off by default.
      *  Until the operator first changes a pref it takes the legacy
@@ -261,6 +266,8 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
     private val KEY_KEEP_SCREEN_ON  = booleanPreferencesKey("keep_screen_on")
     private val KEY_SELF_MARKER_TRIANGLE = booleanPreferencesKey("selfMarkerTriangle")
     private val KEY_STALENESS_OVERLAY = booleanPreferencesKey("staleness_overlay_enabled")
+    // #213 - Label size, stored as a whole percent.
+    private val KEY_LABEL_SCALE = intPreferencesKey("label_scale_percent")
     // #212: one switch per relay direction. KEY_RELAY_GATEWAY below is the
     // pre-split single switch: the fallback for these two, kept for one release.
     private val KEY_RELAY_TO_SERVER = booleanPreferencesKey("relay_to_server_enabled")
@@ -318,6 +325,7 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
             p[KEY_KEEP_SCREEN_ON]  = next.keepScreenOn
             p[KEY_SELF_MARKER_TRIANGLE] = next.selfMarkerTriangle
             p[KEY_STALENESS_OVERLAY] = next.stalenessOverlayEnabled
+            p[KEY_LABEL_SCALE] = LabelSize.nearestChoice(next.labelScalePercent)
             p[KEY_RELAY_TO_SERVER] = next.relayToServerEnabled
             p[KEY_RELAY_TO_MESH] = next.relayToMeshEnabled
             p[KEY_RELAY_GATEWAY] = next.relayGatewayEnabled
@@ -483,6 +491,7 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
         keepScreenOn   = p[KEY_KEEP_SCREEN_ON]  ?: false,
         selfMarkerTriangle = p[KEY_SELF_MARKER_TRIANGLE] ?: false,
         stalenessOverlayEnabled = p[KEY_STALENESS_OVERLAY] ?: false,
+        labelScalePercent = LabelSize.nearestChoice(p[KEY_LABEL_SCALE] ?: LabelSize.DEFAULT_PERCENT),
         relayToServerEnabled = resolveRelayDirection(p[KEY_RELAY_TO_SERVER], p[KEY_RELAY_GATEWAY]),
         relayToMeshEnabled = resolveRelayDirection(p[KEY_RELAY_TO_MESH], p[KEY_RELAY_GATEWAY]),
         relayGatewayEnabled = p[KEY_RELAY_GATEWAY] ?: false,

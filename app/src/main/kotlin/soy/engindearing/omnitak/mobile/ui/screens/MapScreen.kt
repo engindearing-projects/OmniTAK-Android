@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -70,6 +71,7 @@ import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.Drawing
 import soy.engindearing.omnitak.mobile.data.DrawingKind
 import soy.engindearing.omnitak.mobile.data.GeoMath
+import soy.engindearing.omnitak.mobile.data.LabelSize
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
 import soy.engindearing.omnitak.mobile.domain.ServerHealthProjection
 import soy.engindearing.omnitak.mobile.i18n.Loc
@@ -81,6 +83,7 @@ import soy.engindearing.omnitak.mobile.ui.components.MarkerEditSheet
 import soy.engindearing.omnitak.mobile.ui.components.RadialAction
 import soy.engindearing.omnitak.mobile.ui.components.RadialMenu
 import soy.engindearing.omnitak.mobile.ui.components.SelfPositionCard
+import soy.engindearing.omnitak.mobile.ui.components.positionCardMaxWidthDp
 import soy.engindearing.omnitak.mobile.ui.components.TacticalMap
 import soy.engindearing.omnitak.mobile.ui.components.styleJsonForProvider
 import soy.engindearing.omnitak.mobile.ui.components.ToolEntry
@@ -517,6 +520,19 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             kotlinx.coroutines.delay(30_000L)
             stalenessTick++
         }
+    }
+    // #213: Label size x the phone's font size, for the names baked into marker
+    // bitmaps (contact / placed / mesh pins and KML pins). The renderers hold the
+    // value, so every redraw uses it, and redraw at once when it changes; the
+    // position box reads the percent directly below. A font size change rebuilds
+    // the Activity, so this composition always sees the current scale.
+    val labelFactor = LabelSize.factor(
+        LocalConfiguration.current.fontScale,
+        userPrefs.labelScalePercent,
+    )
+    LaunchedEffect(labelFactor) {
+        soy.engindearing.omnitak.mobile.ui.components.ContactMarkerRenderer.setLabelFactor(labelFactor)
+        soy.engindearing.omnitak.mobile.ui.components.KmlMarkerRenderer.setLabelFactor(labelFactor)
     }
     LaunchedEffect(visibleContacts, mapboxMap, stalenessOverlay, stalenessTick) {
         mapboxMap?.let { m ->
@@ -1520,7 +1536,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 } ?: "—",
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(end = 12.dp, bottom = 96.dp),
+                    .padding(end = 12.dp, bottom = 96.dp)
+                    // #213 - wrap rather than run under the map buttons at the left
+                    // when the label size and the phone font are both large.
+                    .widthIn(max = positionCardMaxWidthDp(LocalConfiguration.current.screenWidthDp).dp),
+                labelScalePercent = userPrefs.labelScalePercent,
             )
         }
 

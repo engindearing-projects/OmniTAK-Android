@@ -65,6 +65,7 @@ import soy.engindearing.omnitak.mobile.i18n.Loc
 import soy.engindearing.omnitak.mobile.data.CoordFormat
 import soy.engindearing.omnitak.mobile.data.Echelon
 import soy.engindearing.omnitak.mobile.data.DistanceUnit
+import soy.engindearing.omnitak.mobile.data.LabelSize
 import soy.engindearing.omnitak.mobile.data.MapProvider
 import soy.engindearing.omnitak.mobile.data.UserPrefs
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
@@ -772,6 +773,25 @@ fun SettingsScreen(
                 Switch(
                     checked = prefs.stalenessOverlayEnabled,
                     onCheckedChange = { v -> mutate { it.copy(stalenessOverlayEnabled = v) } },
+                )
+            }
+            // #213: Label size: names under markers and the position box on the map
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Label size",
+                    color = MaterialTheme.colorScheme.onBackground,
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text(
+                    "Names under markers and the position box on the map. " +
+                        "For all other text, use your phone's font size setting.",
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                SegmentedRow(
+                    options = LabelSize.CHOICES.map { it to "$it%" },
+                    selected = prefs.labelScalePercent,
+                    onSelect = { v -> mutate { it.copy(labelScalePercent = v) } },
                 )
             }
 
