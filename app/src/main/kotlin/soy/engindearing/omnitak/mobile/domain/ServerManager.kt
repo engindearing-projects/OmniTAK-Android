@@ -6,7 +6,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -147,7 +146,16 @@ class ServerManager(
             _messagesReceived.value = 0
             _messagesSent.value = 0
         }
-        val conn = TAKConnection(server, certVault)
+        val conn = TAKConnection(
+            server,
+            certVault,
+            // #233 — the liveness ping carries this device's UID with a "-ping"
+            // suffix, the way ATAK's does, so a server that keys clients by UID
+            // sees one device and not a second, nameless one.
+            pingUid = {
+                userPrefsStore?.ensureSelfUid()?.let { "$it-ping" } ?: TAKConnection.DEFAULT_PING_UID
+            },
+        )
         connections[server.id] = conn
         stateJobs[server.id] = scope.launch {
             conn.state.collect { state ->
@@ -162,48 +170,10 @@ class ServerManager(
         // exponential backoff whenever its socket drops while it's still a
         // wanted (enabled, in-map) connection. This is what makes a
         // backgrounded, screen-off device recover on its own instead of
-        // only on the next ON_RESUME. conn.connect() is idempotent
-        // (no-op while a connect is in flight), so re-dialing the same
-        // TAKConnection instance is safe.
+        // only on the next ON_RESUME. The supervisor is started further down,
+        // after the first dial (see [superviseReconnect] for why).
         val policy = ReconnectPolicy()
         reconnectPolicies[server.id] = policy
-        reconnectJobs[server.id] = scope.launch {
-            // drop(1): skip the StateFlow's initial Disconnected replay — the
-            // explicit conn.connect() below performs the first dial, and
-            // consuming a nextDelayMs() here would push the first *real* drop
-            // off its intended immediate retry.
-            conn.state.drop(1).collect { state ->
-                when (state) {
-                    is ConnectionState.Connected -> policy.reset()
-                    is ConnectionState.Connecting -> { /* attempt in flight */ }
-                    is ConnectionState.Disconnected, is ConnectionState.Failed -> {
-                        // Only re-dial connections we still want: a deliberate
-                        // disconnect()/toggle-off removes the server from the
-                        // map (and cancels this job), and a disabled server
-                        // must stay down.
-                        val stillWanted = connections[server.id] === conn &&
-                            (_servers.value.firstOrNull { it.id == server.id }?.enabled ?: false)
-                        if (ReconnectPolicy.shouldReconnect(state, stillWanted)) {
-                            val wait = policy.nextDelayMs()
-                            if (wait > 0) kotlinx.coroutines.delay(wait)
-                            // Re-check after the backoff sleep: the operator
-                            // may have disconnected/disabled the server, or a
-                            // foreground ON_RESUME reconnect may already have
-                            // it Connecting/Connected, during the wait.
-                            val target = connections[server.id]
-                            val enabledNow = _servers.value
-                                .firstOrNull { it.id == server.id }?.enabled ?: false
-                            val downNow = target?.state?.value.let {
-                                it is ConnectionState.Disconnected || it is ConnectionState.Failed
-                            }
-                            if (target === conn && enabledNow && downNow) {
-                                conn.connect()
-                            }
-                        }
-                    }
-                }
-            }
-        }
         receivedJobs[server.id] = scope.launch {
             conn.received.collect { xml ->
                 _messagesReceived.update { it + 1 }
@@ -240,6 +210,23 @@ class ServerManager(
             }
         }
         conn.connect()
+        // Started after the first dial, so the first state the supervisor reads is
+        // that dial's (Connecting, or already Failed on a phone with no network)
+        // and never the idle Disconnected from before it. Only connections we
+        // still want are re-dialed: a deliberate disconnect()/toggle-off removes
+        // the server from the map (and cancels this job), and a disabled server
+        // must stay down. conn.connect() is a no-op while a dial is in flight.
+        reconnectJobs[server.id] = scope.launch {
+            superviseReconnect(
+                state = conn.state,
+                policy = policy,
+                stillWanted = {
+                    connections[server.id] === conn &&
+                        (_servers.value.firstOrNull { it.id == server.id }?.enabled ?: false)
+                },
+                dial = { conn.connect() },
+            )
+        }
     }
 
     /**
