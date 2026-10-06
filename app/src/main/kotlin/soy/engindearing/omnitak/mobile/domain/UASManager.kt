@@ -262,11 +262,19 @@ class UASManager(
      * fast-follow.
      */
     suspend fun startFollowMe(): FollowMeResult {
-        if (operatorFix() == null) return FollowMeResult.NoGpsFix
+        if (liveOperatorFix() == null) return FollowMeResult.NoGpsFix
         return startFollow(FollowSubject.Operator) {
-            operatorFix()?.let { it.lat to it.lon }
+            liveOperatorFix()?.let { it.lat to it.lon }
         }
     }
+
+    /**
+     * The operator's position for a vehicle to follow. A fix restored from the
+     * last session (#205) is where the operator was then, which may be far
+     * from here, so it does not count (#235): Follow-Me reports no GPS fix
+     * until a live one arrives.
+     */
+    private fun liveOperatorFix(): SelfFix? = operatorFix()?.takeUnless { it.restored }
 
     /**
      * Pursue a CoT contact — drone tracks the contact's position
