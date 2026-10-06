@@ -223,11 +223,24 @@ fun AppNav() {
                         }
                     }
                 }
+                BarCommand.ROTATION -> {
+                    // #214: Auto, Portrait, Landscape, Auto. The store reads the current mode and
+                    // writes the next in one edit, so two quick taps cannot both start from the
+                    // same mode. MainActivity turns the screen as soon as the mode is stored.
+                    scope.launch {
+                        val mode = app.userPrefsStore.cycleScreenRotation()
+                        android.widget.Toast.makeText(
+                            appNavContext, mode.message, android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                }
             }
         }
     }
 
-    val barItems = ToolbarCatalog.resolve(workingIds)
+    // #214: the screen rotation shortcut is drawn with the icon and the description of the mode
+    // the screen is in now; every other item is untouched.
+    val barItems = ToolbarCatalog.resolve(workingIds).map { ToolbarCatalog.showing(it, prefs.screenRotation) }
     val coachmarkVisible = !prefs.toolbarCoachmarkSeen && currentRoute == "map" && !editing
 
     // Field feedback (PatoG, 2026-08) — the Mesh tab icon carries an

@@ -66,6 +66,7 @@ import soy.engindearing.omnitak.mobile.data.CoordFormat
 import soy.engindearing.omnitak.mobile.data.Echelon
 import soy.engindearing.omnitak.mobile.data.DistanceUnit
 import soy.engindearing.omnitak.mobile.data.MapProvider
+import soy.engindearing.omnitak.mobile.data.ScreenRotation
 import soy.engindearing.omnitak.mobile.data.UserPrefs
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
 import soy.engindearing.omnitak.mobile.domain.IconPackImporter
@@ -703,6 +704,26 @@ fun SettingsScreen(
                 Switch(
                     checked = prefs.keepScreenOn,
                     onCheckedChange = { v -> mutate { it.copy(keepScreenOn = v) } },
+                )
+            }
+            // #214: Screen rotation. Same stored value as the Rotate shortcut on the bottom bar.
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Screen rotation",
+                    color = MaterialTheme.colorScheme.onBackground,
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text(
+                    "Auto follows the phone. Portrait and Landscape hold the screen that way " +
+                        "whatever the phone's rotation setting is; Landscape turns either way up. " +
+                        "For a one-tap Rotate shortcut, press and hold the bottom bar, then tap +.",
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                SegmentedRow(
+                    options = ScreenRotation.entries.map { it to it.label },
+                    selected = prefs.screenRotation,
+                    onSelect = { v -> mutate { it.copy(screenRotation = v) } },
                 )
             }
             // Auto-hide toolbar — map tab only
