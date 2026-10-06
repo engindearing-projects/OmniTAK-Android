@@ -39,6 +39,7 @@ import soy.engindearing.omnitak.mobile.domain.MeshCoreManager
 import soy.engindearing.omnitak.mobile.data.MeshFramework
 import soy.engindearing.omnitak.mobile.data.MeshtasticCoTConverter
 import soy.engindearing.omnitak.mobile.data.MeshCoreCoTConverter
+import soy.engindearing.omnitak.mobile.data.MeshTcpRestore
 import soy.engindearing.omnitak.mobile.domain.ServerManager
 
 class OmniTAKApp : Application() {
@@ -268,6 +269,20 @@ class OmniTAKApp : Application() {
                 .collect { enabled ->
                     if (enabled) gybManager.start() else gybManager.stop()
                 }
+        }
+
+        // #261 - bring the Meshtastic TCP gateway back when the operator left it
+        // up. onCreate runs once per process, so this is one attempt per start:
+        // a gateway that is down now is not retried, the same as a link that
+        // drops while the app runs. The operator presses Connect.
+        appScope.launch {
+            val target = MeshTcpRestore.targetAtStart(userPrefsStore.prefs.first())
+                ?: return@launch
+            // Nothing starts the node-to-map bridge until the Mesh screen opens.
+            // Without this a restored link would fill the node table and put no
+            // marker on the map. start() does nothing if it is already running.
+            meshtasticCoTBridge.start()
+            meshtastic.connectTcp(target.host, target.port)
         }
     }
 

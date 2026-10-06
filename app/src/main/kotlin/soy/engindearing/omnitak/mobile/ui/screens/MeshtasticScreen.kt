@@ -60,6 +60,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.OmniTAKApp
+import soy.engindearing.omnitak.mobile.data.DEFAULT_MESH_TCP_PORT
 import soy.engindearing.omnitak.mobile.data.MeshCoreUartClient
 import soy.engindearing.omnitak.mobile.data.MeshFramework
 import soy.engindearing.omnitak.mobile.data.MeshNode
@@ -211,7 +212,10 @@ fun MeshtasticScreen(
                             onClick = {
                                 menuOpen = false
                                 when (framework) {
-                                    MeshFramework.MESHTASTIC -> mesh.disconnect()
+                                    MeshFramework.MESHTASTIC -> {
+                                        app.clearMeshTcpWanted()
+                                        mesh.disconnect()
+                                    }
                                     MeshFramework.MESHCORE -> meshCore.disconnect()
                                 }
                             },
@@ -296,6 +300,17 @@ fun MeshtasticScreen(
     }
 }
 
+// #261 - the two writes behind the TCP gateway memory. They run on the app's
+// scope, not the screen's, so leaving the pane right after the press cannot
+// cancel the write.
+private fun OmniTAKApp.saveMeshTcpGateway(host: String, port: Int) {
+    appScope.launch { userPrefsStore.rememberMeshTcpGateway(host, port) }
+}
+
+private fun OmniTAKApp.clearMeshTcpWanted() {
+    appScope.launch { userPrefsStore.setMeshTcpWanted(false) }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TcpPane(
@@ -304,11 +319,17 @@ private fun TcpPane(
     nodeCount: Int,
     onOpenChat: (String) -> Unit = {},
 ) {
+    val app = LocalContext.current.applicationContext as OmniTAKApp
     val connectionState by mesh.state.collectAsState()
     val bytes by mesh.bytesReceived.collectAsState()
 
-    var host by remember { mutableStateOf("192.168.1.100") }
-    var port by remember { mutableStateOf("4403") }
+    // #261 - start from the gateway the operator last connected to (the old
+    // 192.168.1.100:4403 when none is saved). app.latestPrefs is the snapshot the
+    // app already holds, so the first frame is not the built-in address. Keying
+    // on the saved value also picks it up if the first read had not finished.
+    val saved by app.userPrefsStore.prefs.collectAsState(initial = app.latestPrefs)
+    var host by remember(saved.meshTcpHost) { mutableStateOf(saved.meshTcpHost) }
+    var port by remember(saved.meshTcpPort) { mutableStateOf(saved.meshTcpPort.toString()) }
 
     val stateLabel = when (val s = connectionState) {
         ConnectionState.Disconnected -> "Disconnected"
@@ -356,8 +377,10 @@ private fun TcpPane(
             if (!connected) {
                 Button(
                     onClick = {
-                        val p = port.toIntOrNull() ?: 4403
-                        mesh.connectTcp(host.trim(), p)
+                        val h = host.trim()
+                        val p = port.toIntOrNull() ?: DEFAULT_MESH_TCP_PORT
+                        app.saveMeshTcpGateway(h, p)
+                        mesh.connectTcp(h, p)
                     },
                     enabled = host.isNotBlank(),
                     colors = ButtonDefaults.buttonColors(
@@ -368,7 +391,10 @@ private fun TcpPane(
                 ) { Text("Connect") }
             } else {
                 OutlinedButton(
-                    onClick = { mesh.disconnect() },
+                    onClick = {
+                        app.clearMeshTcpWanted()
+                        mesh.disconnect()
+                    },
                     modifier = Modifier.weight(1f),
                 ) { Text("Disconnect") }
             }
@@ -512,6 +538,9 @@ private fun BlePane(
                 // automatic reconnect to this same address) can show it
                 // instead of the bare MAC.
                 mesh.rememberBleAdvertisedName(addr, results.find { it.address == addr }?.name)
+                // #261 - connecting over Bluetooth drops the TCP link, so the
+                // operator no longer wants it back at the next start.
+                app.clearMeshTcpWanted()
                 // On the manager's scope, not the screen's: leaving this
                 // pane must not cancel a connect that is under way.
                 mesh.connectBleInBackground(addr)
@@ -624,6 +653,8 @@ private fun MeshCorePane(
     nodeCount: Int,
     onOpenChat: (String) -> Unit = {},
 ) {
+    val app = LocalContext.current.applicationContext as OmniTAKApp
+
     // Make sure the MeshCore client exists so we can observe its state.
     LaunchedEffect(Unit) { meshCore.ensureBleReady() }
 
@@ -695,6 +726,8 @@ private fun MeshCorePane(
             onConnect = { addr ->
                 isScanning = false
                 meshCore.stopMeshScan()
+                // #261 - the operator is on MeshCore now, not on the TCP gateway.
+                app.clearMeshTcpWanted()
                 coScope.launch { meshCore.connectBle(addr) }
             },
             deviceNoun = "MeshCore radios",
