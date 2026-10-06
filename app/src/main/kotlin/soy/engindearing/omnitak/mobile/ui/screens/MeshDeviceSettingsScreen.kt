@@ -55,6 +55,7 @@ import soy.engindearing.omnitak.mobile.OmniTAKApp
 import soy.engindearing.omnitak.mobile.data.MeshChannelPreset
 import soy.engindearing.omnitak.mobile.data.MeshConnectionType
 import soy.engindearing.omnitak.mobile.data.MeshDeviceConfig
+import soy.engindearing.omnitak.mobile.data.rebased
 import soy.engindearing.omnitak.mobile.data.MeshRole
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
@@ -84,7 +85,10 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
     val app = LocalContext.current.applicationContext as OmniTAKApp
     val store = app.meshDeviceConfigStore
     val mesh = app.meshtastic
-    val saved by store.config.collectAsState(initial = MeshDeviceConfig())
+    // The saved draft and what the connected radio last reported. Which settings count as edited is decided
+    // from these two, not from the draft alone (see DeviceSettingsState).
+    val state by store.state.collectAsState()
+    val saved = state.draft
     // Transport-aware — TCP or BLE, whichever is the active link.
     // Was `mesh.state` (TCP-only) which left BLE radios stranded (#36).
     val connection by mesh.activeConnectionState.collectAsState()
@@ -99,10 +103,35 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
     // it back to DataStore. Mirrors the local-draft pattern other
     // settings screens use so the keyboard stays responsive without a
     // DataStore round-trip per keystroke.
-    var draft by remember(saved) { mutableStateOf(saved) }
-    var dirty by remember(saved) { mutableStateOf(false) }
+    var draft by remember { mutableStateOf(saved) }
+    var lastSaved by remember { mutableStateOf(saved) }
+    // When the saved draft moves under the typed-in copy (a report from the radio), only the settings the
+    // operator has not touched here follow it; typed-in edits stay.
+    LaunchedEffect(saved) {
+        draft = draft.rebased(from = lastSaved, to = saved)
+        lastSaved = saved
+    }
+    val dirty = draft != saved
+    // What a push would send right now: the settings that differ from what the radio reported.
+    val edits = state.edits(draft)
+    val notice by mesh.settingsNotice.collectAsState()
+    // What the last push said. The manager keeps it, because a push ends with the radio restarting and the link
+    // dropping, and the result has to stay readable through that and after it, until the next edit or push.
+    val lastPush by mesh.lastPushResult.collectAsState()
     var savedToast by remember { mutableStateOf<String?>(null) }
 
+    // A change the operator makes to the draft. What the last push said, and the note that the radio did not take a
+    // value, are about the settings as they were before it, so they go with the first change. Reports from the radio
+    // also move the draft (the LaunchedEffect above); they are not edits and leave the result alone.
+    fun edited(change: (MeshDeviceConfig) -> MeshDeviceConfig) {
+        val next = change(draft)
+        if (next == draft) return
+        draft = next
+        mesh.clearLastPushResult()
+        mesh.clearSettingsNotice()
+    }
+
+    // Short confirmations only ("Saved draft locally"). What a push said is kept in lastPush and does not time out.
     LaunchedEffect(savedToast) {
         if (savedToast != null) {
             kotlinx.coroutines.delay(1800)
@@ -169,8 +198,7 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
             OutlinedTextField(
                 value = draft.longName,
                 onValueChange = { v ->
-                    draft = draft.copy(longName = v.take(40))
-                    dirty = true
+                    edited { it.copy(longName = v.take(40)) }
                 },
                 label = { Text("Long name") },
                 singleLine = true,
@@ -182,8 +210,7 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
                 onValueChange = { v ->
                     // Meshtastic short_name caps at 4 visible chars on the
                     // tiny OLEDs; uppercase ASCII is the convention.
-                    draft = draft.copy(shortName = v.uppercase().take(4))
-                    dirty = true
+                    edited { it.copy(shortName = v.uppercase().take(4)) }
                 },
                 label = { Text("Short name (max 4)") },
                 singleLine = true,
@@ -198,8 +225,7 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
                 labelOf = { it.label },
                 descriptionOf = { it.description },
                 onSelect = { v ->
-                    draft = draft.copy(role = v)
-                    dirty = true
+                    edited { it.copy(role = v) }
                 },
             )
 
@@ -216,8 +242,7 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
                 onValueChange = { v ->
                     val cleaned = v.filter { c -> c.isDigit() }.take(5)
                     val parsed = cleaned.toIntOrNull() ?: 0
-                    draft = draft.copy(positionBroadcastSecs = parsed.coerceIn(0, 24 * 60 * 60))
-                    dirty = true
+                    edited { it.copy(positionBroadcastSecs = parsed.coerceIn(0, 24 * 60 * 60)) }
                 },
                 label = { Text("Interval (seconds, 0 disables)") },
                 singleLine = true,
@@ -230,8 +255,7 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
                 selected = draft.positionBroadcastSecs,
                 labelOf = { secs -> if (secs >= 60) "${secs / 60}m" else "${secs}s" },
                 onSelect = { v ->
-                    draft = draft.copy(positionBroadcastSecs = v)
-                    dirty = true
+                    edited { it.copy(positionBroadcastSecs = v) }
                 },
             )
 
@@ -239,8 +263,7 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
             OutlinedTextField(
                 value = draft.channelName,
                 onValueChange = { v ->
-                    draft = draft.copy(channelName = v.take(11))
-                    dirty = true
+                    edited { it.copy(channelName = v.take(11)) }
                 },
                 label = { Text("Channel name (max 11)") },
                 singleLine = true,
@@ -253,8 +276,7 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
                 labelOf = { it.label },
                 descriptionOf = { it.blurb },
                 onSelect = { v ->
-                    draft = draft.copy(channelPreset = v)
-                    dirty = true
+                    edited { it.copy(channelPreset = v) }
                 },
             )
 
@@ -266,37 +288,44 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
                     val toCommit = draft
                     scope.launch {
                         store.update { toCommit }
-                        dirty = false
                         savedToast = "Saved draft locally"
                     }
                 },
                 onRevert = {
                     draft = saved
-                    dirty = false
                 },
             )
 
-            // GAP-109a — push-to-device. Calls MeshtasticManager.pushDeviceConfig
-            // which serialises 5 AdminMessages (set_owner, set_role, PLI, channel
-            // name, LoRa preset) and dispatches them over the active transport.
+            // GAP-109a: push-to-device. Calls MeshtasticManager.pushDeviceConfig with the settings that
+            // differ from what the radio reported, and nothing else. Each is read from the radio again just
+            // before it is written. The result names what was sent, or says why nothing was.
+            Text(
+                when {
+                    !deviceConnected -> ""
+                    state.radio == null -> "Waiting for the radio to report its settings."
+                    edits.isEmpty -> "Nothing edited. The fields show what the radio has."
+                    else -> "Will send to the radio: ${edits.settings.joinToString(", ") { it.label }}"
+                },
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                style = MaterialTheme.typography.bodySmall,
+            )
             PushToDeviceRow(
                 connected = deviceConnected,
+                canPush = !edits.isEmpty,
                 onPush = {
                     val toPush = draft
+                    val toSend = state.edits(toPush)
                     scope.launch {
                         // Persist the draft first so the UI doesn't drift if
                         // the radio drops mid-write.
                         store.update { toPush }
-                        dirty = false
-                        val sent = mesh.pushDeviceConfig(toPush)
-                        savedToast = when (sent) {
-                            5 -> "Pushed all 5 settings to radio"
-                            0 -> "Push failed — check radio connection"
-                            else -> "Pushed $sent of 5 — radio dropped mid-write"
-                        }
-                        // After push, refetch so the screen reflects what the
+                        mesh.clearSettingsNotice()
+                        mesh.clearLastPushResult()
+                        // The manager records what the push said (lastPushResult), shown below.
+                        val result = mesh.pushDeviceConfig(toSend)
+                        // After push, read back so the screen reflects what the
                         // radio actually accepted (some fields may be rejected).
-                        if (sent > 0) {
+                        if (result.reachedRadio) {
                             kotlinx.coroutines.delay(800)
                             mesh.requestDeviceConfig()
                         }
@@ -318,6 +347,29 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
                     color = TacticalAccent,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+
+            // What the last push said. It stays through the link drop that follows a push (the radio restarts to
+            // save it, and the push panel above is replaced by the connect card) until the next edit or push.
+            lastPush?.let { msg ->
+                Text(
+                    msg,
+                    color = TacticalAccent,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+
+            // The radio reported a setting we sent and had kept its own value. Tap to dismiss.
+            notice?.let { msg ->
+                Text(
+                    msg,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier
+                        .padding(top = 4.dp)
+                        .clickable { mesh.clearSettingsNotice() },
                 )
             }
 
@@ -382,6 +434,7 @@ private fun MeshSection(text: String) {
 @Composable
 private fun PushToDeviceRow(
     connected: Boolean,
+    canPush: Boolean,
     onPush: () -> Unit,
     onRefresh: (() -> Unit)? = null,
 ) {
@@ -398,13 +451,13 @@ private fun PushToDeviceRow(
                 .weight(1f)
                 .height(46.dp)
                 .clip(RoundedCornerShape(8.dp))
-                .background(TacticalAccent)
-                .clickable(onClick = onPush),
+                .background(if (canPush) TacticalAccent else TacticalSurface)
+                .clickable(enabled = canPush, onClick = onPush),
             contentAlignment = Alignment.Center,
         ) {
             Text(
                 "Push to device",
-                color = TacticalBackground,
+                color = if (canPush) TacticalBackground else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
                 fontWeight = FontWeight.SemiBold,
                 style = MaterialTheme.typography.bodyMedium,
             )
@@ -447,7 +500,7 @@ private fun ComingSoonNote() {
                 style = MaterialTheme.typography.bodyMedium,
             )
             Text(
-                "Edits live as a local draft until you connect a Meshtastic node. Once you do, this turns into a 'Push to device' button that writes the draft via the admin port (5 messages: owner, role, PLI cadence, channel name, modem preset). " +
+                "Edits live as a local draft until you connect a Meshtastic node. Once you do, this turns into a 'Push to device' button that writes only the settings you changed via the admin port (owner, role, PLI cadence, channel name, modem preset). " +
                     "Acks come back as routing frames — surfacing them in the UI is filed as GAP-109b.",
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                 style = MaterialTheme.typography.bodySmall,

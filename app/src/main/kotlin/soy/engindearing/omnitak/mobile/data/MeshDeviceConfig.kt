@@ -1,12 +1,23 @@
 package soy.engindearing.omnitak.mobile.data
 
 import android.content.Context
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 
 private val Context.meshDeviceConfigDataStore by preferencesDataStore(name = "mesh_device_config")
 
@@ -117,15 +128,13 @@ enum class RebroadcastMode(val wire: Int, val label: String, val blurb: String) 
 }
 
 /**
- * Local-draft of a Meshtastic radio's user-configurable settings. We
- * persist what the operator *intends* the device config to be — this
- * is the edit buffer the Device Settings screen mutates.
+ * The draft the Device Settings screen edits: the operator's intent for a
+ * Meshtastic radio's user-configurable settings.
  *
- * **Write-to-device is not yet wired.** The Meshtastic admin protocol
- * round-trip (ToRadio AdminMessage with set_owner / set_config) needs
- * the protobuf set in the Gradle build first. Until that lands this
- * config is operator-intent only; the screen surfaces a clear
- * "device sync coming soon" affordance per-section.
+ * The draft is not a description of the radio and is never written to it as a
+ * whole. Its values start as fresh-install defaults (or whatever an earlier
+ * radio left), so only the settings the operator changed away from what the
+ * connected radio reported are sent (see [DeviceSettingsState]).
  *
  * Fields chosen to match the four headline asks from the 80-node
  * airsoft practitioner: long/short name, role, PLI cadence, primary
@@ -142,9 +151,14 @@ data class MeshDeviceConfig(
 )
 
 /**
- * DataStore-backed persistence for [MeshDeviceConfig]. Same shape as
- * [UserPrefsStore] — Flow for reads, suspend `update {}` for writes,
- * enums round-trip by name.
+ * The Device Settings screen's state: the draft the operator edits (kept
+ * across launches in DataStore) and what the connected radio last reported
+ * (in memory only, null when nothing is loaded or the link is down). The rules
+ * that tie the two together, which settings count as edited and how a report
+ * moves the draft, live in [DeviceSettingsState] and are tested there.
+ *
+ * Updates are applied to the in-memory state immediately and in the order they
+ * arrive; only the draft is written to disk, afterwards.
  */
 class MeshDeviceConfigStore(private val context: Context) {
     private val KEY_LONG_NAME = stringPreferencesKey("device_long_name")
@@ -154,75 +168,73 @@ class MeshDeviceConfigStore(private val context: Context) {
     private val KEY_CH_NAME = stringPreferencesKey("device_ch0_name")
     private val KEY_CH_PRESET = stringPreferencesKey("device_ch0_preset")
 
-    val config: Flow<MeshDeviceConfig> = context.meshDeviceConfigDataStore.data.map { p ->
-        MeshDeviceConfig(
-            longName = p[KEY_LONG_NAME] ?: "OmniTAK",
-            shortName = p[KEY_SHORT_NAME] ?: "OTK",
-            role = p[KEY_ROLE]?.let { runCatching { MeshRole.valueOf(it) }.getOrNull() }
-                ?: MeshRole.TAK,
-            positionBroadcastSecs = p[KEY_PLI] ?: 30,
-            channelName = p[KEY_CH_NAME] ?: "OmniTAK",
-            channelPreset = p[KEY_CH_PRESET]?.let { runCatching { MeshChannelPreset.valueOf(it) }.getOrNull() }
-                ?: MeshChannelPreset.LONG_FAST,
-        )
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val _state = MutableStateFlow(DeviceSettingsState())
+
+    /** The draft and what the radio reported. */
+    val state: StateFlow<DeviceSettingsState> = _state.asStateFlow()
+
+    /** Just the draft. */
+    val config: Flow<MeshDeviceConfig> = _state.map { it.draft }.distinctUntilChanged()
+
+    init {
+        // The saved draft is where the screen starts, until a radio reports: a report that gets here first wins.
+        scope.launch {
+            val saved = readDraft(context.meshDeviceConfigDataStore.data.first())
+            _state.update { if (it.radio == null && it.draft == MeshDeviceConfig()) it.copy(draft = saved) else it }
+        }
     }
 
     /**
-     * GAP-109 read-back — fold an incoming admin response into the
-     * persisted draft so the Device Settings screen reflects the
-     * radio's actual state after a `requestDeviceConfig()`.
-     *
-     * Each response variant updates one field. Other fields stay at
-     * whatever the user previously edited / the radio previously
-     * reported, so a partial response (eg. radio drops mid-burst) only
-     * partially refreshes the screen rather than blowing it away.
+     * GAP-109 read-back: fold one report from the connected radio into the state. Only the radio's own
+     * reports may come here (the manager drops admin messages from any other node). A setting the
+     * operator has edited keeps the operator's value; every other one follows the radio.
      */
-    suspend fun applyAdminResponse(response: AdminResponse) {
-        update { current ->
-            when (response) {
-                is AdminResponse.Owner -> current.copy(
-                    longName = response.longName.ifBlank { current.longName },
-                    shortName = response.shortName.ifBlank { current.shortName },
-                )
-                is AdminResponse.DeviceConfig -> current.copy(
-                    role = response.role ?: current.role,
-                )
-                is AdminResponse.PositionConfig -> current.copy(
-                    positionBroadcastSecs = response.broadcastSecs,
-                )
-                is AdminResponse.LoraConfig -> current.copy(
-                    channelPreset = response.preset ?: current.channelPreset,
-                )
-                is AdminResponse.Channel -> {
-                    if (response.isPrimary || response.index == 0) {
-                        current.copy(
-                            channelName = response.name.ifBlank { current.channelName },
-                        )
-                    } else current
-                }
-            }
-        }
+    fun applyAdminResponse(response: AdminResponse) {
+        _state.update { it.withReport(response) }
+        persistLater()
+    }
+
+    /** The link dropped: what the radio reported no longer holds, and nothing is edited until the next report. */
+    fun onLinkDown() {
+        _state.update { it.withLinkDown() }
     }
 
     suspend fun update(block: (MeshDeviceConfig) -> MeshDeviceConfig) {
+        _state.update { current ->
+            // Not clamped here: the draft can hold the radio's own value, above the limit the operator can type.
+            current.copy(draft = block(current.draft))
+        }
+        persist()
+    }
+
+    private var lastPersisted: MeshDeviceConfig? = null
+
+    private fun persistLater() {
+        scope.launch { persist() }
+    }
+
+    private suspend fun persist() {
+        val draft = _state.value.draft
+        if (draft == lastPersisted) return
+        lastPersisted = draft
         context.meshDeviceConfigDataStore.edit { p ->
-            val current = MeshDeviceConfig(
-                longName = p[KEY_LONG_NAME] ?: "OmniTAK",
-                shortName = p[KEY_SHORT_NAME] ?: "OTK",
-                role = p[KEY_ROLE]?.let { runCatching { MeshRole.valueOf(it) }.getOrNull() }
-                    ?: MeshRole.TAK,
-                positionBroadcastSecs = p[KEY_PLI] ?: 30,
-                channelName = p[KEY_CH_NAME] ?: "OmniTAK",
-                channelPreset = p[KEY_CH_PRESET]?.let { runCatching { MeshChannelPreset.valueOf(it) }.getOrNull() }
-                    ?: MeshChannelPreset.LONG_FAST,
-            )
-            val next = block(current)
-            p[KEY_LONG_NAME] = next.longName
-            p[KEY_SHORT_NAME] = next.shortName
-            p[KEY_ROLE] = next.role.name
-            p[KEY_PLI] = next.positionBroadcastSecs.coerceIn(0, 24 * 60 * 60)
-            p[KEY_CH_NAME] = next.channelName
-            p[KEY_CH_PRESET] = next.channelPreset.name
+            p[KEY_LONG_NAME] = draft.longName
+            p[KEY_SHORT_NAME] = draft.shortName
+            p[KEY_ROLE] = draft.role.name
+            p[KEY_PLI] = draft.positionBroadcastSecs
+            p[KEY_CH_NAME] = draft.channelName
+            p[KEY_CH_PRESET] = draft.channelPreset.name
         }
     }
+
+    private fun readDraft(p: Preferences) = MeshDeviceConfig(
+        longName = p[KEY_LONG_NAME] ?: "OmniTAK",
+        shortName = p[KEY_SHORT_NAME] ?: "OTK",
+        role = p[KEY_ROLE]?.let { runCatching { MeshRole.valueOf(it) }.getOrNull() } ?: MeshRole.TAK,
+        positionBroadcastSecs = p[KEY_PLI] ?: 30,
+        channelName = p[KEY_CH_NAME] ?: "OmniTAK",
+        channelPreset = p[KEY_CH_PRESET]?.let { runCatching { MeshChannelPreset.valueOf(it) }.getOrNull() }
+            ?: MeshChannelPreset.LONG_FAST,
+    )
 }

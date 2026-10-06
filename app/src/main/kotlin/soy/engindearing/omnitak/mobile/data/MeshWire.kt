@@ -118,9 +118,11 @@ object MeshWire {
             appendVarintField(this, field = 1, value = portnum)
             // 2: payload (bytes)
             appendLenField(this, field = 2, bytes = payload)
-            // 5: want_response (bool varint) — admin reads want an ack.
+            // 3: want_response (bool varint) — admin reads want an ack. Field 5
+            // is `source` (fixed32), and a varint there is a wire-type mismatch
+            // that the firmware's nanopb decoder rejects.
             if (wantResponse) {
-                appendVarintField(this, field = 5, value = 1UL)
+                appendVarintField(this, field = 3, value = 1UL)
             }
         }.toByteArray()
 

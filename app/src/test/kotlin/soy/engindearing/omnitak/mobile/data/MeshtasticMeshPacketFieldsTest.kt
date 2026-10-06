@@ -15,8 +15,9 @@ import org.junit.Test
  *     fixed32 id = 6;  optional fixed32 rx_time = 7;  float rx_snr = 8;
  *     uint32 hop_limit = 9;  bool want_ack = 10;  Priority priority = 11;
  *     optional int32 rx_rssi = 12;  bool via_mqtt = 14;  uint32 hop_start = 15;
- *     bytes public_key = 16;
+ *     bytes public_key = 16;  TransportMechanism transport_mechanism = 21;
  *   }
+ *   message Data { PortNum portnum = 1;  bytes payload = 2;  ...  fixed32 request_id = 6;  ... }
  *
  * The parser used to read rx_time from field 8, rx_snr from field 9 and
  * hop_limit from field 10, which are rx_snr, hop_limit and want_ack.
@@ -41,10 +42,12 @@ class MeshtasticMeshPacketFieldsTest {
         const val VIA_MQTT = 14
         const val HOP_START = 15
         const val PUBLIC_KEY = 16
+        const val TRANSPORT_MECHANISM = 21
 
         // Data
         const val DATA_PORTNUM = 1
         const val DATA_PAYLOAD = 2
+        const val DATA_REQUEST_ID = 6
 
         // FromRadio.packet
         const val FROM_RADIO_PACKET = 2
@@ -120,6 +123,40 @@ class MeshtasticMeshPacketFieldsTest {
         assertEquals(5.5f, pkt.rxSnr!!, 0f)
         assertEquals(2, pkt.hopLimit)
         assertEquals(-101, pkt.rxRssi)
+    }
+
+    @Test fun the_request_id_is_the_fixed32_in_field_6_of_data_and_not_the_packet_id() {
+        val pkt = decode {
+            fixed32(ID, 0x11223344)
+            msg(DECODED, ProtoMsg().varint(DATA_PORTNUM, 6).bytes(DATA_PAYLOAD, byteArrayOf(1)).fixed32(DATA_REQUEST_ID, 0x55667788))
+        }
+        assertEquals(0x55667788u, pkt.requestId)
+        assertEquals(6u, pkt.portnum)
+    }
+
+    @Test fun a_packet_that_answers_nothing_has_no_request_id() {
+        assertNull(decode { msg(DECODED, ProtoMsg().varint(DATA_PORTNUM, 6).bytes(DATA_PAYLOAD, byteArrayOf(1))) }.requestId)
+        assertNull("a request id on the wrong wire type is not one", decode { msg(DECODED, ProtoMsg().varint(DATA_REQUEST_ID, 5)) }.requestId)
+    }
+
+    @Test fun via_mqtt_and_transport_mechanism_are_read_from_their_own_numbers() {
+        val plain = decode { varint(HOP_LIMIT, 3) }
+        assertEquals(false, plain.viaMqtt)
+        assertEquals(0, plain.transportMechanism)
+
+        val pkt = decode {
+            bool(VIA_MQTT, true)
+            varint(HOP_START, 3)
+            varint(TRANSPORT_MECHANISM, 2)
+        }
+        assertEquals(true, pkt.viaMqtt)
+        assertEquals(2, pkt.transportMechanism)
+    }
+
+    @Test fun a_transport_mechanism_that_is_not_zero_never_reads_as_zero() {
+        // However large the number, it is not the radio's own.
+        assertEquals(true, decode { varint(TRANSPORT_MECHANISM, 0x1_0000_0000L) }.transportMechanism != 0)
+        assertEquals(0, decode { varint(TRANSPORT_MECHANISM, 0) }.transportMechanism)
     }
 
     @Test fun an_encrypted_packet_keeps_its_metadata_and_has_no_payload() {

@@ -20,9 +20,18 @@ import soy.engindearing.omnitak.mobile.data.MeshtasticProtoParser.skipField
  */
 sealed interface AdminResponse {
     data class Owner(val longName: String, val shortName: String) : AdminResponse
-    data class DeviceConfig(val role: MeshRole?) : AdminResponse
+
+    /**
+     * A field that is not on the wire is the proto3 default, so a radio holding role CLIENT
+     * (or rebroadcast mode ALL) does not send it, and it decodes as that value. A number
+     * this app has no name for decodes as null: unknown, and never to be written back.
+     */
+    data class DeviceConfig(val role: MeshRole?, val rebroadcastMode: RebroadcastMode?) : AdminResponse
+
     data class PositionConfig(val broadcastSecs: Int) : AdminResponse
-    data class LoraConfig(val preset: MeshChannelPreset?) : AdminResponse
+
+    /** Absent preset decodes as LONG_FAST and absent region as UNSET; a number with no name is null. */
+    data class LoraConfig(val preset: MeshChannelPreset?, val region: MeshRegion?) : AdminResponse
     data class Channel(val index: Int, val name: String, val role: Int) : AdminResponse {
         /** firmware Channel.Role enum: DISABLED=0, PRIMARY=1, SECONDARY=2. */
         val isPrimary: Boolean get() = role == 1
@@ -109,67 +118,44 @@ object AdminMessageParser {
         return null
     }
 
-    /** DeviceConfig.role = field 1 (varint enum). */
-    private fun parseDeviceConfig(bytes: ByteArray): AdminResponse.DeviceConfig {
-        var idx = 0
-        var role: MeshRole? = null
-        while (idx < bytes.size) {
-            val (tag, afterTag) = readVarint(bytes, idx) ?: break
-            val field = (tag shr 3).toInt()
-            val wire = (tag and 0x7UL).toInt()
-            idx = afterTag
-            if (field == 1 && wire == 0) {
-                val (v, after) = readVarint(bytes, idx) ?: break
-                role = roleFromOrdinal(v.toInt())
-                idx = after
-            } else {
-                idx = skipField(bytes, idx, wire)
-            }
-        }
-        return AdminResponse.DeviceConfig(role = role)
+    /**
+     * DeviceConfig.role = field 1, rebroadcast_mode = field 6 (varint enums). Null when the bytes are not
+     * a well-formed message, so a damaged report changes nothing instead of reading as "all defaults".
+     */
+    private fun parseDeviceConfig(bytes: ByteArray): AdminResponse.DeviceConfig? {
+        val fields = ProtoFields.parse(bytes) ?: return null
+        return AdminResponse.DeviceConfig(
+            role = ordinal(fields, 1)?.let { roleFromOrdinal(it) },
+            rebroadcastMode = ordinal(fields, 6)?.let { rebroadcastFromOrdinal(it) },
+        )
     }
 
     /** PositionConfig.position_broadcast_secs = field 1 (varint). Field 4 is
      *  the deprecated `gps_enabled` bool — reading it back yielded 0 or 1
      *  where the UI expected seconds. */
-    private fun parsePositionConfig(bytes: ByteArray): AdminResponse.PositionConfig {
-        var idx = 0
-        var secs = 0
-        while (idx < bytes.size) {
-            val (tag, afterTag) = readVarint(bytes, idx) ?: break
-            val field = (tag shr 3).toInt()
-            val wire = (tag and 0x7UL).toInt()
-            idx = afterTag
-            if (field == 1 && wire == 0) {
-                val (v, after) = readVarint(bytes, idx) ?: break
-                secs = v.toInt()
-                idx = after
-            } else {
-                idx = skipField(bytes, idx, wire)
-            }
-        }
-        return AdminResponse.PositionConfig(broadcastSecs = secs)
+    private fun parsePositionConfig(bytes: ByteArray): AdminResponse.PositionConfig? {
+        val fields = ProtoFields.parse(bytes) ?: return null
+        val secs = ProtoFields.lastVarint(fields, 1) ?: 0uL
+        return AdminResponse.PositionConfig(broadcastSecs = secs.coerceAtMost(Int.MAX_VALUE.toULong()).toInt())
     }
 
-    /** LoRaConfig.modem_preset = field 2 (varint enum). */
-    private fun parseLoraConfig(bytes: ByteArray): AdminResponse.LoraConfig {
-        var idx = 0
-        var preset: MeshChannelPreset? = null
-        while (idx < bytes.size) {
-            val (tag, afterTag) = readVarint(bytes, idx) ?: break
-            val field = (tag shr 3).toInt()
-            val wire = (tag and 0x7UL).toInt()
-            idx = afterTag
-            if (field == 2 && wire == 0) {
-                val (v, after) = readVarint(bytes, idx) ?: break
-                preset = presetFromOrdinal(v.toInt())
-                idx = after
-            } else {
-                idx = skipField(bytes, idx, wire)
-            }
-        }
-        return AdminResponse.LoraConfig(preset = preset)
+    /** LoRaConfig.modem_preset = field 2, region = field 7 (varint enums). */
+    private fun parseLoraConfig(bytes: ByteArray): AdminResponse.LoraConfig? {
+        val fields = ProtoFields.parse(bytes) ?: return null
+        return AdminResponse.LoraConfig(
+            preset = ordinal(fields, 2)?.let { presetFromOrdinal(it) },
+            region = ordinal(fields, 7)?.let { MeshRegion.fromWire(it) },
+        )
     }
+
+    /** The enum number at [number], 0 (the proto3 default) when it is not on the wire, null when it does not fit an Int. */
+    private fun ordinal(fields: List<ProtoField>, number: Int): Int? {
+        val value = ProtoFields.lastVarint(fields, number) ?: 0uL
+        return if (value <= Int.MAX_VALUE.toULong()) value.toInt() else null
+    }
+
+    private fun rebroadcastFromOrdinal(ordinal: Int): RebroadcastMode? =
+        RebroadcastMode.entries.firstOrNull { it.wire == ordinal }
 
     /** Channel { 1 index (varint), 2 settings (ChannelSettings sub), 3 role (varint enum) }. */
     private fun parseChannel(bytes: ByteArray): AdminResponse.Channel {
@@ -251,8 +237,8 @@ object AdminMessageParser {
         return shortName to longName
     }
 
-    /** Inverse of [AdminMessageSerializer.roleProtoOrdinal]. */
-    private fun roleFromOrdinal(ordinal: Int): MeshRole? = when (ordinal) {
+    /** Inverse of [AdminMessageSerializer.roleProtoOrdinal]. Null for a role this app has no entry for. */
+    internal fun roleFromOrdinal(ordinal: Int): MeshRole? = when (ordinal) {
         0 -> MeshRole.CLIENT
         1 -> MeshRole.CLIENT_MUTE
         2 -> MeshRole.ROUTER
@@ -267,8 +253,8 @@ object AdminMessageParser {
         else -> null
     }
 
-    /** Inverse of [AdminMessageSerializer.presetProtoOrdinal]. */
-    private fun presetFromOrdinal(ordinal: Int): MeshChannelPreset? = when (ordinal) {
+    /** Inverse of [AdminMessageSerializer.presetProtoOrdinal]. Null for a preset this app has no entry for. */
+    internal fun presetFromOrdinal(ordinal: Int): MeshChannelPreset? = when (ordinal) {
         0 -> MeshChannelPreset.LONG_FAST
         1 -> MeshChannelPreset.LONG_SLOW
         2 -> MeshChannelPreset.VERY_LONG_SLOW

@@ -467,7 +467,9 @@ class OmniTAKApp : Application() {
             // tab shows every channel the radio actually has configured
             // (not just CH0).
             mgr.adminResponseSink = { response ->
-                appScope.launch { meshDeviceConfigStore.applyAdminResponse(response) }
+                // In order, on the caller's thread: the store applies a report to its in-memory state at once
+                // (only the draft is written to disk afterwards), so a report cannot overtake a link drop.
+                meshDeviceConfigStore.applyAdminResponse(response)
                 if (response is AdminResponse.Channel && !response.isDisabled) {
                     val title = meshChannelTitle(response)
                     chatStore.upsertOrRenameConversation(
@@ -476,6 +478,9 @@ class OmniTAKApp : Application() {
                     )
                 }
             }
+            // The link dropped: what the radio reported no longer holds, so nothing counts as edited until the
+            // next radio (or the same one, after it restarts) reports again.
+            mgr.linkDownSink = { meshDeviceConfigStore.onLinkDown() }
             // GAP-122 — ingest mesh text messages into the same ChatStore
             // the TAK GeoChat path uses, so the Chat tab shows mesh chat
             // alongside server chat.

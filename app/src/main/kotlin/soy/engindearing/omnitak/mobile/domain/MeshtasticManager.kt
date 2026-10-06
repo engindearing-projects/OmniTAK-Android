@@ -22,14 +22,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayOutputStream
 import soy.engindearing.omnitak.mobile.data.AdminMessageParser
-import soy.engindearing.omnitak.mobile.data.AdminMessageSerializer
+import soy.engindearing.omnitak.mobile.data.AdminReads
 import soy.engindearing.omnitak.mobile.data.AdminResponse
+import soy.engindearing.omnitak.mobile.data.AdminWriteResult
+import soy.engindearing.omnitak.mobile.data.DeviceEdits
 import soy.engindearing.omnitak.mobile.data.AtakPluginParser
 import soy.engindearing.omnitak.mobile.data.ChatMessage
 import soy.engindearing.omnitak.mobile.data.ChatStatus
 import soy.engindearing.omnitak.mobile.data.MeshChannel
 import soy.engindearing.omnitak.mobile.data.MeshChannelPreset
-import soy.engindearing.omnitak.mobile.data.MeshDeviceConfig
 import soy.engindearing.omnitak.mobile.data.MeshRegion
 import soy.engindearing.omnitak.mobile.data.RebroadcastMode
 import soy.engindearing.omnitak.mobile.data.AtakPluginSerializer
@@ -44,6 +45,9 @@ import soy.engindearing.omnitak.mobile.data.MeshNode
 import soy.engindearing.omnitak.mobile.data.MeshtasticBleClient
 import soy.engindearing.omnitak.mobile.data.MeshtasticProtoParser
 import soy.engindearing.omnitak.mobile.data.MeshtasticTcpClient
+import soy.engindearing.omnitak.mobile.data.ProtoFields
+import soy.engindearing.omnitak.mobile.data.RadioSettingsCache
+import soy.engindearing.omnitak.mobile.data.SentLedger
 
 /**
  * Application-scoped Meshtastic state holder. Owns the TCP and BLE
@@ -71,7 +75,11 @@ import soy.engindearing.omnitak.mobile.data.MeshtasticTcpClient
  * provides the matching TX path over the active TCP transport — BLE
  * TX hooks in as a follow-up.
  */
-class MeshtasticManager(private val context: Context? = null) : MeshFrameworkManager {
+class MeshtasticManager(
+    private val context: Context? = null,
+    /** Milliseconds on a monotonic clock, for the deadlines of reads. Tests supply their own. */
+    readClock: () -> Long = AdminReads.MONOTONIC_MS,
+) : MeshFrameworkManager {
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
@@ -212,6 +220,113 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
                 null -> flowOf(ConnectionState.Disconnected)
             }
         }.stateIn(scope, SharingStarted.Eagerly, ConnectionState.Disconnected)
+
+    /**
+     * What the radio last told us about its own settings, as raw bytes: the
+     * device, position and LoRa configs (the ones the app patches; the security
+     * and network configs are never kept), every channel, and its owner record. Fed by every frame
+     * in [dispatchFrame] that comes from the radio, emptied when the link drops
+     * or a new config download begins. A write does not patch what is in here
+     * (it may be stale); it asks the radio for the entry again and patches the
+     * answer, which arrives here.
+     */
+    internal val radioSettings = RadioSettingsCache()
+
+    /** Test seam: when set, settings writes go here instead of the BLE/TCP transport. Null in the app. */
+    @Volatile internal var adminSendOverride: (suspend (ByteArray) -> Boolean)? = null
+
+    /** What was last sent to each radio, until that radio reports it again. */
+    private val sentLedger = SentLedger()
+
+    private val _settingsNotice = MutableStateFlow<String?>(null)
+
+    /**
+     * Something the operator should know about a write that already went out: the radio reported a setting and
+     * had kept its own value. Shown by the settings screens; cleared by [clearSettingsNotice].
+     */
+    val settingsNotice: StateFlow<String?> = _settingsNotice.asStateFlow()
+
+    fun clearSettingsNotice() {
+        _settingsNotice.value = null
+    }
+
+    private val _lastPushResult = MutableStateFlow<String?>(null)
+
+    /**
+     * What the last Device settings push said ("Sent to the radio: position interval. ..."). A push ends with the
+     * radio restarting to save it, which takes the link down, so the result is kept here, not on the screen: it
+     * stays while the link is down, after it comes back and after the screen is left, until the operator edits
+     * again or pushes again ([clearLastPushResult]).
+     */
+    val lastPushResult: StateFlow<String?> = _lastPushResult.asStateFlow()
+
+    fun clearLastPushResult() {
+        _lastPushResult.value = null
+    }
+
+    /** True from the end of a config download (`config_complete_id`) until the next one starts or the link drops. */
+    @Volatile private var downloadComplete = false
+    @Volatile private var downloadCompletedNanos = 0L
+
+    /** When the last frame came in from the radio, on the monotonic clock. */
+    @Volatile private var lastFrameNanos = System.nanoTime()
+
+    /** How long the link has to be quiet after a download before reads go out. Tests shorten it. */
+    @Volatile internal var settleQuietMs: Long = SETTLE_QUIET_MS
+
+    /** The longest a read waits for the download to finish. Tests shorten it. */
+    @Volatile internal var settleTimeoutMs: Long = SETTLE_TIMEOUT_MS
+
+    /**
+     * The reads this app has sent and not had answered, and the rule for what counts as the radio's answer to one
+     * ([AdminReads]). Every admin response goes through [AdminReads.admit] before it reaches the cache, the settings
+     * state or a write.
+     */
+    internal val adminReads = AdminReads(clock = readClock)
+
+    private val settingsWriter = MeshSettingsWriter(
+        cache = radioSettings,
+        destination = { if (adminLinkUp()) adminDestination() else null },
+        send = { bytes -> sendAdminFrame(bytes) },
+        ledger = sentLedger,
+        // Longer over Bluetooth: an answer waits there for the drain or the poll of the BLE client.
+        readTimeoutMs = { MeshSettingsWriter.readTimeoutFor(_activeTransport.value) },
+        reads = adminReads,
+    )
+
+    init {
+        // The cache must not outlive the link it was read over: a write built
+        // from another session's settings (or another radio's) would put
+        // stale values back. Cleared here when the link drops, and by
+        // [RadioSettingsCache.onFromRadio] when the first frame of a new
+        // config download (my_info) arrives. A user disconnect and an
+        // involuntary drop both show up as the state leaving Connected, so
+        // this one watcher covers TCP and BLE without touching either
+        // transport's connect or reconnect code.
+        scope.launch {
+            var wasConnected = false
+            activeConnectionState.collect { state ->
+                wasConnected = onLinkState(state, wasConnected)
+            }
+        }
+    }
+
+    /** One step of the link-drop watcher. Returns whether the link is up now. */
+    internal fun onLinkState(state: ConnectionState, wasConnected: Boolean): Boolean {
+        val connected = state is ConnectionState.Connected
+        if (wasConnected && !connected) {
+            Log.i(TAG, "link dropped, forgetting the radio's settings")
+            radioSettings.clear()
+            // A read sent on this link cannot be answered on another one, or by another radio.
+            adminReads.clear()
+            downloadComplete = false
+            // Nothing may be addressed to the radio that was on this link: the next one reports its own number.
+            _myNodeNum = null
+            runCatching { linkDownSink?.invoke() }
+                .onFailure { Log.w(TAG, "linkDownSink failed: ${it.message}") }
+        }
+        return connected
+    }
 
     /** Eagerly construct the BLE client (if a Context is available) so
      *  the BLE tab can observe its state flows even before any
@@ -394,27 +509,46 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
     }
 
     internal fun dispatchFrame(frame: ByteArray) {
+        lastFrameNanos = System.nanoTime()
         bytesRx += frame.size
-        when (val parsed = MeshtasticProtoParser.parseFromRadio(frame)) {
-            is FromRadioFrame.NodeInfoFrame -> upsertNode(parsed.node)
+        val parsed = MeshtasticProtoParser.parseFromRadio(frame)
+        when (parsed) {
+            is FromRadioFrame.NodeInfoFrame -> {
+                upsertNode(parsed.node)
+                reportOwnNodeInfo(parsed)
+            }
             is FromRadioFrame.Packet -> handlePacket(parsed.packet)
             is FromRadioFrame.MyInfo -> {
                 _myNodeNum = parsed.nodeNum
+                // The first frame of a session: no read of an earlier one is waiting for an answer any more,
+                // and the download that follows is not finished.
+                adminReads.clear()
+                downloadComplete = false
                 Log.i(TAG, "my_node_num=${parsed.nodeNum}")
             }
-            is FromRadioFrame.ConfigComplete -> Log.i(TAG, "config complete id=${parsed.id}")
+            is FromRadioFrame.ConfigComplete -> {
+                Log.i(TAG, "config complete id=${parsed.id}")
+                downloadCompletedNanos = System.nanoTime()
+                downloadComplete = true
+            }
             is FromRadioFrame.ConfigFrame -> {
-                Log.i(TAG, "RX FromRadio.config (post-want_config_id dump): ${parsed.response}")
-                runCatching { adminResponseSink?.invoke(parsed.response) }
-                    .onFailure { Log.w(TAG, "adminResponseSink (config) failed: ${it.message}") }
+                Log.i(TAG, "RX FromRadio.config (post-want_config_id dump): ${parsed.response ?: "variant with no decoded value"}")
+                // The settings screen only decodes device, position and lora;
+                // the other variants still reach the settings cache below.
+                parsed.response?.let { report(it) }
             }
             is FromRadioFrame.ChannelFrame -> {
                 Log.i(TAG, "RX FromRadio.channel: ${parsed.response}")
-                runCatching { adminResponseSink?.invoke(parsed.response) }
-                    .onFailure { Log.w(TAG, "adminResponseSink (channel) failed: ${it.message}") }
+                report(parsed.response)
             }
             is FromRadioFrame.Unknown -> Log.v(TAG, "unrecognised FromRadio frame (${frame.size}B)")
             null -> Log.w(TAG, "frame parse returned null (${frame.size}B)")
+        }
+        // After the branch above, so my_info has already set our node number
+        // when the cache checks that a NodeInfo or admin response is ours.
+        if (parsed != null) {
+            runCatching { radioSettings.onFromRadio(parsed, _myNodeNum) }
+                .onFailure { Log.w(TAG, "settings cache could not take a frame: ${it.message}") }
         }
     }
 
@@ -508,17 +642,25 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
                 }
             }
             PORTNUM_ADMIN_APP -> {
-                // GAP-109 read-back — radio's response to one of our
-                // get_*_request admin messages. Decode and notify the
-                // listener so MeshDeviceConfigStore can mirror radio state.
-                val response = AdminMessageParser.parse(packet.payload)
-                if (response != null) {
-                    Log.i(TAG, "RX admin response: $response")
-                    runCatching { adminResponseSink?.invoke(response) }
-                        .onFailure { Log.w(TAG, "adminResponseSink failed: ${it.message}") }
-                } else {
-                    Log.v(TAG, "RX admin packet from=${packet.from} payload=${packet.payload.size}B (unrecognised)")
+                // GAP-109 read-back: the radio's answer to one of our get_*_request
+                // messages. The radio hands the phone any admin message addressed
+                // to it, so a packet being here is not evidence of what the radio
+                // holds. It counts only as the answer to a read of ours, from the
+                // radio itself ([AdminReads]); anything else is ignored, so
+                // nothing else reaches the cache, the settings state or a write.
+                val decision = adminReads.admit(packet, _myNodeNum)
+                val answer = decision.answer
+                if (decision.admission != AdminReads.Admission.ACCEPTED || answer == null) {
+                    Log.w(TAG, "ignored an admin message: ${decision.admission.reason}")
+                    return
                 }
+                radioSettings.put(answer.key, answer.bytes)
+                AdminMessageParser.parse(packet.payload)?.let { response ->
+                    Log.i(TAG, "RX admin response: $response")
+                    report(response)
+                }
+                // Last, so a write waiting for this answer goes on with the cache and the screen up to date.
+                decision.deliver()
             }
             PORTNUM_TEXT_MESSAGE_APP -> {
                 // GAP-122 — Meshtastic text message. Payload is plain UTF-8.
@@ -619,48 +761,80 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
         "MESH-DM-${"%08X".format(nodeId.toInt())}"
 
     /**
-     * GAP-109 read-back — listener for decoded AdminMessage responses.
-     * Wired in [OmniTAKApp] to [MeshDeviceConfigStore.applyAdminResponse]
-     * so the Device Settings screen reflects the radio's actual state
-     * after a `requestDeviceConfig()` round-trip.
+     * GAP-109 read-back: listener for what the connected radio reports about
+     * its settings: the config download, and the answers to our own requests.
+     * Wired in [OmniTAKApp] to [MeshDeviceConfigStore.applyAdminResponse].
+     * Only the radio's own reports reach it (admin messages from any other node
+     * are dropped before this point).
      */
     @Volatile var adminResponseSink: ((AdminResponse) -> Unit)? = null
 
     /**
-     * Ask the connected radio for its current owner / device role / PLI
-     * cadence / LoRa preset / primary-channel name. Sends 5 admin
-     * requests; responses arrive asynchronously via [adminResponseSink].
+     * Called when the link to the radio drops, so what the radio reported stops counting as what it
+     * holds. Wired in [OmniTAKApp] to [MeshDeviceConfigStore.onLinkDown].
+     */
+    @Volatile var linkDownSink: (() -> Unit)? = null
+
+    /** One report from our own radio: hand it on, and check it against what we last sent that radio. */
+    private fun report(response: AdminResponse) {
+        runCatching { adminResponseSink?.invoke(response) }
+            .onFailure { Log.w(TAG, "adminResponseSink failed: ${it.message}") }
+        val node = _myNodeNum ?: return
+        val kept = sentLedger.check(node, response)
+        if (kept.isNotEmpty()) {
+            _settingsNotice.value = "The radio did not take: ${kept.joinToString(", ") { it.label }}. It may be managed."
+        }
+    }
+
+    /** The radio's own NodeInfo carries its owner record, so the names reach the settings screen without a request. */
+    private fun reportOwnNodeInfo(frame: FromRadioFrame.NodeInfoFrame) {
+        val me = _myNodeNum ?: return
+        if (frame.node.id != (me.toLong() and 0xFFFFFFFFL)) return
+        val user = frame.userRaw?.let { ProtoFields.parse(it) } ?: return
+        report(
+            AdminResponse.Owner(
+                longName = ProtoFields.lastString(user, USER_LONG_NAME) ?: "",
+                shortName = ProtoFields.lastString(user, USER_SHORT_NAME) ?: "",
+            ),
+        )
+    }
+
+    /**
+     * Ask the connected radio for its owner / device role / PLI cadence /
+     * LoRa config / channels. Sends 12 admin requests, spaced like writes and
+     * taking their turn behind any write in progress; the answers arrive
+     * asynchronously via [adminResponseSink].
      *
-     * No-op when no transport is active. Returns the count successfully
-     * dispatched so the caller can toast on partial / total failure.
+     * The requests wait until the radio has finished its config download
+     * (`config_complete_id`) and the link has been quiet for a moment, so they
+     * do not land in the middle of the stream: the firmware keeps few packets
+     * for the phone and drops the oldest when they pile up, without telling
+     * anyone. The wait is bounded and gives up when the link drops. Reading
+     * back after a push goes through here too.
+     *
+     * Returns the count of requests that went out, 0 when there is no radio.
      */
     suspend fun requestDeviceConfig(): Int {
-        val transport = _activeTransport.value ?: return 0
-        // #185 — admin frames are addressed to the attached radio, so we
-        // cannot build one until it has told us its node number.
-        val dest = adminDestination() ?: return 0
-        // GAP-123 — ask for all 8 channel slots (Meshtastic firmware caps
-        // at 8). Disabled slots come back with role=0 and are filtered
-        // out at the chat seeding layer; non-disabled ones become chat
-        // conversations with the operator's actual channel names.
-        val channelRequests = (0 until 8).map { idx ->
-            AdminMessageSerializer.buildGetChannelRequest(dest, idx)
-        }
-        val requests = listOf(
-            AdminMessageSerializer.buildGetOwnerRequest(dest),
-            AdminMessageSerializer.buildGetConfigRequest(dest, GET_CONFIG_DEVICE),
-            AdminMessageSerializer.buildGetConfigRequest(dest, GET_CONFIG_POSITION),
-            AdminMessageSerializer.buildGetConfigRequest(dest, GET_CONFIG_LORA),
-        ) + channelRequests
-        var sent = 0
-        for (bytes in requests) {
-            val ok = when (transport) {
-                MeshConnectionType.TCP -> tcpClient.sendBytes(bytes)
-                MeshConnectionType.BLUETOOTH -> bleClient?.sendToRadio(bytes) ?: false
+        awaitDownloadSettled()
+        return settingsWriter.readAll()
+    }
+
+    /** Wait for the config download to finish and the link to go quiet. Returns at once when no radio is attached. */
+    internal suspend fun awaitDownloadSettled() {
+        withTimeoutOrNull(settleTimeoutMs) {
+            while (true) {
+                // No radio to read from: nothing to wait for, and the read will say so.
+                if (!adminLinkUp() || adminDestination() == null) return@withTimeoutOrNull
+                if (downloadComplete) {
+                    val now = System.nanoTime()
+                    val quietMs = (now - lastFrameNanos) / 1_000_000L
+                    val sinceCompleteMs = (now - downloadCompletedNanos) / 1_000_000L
+                    // A busy mesh may never go quiet: the quiet wait is only for the moments after the download.
+                    if (quietMs >= settleQuietMs || sinceCompleteMs >= SETTLE_MAX_QUIET_WAIT_MS) return@withTimeoutOrNull
+                }
+                delay(25)
             }
-            if (ok) sent += 1 else break
         }
-        return sent
     }
 
     /**
@@ -739,81 +913,71 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
     }
 
     /**
-     * GAP-109a — push the operator's draft device config to the connected
+     * GAP-109a: write the settings the operator edited to the connected
      * radio via portnum-6 (ADMIN_APP) AdminMessage payloads.
      *
-     * Splits the config across four admin messages because the firmware
-     * groups settings into separate protobuf submessages. Sends them
-     * sequentially over the active transport; each one is a fully-framed
-     * `ToRadio`, so a single missed write doesn't corrupt the others.
+     * [edits] names the settings that were changed and the values to send;
+     * nothing else is written, whatever the draft holds. Each one is the
+     * radio's own message, asked for again just before it is patched, with that
+     * one field changed (the firmware replaces a whole config with what it
+     * receives), and the role goes first. The writes ride one
+     * `begin_edit_settings` / `commit_edit_settings` pair, so the radio saves
+     * and reboots once. If the radio does not answer the read, nothing is
+     * changed and the result says so.
      *
-     * Returns the count of messages successfully dispatched (0..4). The
-     * caller can surface this to the operator — e.g. "3 of 4 settings
-     * pushed; retry?". Doesn't wait for AdminMessage acks: those come
-     * back as `FromRadio.routing` frames and would need protobuf decode
-     * we haven't built yet (filed under GAP-109b).
+     * Doesn't wait for AdminMessage acks: those come back as
+     * `FromRadio.routing` frames and would need protobuf decode we haven't
+     * built yet (filed under GAP-109b). The radio's next report says what it
+     * kept, and [settingsNotice] says when that differs from what was sent.
+     * What the push said is kept in [lastPushResult], even if the screen that
+     * started it is left before it finishes (the writer runs a started
+     * sequence to its commit, and its result still comes back).
      */
-    suspend fun pushDeviceConfig(config: MeshDeviceConfig): Int {
-        val transport = _activeTransport.value ?: return 0
-        val dest = adminDestination() ?: return 0
-
-        val messages = listOf(
-            AdminMessageSerializer.buildSetOwner(dest, config.longName, config.shortName),
-            AdminMessageSerializer.buildSetDeviceRole(dest, config.role),
-            AdminMessageSerializer.buildSetPositionBroadcastSecs(dest, config.positionBroadcastSecs),
-            AdminMessageSerializer.buildSetChannel0Name(dest, config.channelName),
-            AdminMessageSerializer.buildSetLoraPreset(dest, config.channelPreset),
-        )
-        var sent = 0
-        for (bytes in messages) {
-            val ok = when (transport) {
-                MeshConnectionType.TCP -> tcpClient.sendBytes(bytes)
-                MeshConnectionType.BLUETOOTH -> bleClient?.sendToRadio(bytes) ?: false
-            }
-            if (ok) sent += 1 else break // bail on first failure so we don't wedge mid-write
-        }
-        return sent
-    }
+    suspend fun pushDeviceConfig(edits: DeviceEdits): AdminWriteResult =
+        settingsWriter.pushDeviceConfig(edits).also { _lastPushResult.value = it.describe() }
 
     /**
-     * #172 — push an imported [MeshChannel] (from a scanned/pasted
-     * `meshtastic.org/e/#…` share) onto the connected radio at [index] via a
-     * `set_channel` AdminMessage. Returns true on wire-layer dispatch.
+     * #172: import a [MeshChannel] (from a scanned/pasted
+     * `meshtastic.org/e/#…` share) into the connected radio via a
+     * `set_channel` AdminMessage. A full replacement of the slot it lands in,
+     * by design: the shared name and key become that channel. It goes into the
+     * first free secondary slot; the primary channel is replaced only when
+     * [replacePrimary] says the operator asked for that.
      */
-    suspend fun applyChannel(channel: MeshChannel, index: Int = 0): Boolean =
-        dispatchAdmin { dest -> AdminMessageSerializer.buildSetChannel(dest, channel, index) }
+    suspend fun applyChannel(channel: MeshChannel, replacePrimary: Boolean = false): AdminWriteResult =
+        settingsWriter.applyChannel(channel, replacePrimary)
 
     /**
      * #172 — set the radio's rebroadcast scope (PatoG1899's "known channels
-     * only"). Returns true on wire-layer dispatch.
+     * only"). The radio's other device settings are carried over.
      */
-    suspend fun applyRebroadcastMode(mode: RebroadcastMode): Boolean =
-        dispatchAdmin { dest -> AdminMessageSerializer.buildSetRebroadcastMode(dest, mode) }
+    suspend fun applyRebroadcastMode(mode: RebroadcastMode): AdminWriteResult =
+        settingsWriter.applyRebroadcastMode(mode)
 
     /**
      * #181 — set the radio's LoRa region + modem preset in one admin write
      * (`set_config { lora { use_preset, modem_preset, region } }`). Region is
      * the band a fresh radio needs before it will transmit; preset is the
-     * range/throughput profile. Returns true on wire-layer dispatch.
+     * range/throughput profile. Every other LoRa setting (hop limit, transmit
+     * switch, ...) is carried over from what the radio reported.
      */
     suspend fun applyLoRaConfig(
         region: MeshRegion,
-        preset: MeshChannelPreset,
+        preset: MeshChannelPreset?,
         usePreset: Boolean = true,
-    ): Boolean =
-        dispatchAdmin { dest -> AdminMessageSerializer.buildSetLoRaConfig(dest, region, preset, usePreset) }
+    ): AdminWriteResult = settingsWriter.applyLoRaConfig(region, preset, usePreset)
 
     /**
      * #181 — set the radio's owner (display name) via `set_owner { User }`.
-     * Long name shows in the node list; short name is the 4-char tag. Returns
-     * true on wire-layer dispatch.
+     * Long name shows in the node list; short name is the 4-char tag. The rest
+     * of the owner record, including the licensed flag, stays as the radio has
+     * it unless [isLicensed] says otherwise.
      */
     suspend fun applyOwner(
         longName: String,
         shortName: String,
-        isLicensed: Boolean = false,
-    ): Boolean =
-        dispatchAdmin { dest -> AdminMessageSerializer.buildSetOwner(dest, longName, shortName, isLicensed = isLicensed) }
+        isLicensed: Boolean? = null,
+    ): AdminWriteResult = settingsWriter.applyOwner(longName, shortName, isLicensed)
 
     /**
      * #185 — the destination for an admin write: the node number of the radio
@@ -824,25 +988,32 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
      */
     private fun adminDestination(): UInt? = _myNodeNum?.takeIf { it != 0u && it != BROADCAST_ADDR }
 
-    /**
-     * Frame one admin message for the attached radio and dispatch it over the
-     * active transport. [build] runs only once a destination is known.
-     */
-    private suspend fun dispatchAdmin(build: (UInt) -> ByteArray): Boolean {
-        val dest = adminDestination() ?: run {
-            Log.w(TAG, "admin write skipped — radio has not reported my_node_num yet")
-            return false
-        }
-        val toRadio = build(dest)
+    /** True when an admin write has somewhere to go: a live link (or the test seam). */
+    private fun adminLinkUp(): Boolean =
+        adminSendOverride != null || activeConnectionState.value is ConnectionState.Connected
+
+    /** Hand one framed admin ToRadio to the active transport. False when there is none or the write failed. */
+    private suspend fun sendAdminFrame(bytes: ByteArray): Boolean {
+        adminSendOverride?.let { return it(bytes) }
         return when (_activeTransport.value) {
-            MeshConnectionType.TCP -> tcpClient.sendBytes(toRadio)
-            MeshConnectionType.BLUETOOTH -> bleClient?.sendToRadio(toRadio) ?: false
+            MeshConnectionType.TCP -> tcpClient.sendBytes(bytes)
+            MeshConnectionType.BLUETOOTH -> bleClient?.sendToRadio(bytes) ?: false
             null -> false
         }
     }
 
     companion object {
         private const val TAG = "MeshtasticManager"
+
+        /** The longest a read waits for the config download to finish before it goes out anyway. */
+        const val SETTLE_TIMEOUT_MS = 20_000L
+
+        /** How long the link has to be quiet after the download: what is still queued for the phone drains meanwhile. */
+        const val SETTLE_QUIET_MS = 400L
+
+        /** After this long past the end of the download the quiet wait is over, whatever traffic there is. */
+        const val SETTLE_MAX_QUIET_WAIT_MS = 2_000L
+
         /** How often the BLE auto-reconnect loop checks whether the last
          *  radio is back in range. */
         private const val BLE_RECONNECT_INTERVAL_MS: Long = 20_000
@@ -861,10 +1032,9 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
         private const val PORTNUM_ADMIN_APP = 6
         /** Meshtastic broadcast address — channel-wide chat / position / etc. */
         private val BROADCAST_ADDR: UInt = 0xFFFFFFFFu
-        // ConfigType enum values (admin.proto)
-        private const val GET_CONFIG_DEVICE = 0
-        private const val GET_CONFIG_POSITION = 1
-        private const val GET_CONFIG_LORA = 5
+        // User (mesh.proto) field numbers read off our own NodeInfo.
+        private const val USER_LONG_NAME = 2
+        private const val USER_SHORT_NAME = 3
 
         private const val PORTNUM_ATAK_PLUGIN = 72
         // Some ATAK plugin builds send via portnum 257 (ATAK_FORWARDER)

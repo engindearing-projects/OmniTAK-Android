@@ -38,7 +38,7 @@ class PositionBroadcastFieldTest {
 
     @Test
     fun `position broadcast interval is written to field 1`() {
-        val frame = AdminMessageSerializer.buildSetPositionBroadcastSecs(myNodeNum, 900)
+        val frame = AdminMessageSerializer.buildSetPositionBroadcastSecs(myNodeNum, 900, currentPosition = ByteArray(0))!!.frame
 
         // set_config=34 (tag 92 02) { position=2 (tag 12) { field 1 varint 900 = 08 84 07 } }
         val expected = hexBytes("9202051203088407")
@@ -51,7 +51,7 @@ class PositionBroadcastFieldTest {
 
     @Test
     fun `nothing is written to deprecated gps_enabled at field 4`() {
-        val frame = AdminMessageSerializer.buildSetPositionBroadcastSecs(myNodeNum, 900)
+        val frame = AdminMessageSerializer.buildSetPositionBroadcastSecs(myNodeNum, 900, currentPosition = ByteArray(0))!!.frame
 
         // The same envelope but with the inner tag 0x20 (field 4, varint).
         val deprecated = hexBytes("9202051203208407")
