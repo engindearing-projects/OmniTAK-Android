@@ -94,6 +94,8 @@ class TakPacketPhase2Test {
         assertEquals("Cyan", event.teamName)
         // uid = device_callsign
         assertTrue("uid should be device callsign", event.uid.contains("ANDROID-1234abcd"))
+        // #215: a TAKPacket PLI is a device reporting its own position.
+        assertEquals("m-g", event.how)
     }
 
     // -------------------------------------------------------------------------

@@ -183,6 +183,11 @@ data class UserPrefs(
      *  the point goes stale (fresh <1m full opacity, aging 1–5m, stale >5m). Off
      *  by default — opt-in so the default map look is unchanged. */
     val stalenessOverlayEnabled: Boolean = false,
+    /** #215: hide a teammate's marker when no position report has arrived for this many
+     *  minutes, and remove the contact at twice that (see [ContactMaxAge]). 0 = Never, which
+     *  keeps the old behaviour of leaving a quiet contact on the map forever. Whole minutes;
+     *  Settings offers 5, 10, 15, 30, 60, 120 and Never. */
+    val contactMaxAgeMinutes: Int = ContactMaxAge.DEFAULT_MINUTES,
     /** #212: relay mesh → server: what the mesh hears is also sent up to the TAK
      *  server(s) while a server AND a mesh are both connected. Off by default.
      *  Until the operator first changes a pref it takes the legacy
@@ -261,6 +266,7 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
     private val KEY_KEEP_SCREEN_ON  = booleanPreferencesKey("keep_screen_on")
     private val KEY_SELF_MARKER_TRIANGLE = booleanPreferencesKey("selfMarkerTriangle")
     private val KEY_STALENESS_OVERLAY = booleanPreferencesKey("staleness_overlay_enabled")
+    private val KEY_CONTACT_MAX_AGE = intPreferencesKey("contact_max_age_minutes")
     // #212: one switch per relay direction. KEY_RELAY_GATEWAY below is the
     // pre-split single switch: the fallback for these two, kept for one release.
     private val KEY_RELAY_TO_SERVER = booleanPreferencesKey("relay_to_server_enabled")
@@ -318,6 +324,7 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
             p[KEY_KEEP_SCREEN_ON]  = next.keepScreenOn
             p[KEY_SELF_MARKER_TRIANGLE] = next.selfMarkerTriangle
             p[KEY_STALENESS_OVERLAY] = next.stalenessOverlayEnabled
+            p[KEY_CONTACT_MAX_AGE] = next.contactMaxAgeMinutes.coerceAtLeast(0)
             p[KEY_RELAY_TO_SERVER] = next.relayToServerEnabled
             p[KEY_RELAY_TO_MESH] = next.relayToMeshEnabled
             p[KEY_RELAY_GATEWAY] = next.relayGatewayEnabled
@@ -483,6 +490,7 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
         keepScreenOn   = p[KEY_KEEP_SCREEN_ON]  ?: false,
         selfMarkerTriangle = p[KEY_SELF_MARKER_TRIANGLE] ?: false,
         stalenessOverlayEnabled = p[KEY_STALENESS_OVERLAY] ?: false,
+        contactMaxAgeMinutes = (p[KEY_CONTACT_MAX_AGE] ?: ContactMaxAge.DEFAULT_MINUTES).coerceAtLeast(0),
         relayToServerEnabled = resolveRelayDirection(p[KEY_RELAY_TO_SERVER], p[KEY_RELAY_GATEWAY]),
         relayToMeshEnabled = resolveRelayDirection(p[KEY_RELAY_TO_MESH], p[KEY_RELAY_GATEWAY]),
         relayGatewayEnabled = p[KEY_RELAY_GATEWAY] ?: false,
