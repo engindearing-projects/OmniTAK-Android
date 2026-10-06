@@ -634,11 +634,17 @@ private suspend fun sendChatInner(
     // Off-grid mesh GeoChat — portnum-72 b-t-f TAKMessage so operators
     // with radios and NO server can exchange chat. Step 2 of off-grid plan.
     // Keep the existing MESH-CH*/MESH-DM-* / MESHCORE-* path unchanged (above).
+    //
+    // Only the broadcast room is mirrored. What goes out below is a broadcast
+    // to the whole radio channel, written as an "All Chat Rooms" message. A
+    // direct message used to get the same copy, so everyone on the channel
+    // could read it.
     val activeMesh = app.activeMeshManager
     val meshState = activeMesh.activeConnectionState.value
     val latestPrefs = app.userPrefsStore.prefs.first()
     var meshSent = false
-    if (meshState is soy.engindearing.omnitak.mobile.domain.ConnectionState.Connected &&
+    if (convo.mirrorsToMesh &&
+        meshState is soy.engindearing.omnitak.mobile.domain.ConnectionState.Connected &&
         latestPrefs.broadcastOverMesh
     ) {
         val meshCotEvent = CoTEvent(
@@ -665,7 +671,8 @@ private suspend fun sendChatInner(
     }
 
     // Delivered if EITHER transport accepted it — server CoT or
-    // portnum-72 mesh broadcast. FAILED now means both paths failed.
+    // portnum-72 mesh broadcast. FAILED now means both paths failed. A
+    // direct message has the server path only.
     app.chatStore.updateMessageStatus(
         conversationId = convo.id,
         messageId = generated.messageId,
