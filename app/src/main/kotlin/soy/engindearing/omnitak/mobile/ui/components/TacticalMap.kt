@@ -2,17 +2,22 @@ package soy.engindearing.omnitak.mobile.ui.components
 
 import android.annotation.SuppressLint
 import android.util.Log
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.LifecycleEventObserver
 import org.maplibre.android.MapLibre
@@ -981,6 +986,19 @@ fun TacticalMap(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    // #214: when the map comes back at a different size than it left with (the screen turned
+    // while it was on another tab), MapLibre's restarted render thread can keep drawing at the
+    // old size and leave part of the screen black. One real resize of the live surface repairs
+    // it, so for a moment the view is made 1 dp shorter and then given its size back. See
+    // [ReturnSizeWatch].
+    var resizeNudge by remember { mutableStateOf(false) }
+    LaunchedEffect(resizeNudge) {
+        if (resizeNudge) {
+            kotlinx.coroutines.delay(RESIZE_NUDGE_MS)
+            resizeNudge = false
+        }
+    }
+
     // Issue #77 — push contact updates on every recomposition that delivers a new
     // contacts list, mirroring the Cesium engine's AndroidView.update pattern.
     // Two deliberate changes vs the removed DisposableEffect(mapView, contacts):
@@ -1007,9 +1025,21 @@ fun TacticalMap(
                 }
             }
         },
-        modifier = modifier,
+        modifier = modifier
+            .onSizeChanged { size ->
+                if (RetainedMapView.isHeldBy(holder) &&
+                    RetainedMapView.returnSize.sized(size.width, size.height)
+                ) {
+                    resizeNudge = true
+                }
+            }
+            .padding(bottom = if (resizeNudge) 1.dp else 0.dp),
     )
 }
+
+/** How long the map stays 1 dp short while it is nudged. Long enough for the render
+ *  thread to take the first resize before the second one arrives. */
+private const val RESIZE_NUDGE_MS = 200L
 
 /**
  * Issue #81 — top margin for the MapLibre built-in compass so it clears

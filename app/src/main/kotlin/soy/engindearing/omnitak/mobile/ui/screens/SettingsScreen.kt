@@ -54,6 +54,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -66,6 +67,7 @@ import soy.engindearing.omnitak.mobile.data.CoordFormat
 import soy.engindearing.omnitak.mobile.data.Echelon
 import soy.engindearing.omnitak.mobile.data.DistanceUnit
 import soy.engindearing.omnitak.mobile.data.MapProvider
+import soy.engindearing.omnitak.mobile.data.ScreenRotation
 import soy.engindearing.omnitak.mobile.data.UserPrefs
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
 import soy.engindearing.omnitak.mobile.domain.IconPackImporter
@@ -704,6 +706,41 @@ fun SettingsScreen(
                     checked = prefs.keepScreenOn,
                     onCheckedChange = { v -> mutate { it.copy(keepScreenOn = v) } },
                 )
+            }
+            // #214: Screen rotation. Same stored value as the Rotate shortcut on the bottom bar.
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Screen rotation",
+                    color = MaterialTheme.colorScheme.onBackground,
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text(
+                    "Auto follows the phone. Portrait and Landscape hold the screen that way " +
+                        "whatever the phone's rotation setting is; Landscape turns either way up. " +
+                        "For a one-tap Rotate shortcut, press and hold the bottom bar, then tap +.",
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                SegmentedRow(
+                    options = ScreenRotation.entries.map { it to it.label },
+                    selected = prefs.screenRotation,
+                    onSelect = { v -> mutate { it.copy(screenRotation = v) } },
+                )
+                // Where Android ignores a held orientation (a tablet, an unfolded foldable), say so
+                // under the choices. The mode is still saved and still requested. The screen size
+                // comes from the current configuration, so folding or unfolding updates the note.
+                val holdIgnored = ScreenRotation.requestIgnored(
+                    Build.VERSION.SDK_INT,
+                    LocalContext.current.applicationInfo.targetSdkVersion,
+                    LocalConfiguration.current.smallestScreenWidthDp,
+                )
+                if (holdIgnored) {
+                    Text(
+                        ScreenRotation.HOLD_IGNORED_NOTE,
+                        color = Color(0xFFFFCC00),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
             }
             // Auto-hide toolbar — map tab only
             Row(

@@ -22,12 +22,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import soy.engindearing.omnitak.mobile.data.CSREnrollmentService
 import soy.engindearing.omnitak.mobile.data.ConnectionProtocol
 import soy.engindearing.omnitak.mobile.data.DeepLinkImport
 import soy.engindearing.omnitak.mobile.data.ImportedServerConfig
+import soy.engindearing.omnitak.mobile.data.ScreenRotation
 import soy.engindearing.omnitak.mobile.data.TAKServer
 import soy.engindearing.omnitak.mobile.ui.navigation.AppNav
 import soy.engindearing.omnitak.mobile.ui.onboarding.OnboardingFlow
@@ -38,6 +43,7 @@ import soy.engindearing.omnitak.mobile.ui.theme.TacticalBackground
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        holdScreenRotation()
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(TacticalBackground.toArgb()),
             navigationBarStyle = SystemBarStyle.dark(TacticalBackground.toArgb()),
@@ -92,6 +98,32 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         (application as? OmniTAKApp)?.refreshConnectionService()
+    }
+
+    /**
+     * #214 - hold the screen in the operator's chosen orientation.
+     *
+     * The saved mode is read here, before `setContent`, so the app opens in it and does not
+     * start in the phone's orientation and then turn. It is read from the store rather than
+     * from [OmniTAKApp.latestPrefs], which is still all defaults until the first read has
+     * finished. The read is the same one the Application started, so it waits only for what
+     * is left of it. If it fails the mode is Auto, which is what the app did before.
+     *
+     * After that the stored mode is followed, so the Settings row and the bottom bar shortcut
+     * both just write the preference. Setting the same orientation again does nothing.
+     */
+    private fun holdScreenRotation() {
+        val app = applicationContext as OmniTAKApp
+        val saved = runCatching {
+            runBlocking { app.userPrefsStore.prefs.first().screenRotation }
+        }.getOrDefault(ScreenRotation.DEFAULT)
+        requestedOrientation = saved.orientation
+        lifecycleScope.launch {
+            app.userPrefsStore.prefs
+                .map { it.screenRotation }
+                .distinctUntilChanged()
+                .collect { requestedOrientation = it.orientation }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {

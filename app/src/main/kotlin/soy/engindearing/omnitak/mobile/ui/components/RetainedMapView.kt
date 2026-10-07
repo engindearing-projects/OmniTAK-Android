@@ -128,6 +128,9 @@ internal object RetainedMapView {
 
     private val slot = RetainedSlot<MapView>()
 
+    /** #214: has the view come back at a different size than it left with? See [ReturnSizeWatch]. */
+    val returnSize = ReturnSizeWatch()
+
     /**
      * Return the retained [MapView], creating it via [factory] on first use, and
      * record [holder] (any object unique to the calling composition) as the one
@@ -135,7 +138,10 @@ internal object RetainedMapView {
      * view itself is not tied to an Activity.
      */
     fun acquire(appContext: Context, holder: Any, factory: (Context) -> MapView): MapView =
-        slot.acquire(holder) { factory(appContext) }.also { detach(it) }
+        slot.acquire(holder) { factory(appContext) }.also {
+            detach(it)
+            returnSize.returned()
+        }
 
     /** True while [holder] is the composition that took the view last. */
     fun isHeldBy(holder: Any): Boolean = slot.isHeldBy(holder)
@@ -181,6 +187,47 @@ internal class RetainedSlot<V : Any> {
         if (this.holder !== holder) return false
         this.holder = null
         return true
+    }
+}
+
+/**
+ * #214: MapLibre's surface view stops its render thread when the view leaves the
+ * window and starts a new one when it comes back. When the screen has turned in
+ * between (choosing Landscape or Portrait in Settings turns it while the map is on
+ * another tab) the new thread can keep drawing into a buffer the size of the one the
+ * surface had when the view left, while the surface has the new size. The log says
+ * "BLASTBufferQueue: rejecting buffer", and the map fills only part of the screen with
+ * black beside or below it. A resize delivered to the live surface repairs it, which is
+ * why turning the phone again with the map open always did; so when the view comes back
+ * at a different size than it left with, the map composable gives it one.
+ *
+ * This only decides whether that is needed, without Android types so it can be tested.
+ */
+internal class ReturnSizeWatch {
+    // The last size the view was laid out at while it was shown, in px.
+    private var last: Pair<Int, Int>? = null
+
+    // A composition took the view and has not reported a size yet.
+    private var waitingForFirstSize = false
+
+    /** A composition took the view; its first size is the one that matters. */
+    fun returned() {
+        waitingForFirstSize = true
+    }
+
+    /**
+     * The view was laid out at [width] x [height]. True when this is the first size
+     * since the view came back and it differs from the size it had when it left:
+     * the only case that needs the nudge. A later size (the phone turning with the
+     * map open) is never one, and neither is the first time the view is shown.
+     */
+    fun sized(width: Int, height: Int): Boolean {
+        val now = width to height
+        val before = last
+        last = now
+        if (!waitingForFirstSize) return false
+        waitingForFirstSize = false
+        return before != null && before != now
     }
 }
 
