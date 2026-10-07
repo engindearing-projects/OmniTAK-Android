@@ -99,4 +99,34 @@ class ContactMarkerRendererTest {
         assertEquals(MarkerTapAction.PASS_THROUGH, decideMarkerTap(contact = null, modeHandled = false))
         assertEquals(MarkerTapAction.PASS_THROUGH, decideMarkerTap(contact = null, modeHandled = true))
     }
+
+    // --- #274: the "Show point age on map" flag lives in the renderer. TacticalMap
+    // re-renders the contacts from four places that know nothing about the setting;
+    // while update() took the flag as a parameter with a default of false, each of
+    // them switched the age suffix off until MapScreen's 30 second tick switched it
+    // back on. The renderer cannot be driven on the JVM (it needs a MapLibreMap), so
+    // the rule is tested at the seam: update() has no flag to get wrong.
+
+    @Test fun the_point_age_flag_is_set_and_read_back_through_the_renderer() {
+        try {
+            assertFalse("off until the operator opts in", ContactMarkerRenderer.stalenessOverlayOn)
+            ContactMarkerRenderer.setStalenessOverlay(true)
+            assertTrue(ContactMarkerRenderer.stalenessOverlayOn)
+            ContactMarkerRenderer.setStalenessOverlay(true)
+            assertTrue("setting it on twice leaves it on", ContactMarkerRenderer.stalenessOverlayOn)
+            ContactMarkerRenderer.setStalenessOverlay(false)
+            assertFalse(ContactMarkerRenderer.stalenessOverlayOn)
+        } finally {
+            ContactMarkerRenderer.setStalenessOverlay(false)
+        }
+    }
+
+    @Test fun update_takes_no_flag_so_no_call_site_can_reset_the_point_age() {
+        val updates = ContactMarkerRenderer::class.java.declaredMethods.filter { it.name == "update" }
+        assertTrue("ContactMarkerRenderer.update must exist", updates.isNotEmpty())
+        for (m in updates) {
+            val booleans = m.parameterTypes.filter { it == java.lang.Boolean.TYPE || it == java.lang.Boolean::class.java }
+            assertTrue("update() must not take a Boolean (found $m): the point age flag is set only with setStalenessOverlay", booleans.isEmpty())
+        }
+    }
 }
