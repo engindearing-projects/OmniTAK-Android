@@ -195,11 +195,12 @@ object ContactMarkerRenderer {
 
     /**
      * Compact affiliation dot tinted [colorArgb] (team color), with the callsign
-     * baked in above it. MapLibre (11.8.0) anchors the bitmap at its CENTRE (measured:
-     * the dot sits 20 px below its coordinate at the default size), not at the bottom
-     * edge as this comment used to say. #213 keeps the dot at that same offset at every
-     * label size by padding the bitmap on the side away from the label, see
-     * [MapLabelGeometry]; the offset itself is unchanged.
+     * baked in above it. MapLibre (11.8.0) anchors the bitmap at its CENTRE, not at the
+     * bottom edge as this comment used to say, so the dot's centre must be the bitmap's
+     * centre to sit on its coordinate. With the name strip above the dot that takes a
+     * transparent strip of the same height below it, at every label size (#273; before
+     * it the dot was drawn about 20 px below its coordinate). With no name the bitmap
+     * is the dot alone and is already centred. See [MapLabelGeometry].
      *
      * Why a centered dot, not a tall pin: a 140px tip-anchored pin put the
      * visible head ~60px ABOVE the coordinate, but tap hit-testing (72px radius)
@@ -221,8 +222,8 @@ object ContactMarkerRenderer {
         val text = if (ageLabel != null) "$base  $ageLabel".trim() else base
         // Clamp opacity so a faded-but-stale pin never fully disappears.
         val a = (alpha.coerceIn(0.25f, 1.0f) * 255f).toInt()
-        val r = 16f          // symbol radius — small, so center↔coordinate offset is minimal
-        val ring = 3f
+        val r = MapLabelGeometry.CONTACT_DOT_RADIUS.toFloat()   // symbol radius, small on purpose
+        val ring = MapLabelGeometry.CONTACT_DOT_RING.toFloat()
         // #213: the name (text, outline, strip, gap) follows the label size; the
         // dot (r, ring) does not, so a larger name grows upward and stays off it.
         val g = MapLabelGeometry.forContact(labelFactor)
@@ -235,31 +236,26 @@ object ContactMarkerRenderer {
             typeface = Typeface.DEFAULT_BOLD; style = Paint.Style.STROKE; strokeWidth = g.haloStroke; this.alpha = a
         }
         val hasLabel = text.isNotBlank()
-        val labelH = if (hasLabel) g.band else 0f
-        // #213: transparent rows that keep the dot where it is at every label size:
-        // MapLibre anchors the bitmap at its centre, so a taller strip would pull the
-        // dot away from its coordinate (see MapLabelGeometry).
-        val top = if (hasLabel) g.topPad else 0
-        val bottom = if (hasLabel) g.bottomPad else 0
+        // #273: the dot's centre is the bitmap's centre (see MapLabelGeometry.contactLayout).
+        val layout = g.contactLayout(hasLabel)
         val pad = g.padding
-        val diameter = (r + ring) * 2f
+        val diameter = MapLabelGeometry.CONTACT_DOT_DIAMETER.toFloat()
         val textW = if (hasLabel) fill.measureText(text) else 0f
         val w = maxOf(diameter, textW + pad * 2).toInt()
-        val h = (top + labelH + diameter + bottom).toInt()
+        val h = layout.height
         val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bmp)
         val cx = w / 2f
-        // The dot sits at the foot of the strip + dot block, above any bottom padding.
-        val cy = h - bottom - r - ring
+        val cy = layout.dotCentreY.toFloat()
         canvas.drawCircle(cx, cy, r, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = colorArgb; style = Paint.Style.FILL; this.alpha = a })
         canvas.drawCircle(cx, cy, r, Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.parseColor("#1A1A1A"); style = Paint.Style.STROKE; strokeWidth = ring; this.alpha = a
         })
         canvas.drawCircle(cx, cy, r * 0.34f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; style = Paint.Style.FILL; this.alpha = a })
 
-        // Callsign label above the dot (not a hit target; the dot is).
+        // Callsign label above the dot.
         if (hasLabel) {
-            val ty = top + g.baseline
+            val ty = layout.nameTop + g.baseline
             canvas.drawText(text, cx, ty, halo)
             canvas.drawText(text, cx, ty, fill)
         }
