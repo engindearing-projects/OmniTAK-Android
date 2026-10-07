@@ -56,8 +56,42 @@ enum class ScreenRotation(
     /** What a screen reader says for the shortcut, for example "Screen rotation: Auto". */
     val contentDescription: String get() = "Screen rotation: $label"
 
+    /**
+     * What to tell the operator when they change to this mode. When Android will ignore the
+     * request to hold the screen ([requestIgnored]), Portrait and Landscape cannot promise what
+     * [message] says, so they say what is true instead. Auto only follows the phone, which is
+     * true whatever Android does with the request.
+     */
+    fun messageFor(requestIgnored: Boolean): String =
+        if (requestIgnored && this != AUTO) HOLD_IGNORED_NOTE else message
+
     companion object {
         val DEFAULT: ScreenRotation = AUTO
+
+        /** The first Android API level that ignores an app's orientation request on a large screen. */
+        const val FIRST_API_THAT_IGNORES = 36
+
+        /** The smallest width, in dp, from which a screen counts as large. */
+        const val LARGE_SCREEN_DP = 600
+
+        /** Shown instead of "Screen stays in ..." and as a note under the Settings row when the request is ignored. */
+        const val HOLD_IGNORED_NOTE = "On a screen this size Android does not let apps hold the rotation"
+
+        /**
+         * True when Android will ignore this app's request to hold the screen in one orientation.
+         * From Android 16 (API 36), an app that targets API 36 or later has `setRequestedOrientation()`
+         * ignored on a screen whose smallest width is 600 dp or more: tablets, and a foldable while
+         * it is unfolded. The mode is still saved and still requested, because the request applies
+         * as soon as the screen is small again (a foldable folded).
+         *
+         * Games, and an app the user opted back in under the phone's aspect ratio settings, are exempt
+         * from the rule; this cannot see either, so it can say "ignored" for an app that is not.
+         * https://developer.android.com/about/versions/16/behavior-changes-16
+         */
+        fun requestIgnored(sdkInt: Int, targetSdk: Int, smallestScreenWidthDp: Int): Boolean =
+            sdkInt >= FIRST_API_THAT_IGNORES &&
+                targetSdk >= FIRST_API_THAT_IGNORES &&
+                smallestScreenWidthDp >= LARGE_SCREEN_DP
 
         /** The mode for a stored value. Anything that is not one of the three reads as Auto. */
         fun fromStored(value: String?): ScreenRotation =

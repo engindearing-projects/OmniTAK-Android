@@ -54,6 +54,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -725,6 +726,21 @@ fun SettingsScreen(
                     selected = prefs.screenRotation,
                     onSelect = { v -> mutate { it.copy(screenRotation = v) } },
                 )
+                // Where Android ignores a held orientation (a tablet, an unfolded foldable), say so
+                // under the choices. The mode is still saved and still requested. The screen size
+                // comes from the current configuration, so folding or unfolding updates the note.
+                val holdIgnored = ScreenRotation.requestIgnored(
+                    Build.VERSION.SDK_INT,
+                    LocalContext.current.applicationInfo.targetSdkVersion,
+                    LocalConfiguration.current.smallestScreenWidthDp,
+                )
+                if (holdIgnored) {
+                    Text(
+                        ScreenRotation.HOLD_IGNORED_NOTE,
+                        color = Color(0xFFFFCC00),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
             }
             // Auto-hide toolbar — map tab only
             Row(

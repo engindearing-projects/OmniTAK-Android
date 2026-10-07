@@ -40,6 +40,7 @@ import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.OmniTAKApp
+import soy.engindearing.omnitak.mobile.data.ScreenRotation
 import soy.engindearing.omnitak.mobile.data.UserPrefs
 import soy.engindearing.omnitak.mobile.domain.LassoSelectionService
 import soy.engindearing.omnitak.mobile.ui.components.BarCommand
@@ -229,8 +230,16 @@ fun AppNav() {
                     // same mode. MainActivity turns the screen as soon as the mode is stored.
                     scope.launch {
                         val mode = app.userPrefsStore.cycleScreenRotation()
+                        // Read the screen size now, not from an earlier composition: a foldable may
+                        // have been folded or unfolded since. On a screen where Android ignores a
+                        // held orientation, Portrait and Landscape say so instead of promising it.
+                        val ignored = ScreenRotation.requestIgnored(
+                            android.os.Build.VERSION.SDK_INT,
+                            appNavContext.applicationInfo.targetSdkVersion,
+                            appNavContext.resources.configuration.smallestScreenWidthDp,
+                        )
                         android.widget.Toast.makeText(
-                            appNavContext, mode.message, android.widget.Toast.LENGTH_SHORT,
+                            appNavContext, mode.messageFor(ignored), android.widget.Toast.LENGTH_SHORT,
                         ).show()
                     }
                 }
