@@ -54,7 +54,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -390,12 +392,38 @@ private fun SectionHeader(title: String, trailing: String) {
 
 @Composable
 private fun ServerStatusRow(s: ServerSyncSession, onTap: () -> Unit) {
+    // An offline row opens its diagnosis (#169 parity); online rows refresh.
+    var showDetail by remember { mutableStateOf(false) }
+    val offline = s.status as? MissionServerStatus.Offline
+    if (showDetail && offline != null) {
+        val clipboard = LocalClipboardManager.current
+        val text = listOfNotNull("${s.serverName} (${s.host}): ${offline.reason}", offline.detail).joinToString("\n\n")
+        AlertDialog(
+            onDismissRequest = { showDetail = false },
+            title = { Text(s.serverName) },
+            text = {
+                Column {
+                    Text(offline.reason, style = MaterialTheme.typography.bodyMedium)
+                    offline.detail?.let {
+                        Spacer(Modifier.height(10.dp))
+                        Text(it, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { clipboard.setText(AnnotatedString(text)) }) { Text("Copy") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDetail = false; onTap() }) { Text("Retry") }
+            },
+        )
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .background(TacticalSurface)
-            .clickable(onClick = onTap)
+            .clickable(onClick = { if (offline != null) showDetail = true else onTap() })
             .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -452,8 +480,8 @@ private fun Dot(color: Color) {
 
 private fun statusLine(s: ServerSyncSession): String = when (val st = s.status) {
     is MissionServerStatus.Checking -> "${s.host} — checking…"
-    is MissionServerStatus.Online -> s.host
-    is MissionServerStatus.Offline -> "${s.host} — ${st.reason}"
+    is MissionServerStatus.Online -> s.authLabel?.let { "${s.host} · $it" } ?: s.host
+    is MissionServerStatus.Offline -> st.reason
 }
 
 @Composable

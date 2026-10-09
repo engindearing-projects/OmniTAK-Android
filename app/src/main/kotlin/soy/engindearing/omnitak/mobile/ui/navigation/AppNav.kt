@@ -376,6 +376,7 @@ fun AppNav() {
             composable("settings") {
                 SettingsScreen(
                     onOpenAbout = { nav.navigate("about") },
+                    onOpenDiagnostics = { nav.navigate("settings/diagnostics") },
                     onOpenPlugins = { pluginId -> nav.navigate("settings/plugin/$pluginId") },
                     onOpenPluginsList = { nav.navigate("plugins") },
                     onOpenProfiles = { nav.navigate("settings/profiles") },
@@ -385,6 +386,9 @@ fun AppNav() {
                 ProfilesScreen(onBack = { nav.popBackStack() })
             }
             composable("about") { AboutScreen() }
+            composable("settings/diagnostics") {
+                soy.engindearing.omnitak.mobile.ui.screens.DiagnosticsLogScreen(onBack = { nav.popBackStack() })
+            }
             // Top-level Plugins list (reads from PluginRegistry).
             composable("plugins") {
                 soy.engindearing.omnitak.mobile.ui.screens.PluginsListScreen(
