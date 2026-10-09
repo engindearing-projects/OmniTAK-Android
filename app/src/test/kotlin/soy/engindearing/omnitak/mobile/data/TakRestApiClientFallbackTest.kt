@@ -261,6 +261,25 @@ class TakRestApiClientFallbackTest {
         assertTrue(enroll.requests.isEmpty())
     }
 
+    /** The enrollment port itself not answering is reported as that, not as rejected credentials. */
+    @Test fun `no certificate and an enrollment port that does not answer names that port`() {
+        val api = Loopback(needClientCert = true, auth = Auth.Open)
+        val closed = Loopback(needClientCert = false, auth = Auth.Open)
+        val closedPort = closed.port
+        closed.stop()
+        val client = TakRestApiClient(entry(api.port, closedPort, null, "vaclav", "pw"), certVault = null)
+        try {
+            client.connect()
+            fail("a closed enrollment port cannot connect")
+        } catch (e: TakRestApiClient.ApiException) {
+            val message = e.message ?: ""
+            assertTrue(message, message.contains("127.0.0.1:$closedPort refused the connection"))
+            assertTrue(message, !message.contains("did not accept the stored username"))
+            assertTrue(e.detail ?: "", (e.detail ?: "").contains("Fallback:"))
+        }
+        assertTrue(api.requests.isEmpty())
+    }
+
     @Test fun `neither certificate nor credentials is refused up front`() {
         val api = Loopback(needClientCert = true, auth = Auth.Open)
         val client = TakRestApiClient(entry(api.port, 8446, null, null, null), certVault = null)

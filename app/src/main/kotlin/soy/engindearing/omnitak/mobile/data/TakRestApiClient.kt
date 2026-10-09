@@ -52,6 +52,8 @@ class TakRestApiClient(
     /** What the username/password route said the last time it was tried and did not work. */
     var lastFallbackNote: String? = null
         private set
+    /** The enrollment port's own transport failure, when the fallback never got an HTTP answer. */
+    private var lastFallbackTransportFailure: ApiException? = null
 
     private fun currentPort(): Int = when (val r = route) {
         TakRestAuthRoute.ClientCertificate -> apiPort
@@ -112,6 +114,12 @@ class TakRestApiClient(
                 detail = listOfNotNull(it.detail, "Fallback: $note").joinToString("\n"),
             )
         }
+        // No certificate: the enrollment port's own failure is the story when
+        // it never answered (TLS trust, refused, timeout); otherwise it
+        // answered and refused the credentials.
+        lastFallbackTransportFailure?.let {
+            throw ApiException(it.message ?: note, it.cause, detail = listOfNotNull(it.detail, "Fallback: $note").joinToString("\n"))
+        }
         throw ApiException(
             "${server.host}:${server.enrollmentPort} did not accept the stored username and password ($note). Check them in the server settings.",
             detail = "Fallback: $note",
@@ -122,6 +130,7 @@ class TakRestApiClient(
         val port = server.enrollmentPort
         val endpoint = "${server.host}:$port"
         val notes = mutableListOf<String>()
+        lastFallbackTransportFailure = null
         Log.i(TAG, "REST fallback: trying username/password on $endpoint")
 
         // 1. OAuth password grant (TAK Server 5.x).
@@ -129,12 +138,12 @@ class TakRestApiClient(
             is TokenResult.Token -> {
                 bearerToken = result.token
                 route = TakRestAuthRoute.Bearer(port)
-                val why = probeCurrentRoute()
-                if (why == null) {
+                val failure = probeCurrentRoute()
+                if (failure == null) {
                     Log.i(TAG, "REST fallback: $endpoint reached with an OAuth token")
                     return route
                 }
-                notes += "OAuth token from $endpoint accepted but the API answered: $why"
+                notes += "OAuth token from $endpoint accepted but the API answered: ${failure.message}"
             }
             is TokenResult.Unavailable -> notes += "no OAuth on $endpoint (${result.why})"
             is TokenResult.Rejected -> {
@@ -142,14 +151,22 @@ class TakRestApiClient(
                 notes += "$endpoint rejected the username and password (${result.why})"
                 return endFallback(notes)
             }
+            is TokenResult.TransportFailure -> {
+                // The port itself did not answer (TLS trust, refused, timeout);
+                // Basic on the same port would fail the same way.
+                lastFallbackTransportFailure = result.failure
+                notes += "enrollment port $endpoint: ${result.failure.message}"
+                return endFallback(notes)
+            }
         }
 
         // 2. HTTP Basic (OpenTAKServer, taky).
         bearerToken = null
         route = TakRestAuthRoute.Basic(port)
-        val why = probeCurrentRoute()
-        if (why != null) {
-            notes += "Basic auth on $endpoint: $why"
+        val failure = probeCurrentRoute()
+        if (failure != null) {
+            if (failure.cause != null) lastFallbackTransportFailure = failure
+            notes += "Basic auth on $endpoint: ${failure.message}"
             return endFallback(notes)
         }
         Log.i(TAG, "REST fallback: $endpoint reached with Basic auth")
@@ -164,18 +181,22 @@ class TakRestApiClient(
         return null
     }
 
-    /** null when the API answered 200 on the current route; otherwise why not. */
-    private fun probeCurrentRoute(): String? = try {
+    /** null when the API answered 200 on the current route; otherwise the failure. */
+    private fun probeCurrentRoute(): ApiException? = try {
         checkReachability()
         null
     } catch (e: ApiException) {
-        e.message ?: e.javaClass.simpleName
+        e
     }
 
     private sealed interface TokenResult {
         data class Token(val token: String) : TokenResult
+        /** The port answered but has no usable OAuth (404, odd body). */
         data class Unavailable(val why: String) : TokenResult
+        /** The port answered and refused the credentials (400/401/403). */
         data class Rejected(val why: String) : TokenResult
+        /** The port never answered. */
+        data class TransportFailure(val failure: ApiException) : TokenResult
     }
 
     /**
@@ -215,8 +236,16 @@ class TakRestApiClient(
                 else -> TokenResult.Unavailable("HTTP $code")
             }
         } catch (t: Throwable) {
-            Log.w(TAG, "REST fallback: token request failed: ${t.javaClass.simpleName}: ${t.message}")
-            TokenResult.Unavailable(TakRestFailure.describe(t, server.host, server.enrollmentPort, server.certificateName))
+            val failure = ApiException(
+                TakRestFailure.describe(t, server.host, server.enrollmentPort, server.certificateName),
+                t,
+                TakRestFailure.detail(
+                    t, server.host, server.enrollmentPort, TakRestAuthRoute.Bearer(server.enrollmentPort),
+                    server.certificateName, server.caCertificateName, server.allowUntrustedTls,
+                ),
+            )
+            Log.w(TAG, "REST fallback: token request failed: ${failure.detail}")
+            TokenResult.TransportFailure(failure)
         } finally {
             conn.disconnect()
         }
