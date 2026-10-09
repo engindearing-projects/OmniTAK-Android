@@ -1,6 +1,5 @@
 package soy.engindearing.omnitak.mobile.data
 
-import android.util.Base64
 import android.util.Log
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -41,11 +40,197 @@ class TakRestApiClient(
     private val certVault: CertVault?,
 ) {
     /** TAK HTTPS API port. Distinct from the CoT streaming port in [server]. */
-    private val apiPort = SECURE_API_PORT
+    private val apiPort = server.secureApiPort ?: SECURE_API_PORT
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
-    private fun baseUrl(path: String) = "https://${server.host}:$apiPort$path"
+    /** Which route the session is on; [connect] may move it off the certificate port (#169 parity). */
+    var route: TakRestAuthRoute = TakRestAuthRoute.ClientCertificate
+        private set
+    private var bearerToken: String? = null
+
+    /** What the username/password route said the last time it was tried and did not work. */
+    var lastFallbackNote: String? = null
+        private set
+
+    private fun currentPort(): Int = when (val r = route) {
+        TakRestAuthRoute.ClientCertificate -> apiPort
+        is TakRestAuthRoute.Bearer -> r.port
+        is TakRestAuthRoute.Basic -> r.port
+    }
+
+    private fun baseUrl(path: String) = "https://${server.host}:${currentPort()}$path"
+
+    private fun authorizationHeader(): String? = when (val r = route) {
+        // Some dialects (taky / OTS local-auth) take Basic on the certificate
+        // port in addition to mTLS; keep sending it when credentials exist.
+        TakRestAuthRoute.ClientCertificate ->
+            TakRestAuthRoute.Basic(apiPort).authorizationHeader(server.username, server.password, null)
+        else -> r.authorizationHeader(server.username, server.password, bearerToken)
+    }
+
+    // ------------------------------------------------------------------
+    // Connecting, with the credential fallback (iOS #169 parity)
+    // ------------------------------------------------------------------
+
+    /**
+     * Prove the Marti API answers and choose the route. The certificate
+     * port is tried first when the entry has a certificate. When that is
+     * refused for certificate, trust or handshake reasons and the entry has
+     * a username and password, the enrollment port is tried with those: an
+     * OAuth password grant first (TAK Server 5.x), HTTP Basic second
+     * (OpenTAKServer). An entry with credentials and no certificate goes
+     * straight to them. Throws the certificate-port failure, annotated with
+     * what the fallback said, when nothing works. Blocking; call on IO.
+     */
+    fun connect(): TakRestAuthRoute {
+        route = TakRestAuthRoute.ClientCertificate
+        bearerToken = null
+        lastFallbackNote = null
+
+        var certificateFailure: ApiException? = null
+        if (server.certificateName != null) {
+            try {
+                checkReachability()
+                return route
+            } catch (e: ApiException) {
+                if (!e.allowsCredentialFallback || !server.hasStoredCredentials) throw e
+                certificateFailure = e
+            }
+        } else if (!server.hasStoredCredentials) {
+            throw ApiException(
+                "${server.host}:$apiPort needs a client certificate or a username and password; this server entry has neither.",
+            )
+        }
+
+        fallBackToCredentials()?.let { return it }
+        val note = lastFallbackNote ?: "username and password did not work"
+        certificateFailure?.let {
+            throw ApiException(
+                "${it.message} Username and password did not work either ($note).",
+                it.cause,
+                detail = listOfNotNull(it.detail, "Fallback: $note").joinToString("\n"),
+            )
+        }
+        throw ApiException(
+            "${server.host}:${server.enrollmentPort} did not accept the stored username and password ($note). Check them in the server settings.",
+            detail = "Fallback: $note",
+        )
+    }
+
+    private fun fallBackToCredentials(): TakRestAuthRoute? {
+        val port = server.enrollmentPort
+        val endpoint = "${server.host}:$port"
+        val notes = mutableListOf<String>()
+        Log.i(TAG, "REST fallback: trying username/password on $endpoint")
+
+        // 1. OAuth password grant (TAK Server 5.x).
+        when (val result = requestBearerToken()) {
+            is TokenResult.Token -> {
+                bearerToken = result.token
+                route = TakRestAuthRoute.Bearer(port)
+                val why = probeCurrentRoute()
+                if (why == null) {
+                    Log.i(TAG, "REST fallback: $endpoint reached with an OAuth token")
+                    return route
+                }
+                notes += "OAuth token from $endpoint accepted but the API answered: $why"
+            }
+            is TokenResult.Unavailable -> notes += "no OAuth on $endpoint (${result.why})"
+            is TokenResult.Rejected -> {
+                // Wrong credentials; Basic would not do better.
+                notes += "$endpoint rejected the username and password (${result.why})"
+                return endFallback(notes)
+            }
+        }
+
+        // 2. HTTP Basic (OpenTAKServer, taky).
+        bearerToken = null
+        route = TakRestAuthRoute.Basic(port)
+        val why = probeCurrentRoute()
+        if (why != null) {
+            notes += "Basic auth on $endpoint: $why"
+            return endFallback(notes)
+        }
+        Log.i(TAG, "REST fallback: $endpoint reached with Basic auth")
+        return route
+    }
+
+    private fun endFallback(notes: List<String>): TakRestAuthRoute? {
+        route = TakRestAuthRoute.ClientCertificate
+        bearerToken = null
+        lastFallbackNote = notes.joinToString("; ")
+        Log.w(TAG, "REST fallback failed: $lastFallbackNote")
+        return null
+    }
+
+    /** null when the API answered 200 on the current route; otherwise why not. */
+    private fun probeCurrentRoute(): String? = try {
+        checkReachability()
+        null
+    } catch (e: ApiException) {
+        e.message ?: e.javaClass.simpleName
+    }
+
+    private sealed interface TokenResult {
+        data class Token(val token: String) : TokenResult
+        data class Unavailable(val why: String) : TokenResult
+        data class Rejected(val why: String) : TokenResult
+    }
+
+    /**
+     * `POST /oauth/token?grant_type=password` on the enrollment port. TAK
+     * Server answers 200 with `access_token`; a server without OAuth answers
+     * 404 (OpenTAKServer); wrong credentials get 400/401/403.
+     */
+    private fun requestBearerToken(): TokenResult {
+        val user = server.username
+        val pass = server.password
+        if (user.isNullOrBlank() || pass.isNullOrBlank()) return TokenResult.Unavailable("no credentials")
+        val query = encodeQuery(listOf("grant_type" to "password", "username" to user, "password" to pass))
+        val url = URL("https://${server.host}:${server.enrollmentPort}/oauth/token$query")
+        val conn = (url.openConnection() as HttpsURLConnection).apply {
+            connectTimeout = CONNECT_TIMEOUT_MS
+            readTimeout = READ_TIMEOUT_MS
+            requestMethod = "POST"
+            doOutput = true
+            setRequestProperty("Accept", "application/json")
+            TakTls.configure(this, server, certVault)
+        }
+        return try {
+            conn.connect()
+            conn.outputStream.close()
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+            when (code) {
+                200 -> {
+                    val token = runCatching {
+                        (json.parseToJsonElement(text) as? JsonObject)?.get("access_token")?.jsonPrimitive?.contentOrNull
+                    }.getOrNull()
+                    if (token.isNullOrBlank()) TokenResult.Unavailable("HTTP 200 without an access_token")
+                    else TokenResult.Token(token)
+                }
+                400, 401, 403 -> TokenResult.Rejected("HTTP $code")
+                else -> TokenResult.Unavailable("HTTP $code")
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "REST fallback: token request failed: ${t.javaClass.simpleName}: ${t.message}")
+            TokenResult.Unavailable(TakRestFailure.describe(t, server.host, server.enrollmentPort, server.certificateName))
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private fun transportFailure(what: String, t: Throwable): ApiException {
+        val port = currentPort()
+        val reason = TakRestFailure.describe(t, server.host, port, server.certificateName)
+        val detail = TakRestFailure.detail(
+            t, server.host, port, route, server.certificateName, server.caCertificateName, server.allowUntrustedTls,
+        )
+        Log.w(TAG, "$what failed: ${t.javaClass.simpleName}: ${t.message}\n$detail")
+        return ApiException(reason, t, detail)
+    }
 
     // ------------------------------------------------------------------
     // Public API (each is a blocking network call — invoke off the main
@@ -249,12 +434,7 @@ class TakRestApiClient(
             doOutput = body != null
             setRequestProperty("Accept", "application/json")
             if (contentType != null) setRequestProperty("Content-Type", contentType)
-            val user = server.username
-            val pass = server.password
-            if (!user.isNullOrBlank() && !pass.isNullOrBlank()) {
-                val raw = "$user:$pass".toByteArray(Charsets.UTF_8)
-                setRequestProperty("Authorization", "Basic " + Base64.encodeToString(raw, Base64.NO_WRAP))
-            }
+            authorizationHeader()?.let { setRequestProperty("Authorization", it) }
             TakTls.configure(this, server, certVault)
         }
         return try {
@@ -265,8 +445,7 @@ class TakRestApiClient(
             val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
             code to text
         } catch (t: Throwable) {
-            Log.w(TAG, "$method $path failed: ${t.javaClass.simpleName}: ${t.message}")
-            throw ApiException(t.message ?: t.javaClass.simpleName, t)
+            throw transportFailure("$method $path", t)
         } finally {
             conn.disconnect()
         }
@@ -278,14 +457,7 @@ class TakRestApiClient(
             readTimeout = READ_TIMEOUT_MS
             requestMethod = "GET"
             setRequestProperty("Accept", "application/json")
-            // Some dialects (taky / OTS local-auth) accept basic auth in
-            // addition to mTLS; send it when the operator provided creds.
-            val user = server.username
-            val pass = server.password
-            if (!user.isNullOrBlank() && !pass.isNullOrBlank()) {
-                val raw = "$user:$pass".toByteArray(Charsets.UTF_8)
-                setRequestProperty("Authorization", "Basic " + Base64.encodeToString(raw, Base64.NO_WRAP))
-            }
+            authorizationHeader()?.let { setRequestProperty("Authorization", it) }
             TakTls.configure(this, server, certVault)
         }
         return try {
@@ -295,8 +467,7 @@ class TakRestApiClient(
             val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
             code to text
         } catch (t: Throwable) {
-            Log.w(TAG, "GET $path failed: ${t.javaClass.simpleName}: ${t.message}")
-            throw ApiException(t.message ?: t.javaClass.simpleName, t)
+            throw transportFailure("GET $path", t)
         } finally {
             conn.disconnect()
         }
@@ -309,7 +480,19 @@ class TakRestApiClient(
         else -> "Server error ($code)" + body.take(80).let { if (it.isBlank()) "" else ": $it" }
     }
 
-    class ApiException(message: String, cause: Throwable? = null) : Exception(message, cause)
+    /**
+     * [message] is the sentence shown on the server row; [detail] is the full
+     * diagnosis for a details dialog and the log (iOS #169 parity).
+     */
+    class ApiException(
+        message: String,
+        cause: Throwable? = null,
+        val detail: String? = null,
+    ) : Exception(message, cause) {
+        /** Whether the enrollment port with credentials could do better than the certificate port did. */
+        val allowsCredentialFallback: Boolean
+            get() = cause?.let { TakRestFailure.allowsCredentialFallback(it) } ?: false
+    }
 
     companion object {
         private const val TAG = "TakRestApiClient"

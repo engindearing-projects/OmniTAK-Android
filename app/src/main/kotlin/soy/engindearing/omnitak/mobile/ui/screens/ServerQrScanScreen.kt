@@ -374,6 +374,7 @@ private fun enrollAndAdd(
                     certificateName = enrolled.certificateName,
                     certificatePassword = enrolled.certificatePassword,
                     caCertificateName = enrolled.caCertificateName,
+                    enrollmentPort = cfg.enrollmentPort,
                 ),
             )
             withContext(Dispatchers.Main) {

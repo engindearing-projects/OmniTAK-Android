@@ -81,6 +81,7 @@ import soy.engindearing.omnitak.mobile.ui.components.ToolbarEditBus
 @Composable
 fun SettingsScreen(
     onOpenAbout: () -> Unit = {},
+    onOpenDiagnostics: () -> Unit = {},
     onOpenPlugins: (pluginId: String) -> Unit = {},
     onOpenPluginsList: () -> Unit = {},
     onOpenProfiles: () -> Unit = {},
@@ -779,6 +780,24 @@ fun SettingsScreen(
             // nothing navigated to it after the bottom-bar rework dropped
             // the About tab. This row is the entry point.
             SectionHeader("About")
+            // The app's own log since launch, with share (iOS #169 parity).
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onOpenDiagnostics() }
+                    .padding(vertical = 10.dp, horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Diagnostics Log", color = MaterialTheme.colorScheme.onBackground)
+                    Text(
+                        "Read or share the app log for a bug report",
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
