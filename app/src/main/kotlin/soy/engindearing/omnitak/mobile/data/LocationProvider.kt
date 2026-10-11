@@ -31,6 +31,13 @@ data class SelfFix(
      *  ([SelfFixPersistence.newerOf]). Defaults to false so every real GPS fix,
      *  manual drop and test fixture is live without saying so. */
     val restored: Boolean = false,
+    /** #249 - false when the source reported no altitude, in which case
+     *  [altitudeM] is a 0.0 placeholder and not a measurement. A placeholder
+     *  must never be used as a height to measure from (Follow-Me checks this).
+     *  Defaults to true so every fixture and caller that never set it keeps
+     *  meaning what it did. A restored fix ([restored]) is never used as an
+     *  altitude reference whatever this says, so persistence does not carry it. */
+    val hasAltitude: Boolean = true,
 )
 
 class LocationProvider(private val context: Context) {
@@ -165,5 +172,6 @@ class LocationProvider(private val context: Context) {
         speedKmh = if (hasSpeed()) speed * 3.6 else 0.0,
         accuracyM = if (hasAccuracy()) accuracy else Float.NaN,
         timeMs = time,
+        hasAltitude = hasAltitude(),
     )
 }

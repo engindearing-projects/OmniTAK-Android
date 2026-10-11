@@ -977,6 +977,17 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         // -------- UAS HUD: cruise altitude pill + Follow-Me toggle --------
         val cruiseAlt by uas.cruiseAlt.collectAsState()
         val followActive by uas.followMeActive.collectAsState()
+        val followHealth by uas.followHealth.collectAsState()
+        // #249 - the follow stream gave up on its own (GPS fix too old, or no
+        // altitude reference) and parked the drone. Say so once, then clear it
+        // so coming back to the map does not repeat it. If the map was not on
+        // screen when it happened, this runs when it comes back.
+        LaunchedEffect(uas, followHealth) {
+            val stopped = followHealth as? soy.engindearing.omnitak.mobile.domain.FollowHealth.Stopped
+                ?: return@LaunchedEffect
+            toast(soy.engindearing.omnitak.mobile.ui.components.followStoppedMessage(stopped.reason))
+            uas.acknowledgeFollowStop()
+        }
         var altSheetOpen by remember { mutableStateOf(false) }
         if (droneState.isConnected()) {
             androidx.compose.foundation.layout.Box(
@@ -1050,6 +1061,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     )
                     soy.engindearing.omnitak.mobile.ui.components.UasFollowMePill(
                         active = followActive,
+                        health = followHealth,
                         onToggle = {
                             scope.launch {
                                 if (followActive) {
@@ -1066,6 +1078,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                                             "UAS link down"
                                         is soy.engindearing.omnitak.mobile.domain.UASManager.FollowMeResult.AutopilotNotSupported ->
                                             "Follow-Me requires PX4 (autopilot=${r.autopilot ?: "unknown"})"
+                                        soy.engindearing.omnitak.mobile.domain.UASManager.FollowMeResult.NoAltitudeReference ->
+                                            "No altitude reference — Follow-Me needs your GPS altitude or terrain data"
                                     }
                                     toast(msg)
                                 }
@@ -1965,7 +1979,14 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         val r = uas.startPursueContact(uid, callsign) {
                             // Re-read each tick so we track the contact as it moves.
                             val live = app.contactStore.contacts.value[uid] ?: return@startPursueContact null
-                            live.lat to live.lon
+                            // #249 - with the time we last heard it, so a contact that
+                            // has gone quiet is held and then dropped. 0 = never
+                            // ingested through the store: no time to give.
+                            soy.engindearing.omnitak.mobile.domain.FollowTargetPoint(
+                                lat = live.lat,
+                                lon = live.lon,
+                                timeMs = live.receivedAtMs.takeIf { it > 0L },
+                            )
                         }
                         val msg = when (r) {
                             soy.engindearing.omnitak.mobile.domain.UASManager.FollowMeResult.Started ->
@@ -1976,6 +1997,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                                 "UAS link down"
                             is soy.engindearing.omnitak.mobile.domain.UASManager.FollowMeResult.AutopilotNotSupported ->
                                 "Pursue requires PX4 (autopilot=${r.autopilot ?: "unknown"})"
+                            soy.engindearing.omnitak.mobile.domain.UASManager.FollowMeResult.NoAltitudeReference ->
+                                "No altitude reference — pursue needs your GPS altitude or terrain data at the contact"
                         }
                         toast(msg)
                     }
