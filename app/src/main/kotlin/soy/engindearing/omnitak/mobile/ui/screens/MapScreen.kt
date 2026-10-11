@@ -516,6 +516,10 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     val stalenessOverlay = userPrefs.stalenessOverlayEnabled
     var stalenessTick by remember { mutableStateOf(0) }
     LaunchedEffect(stalenessOverlay) {
+        // #274: the renderer holds the flag (like the label size below) and redraws at
+        // once when it changes, so the TacticalMap calls that redraw the pins cannot
+        // switch the age suffix off again after the map is shown.
+        soy.engindearing.omnitak.mobile.ui.components.ContactMarkerRenderer.setStalenessOverlay(stalenessOverlay)
         while (stalenessOverlay) {
             kotlinx.coroutines.delay(30_000L)
             stalenessTick++
@@ -534,10 +538,10 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         soy.engindearing.omnitak.mobile.ui.components.ContactMarkerRenderer.setLabelFactor(labelFactor)
         soy.engindearing.omnitak.mobile.ui.components.KmlMarkerRenderer.setLabelFactor(labelFactor)
     }
-    LaunchedEffect(visibleContacts, mapboxMap, stalenessOverlay, stalenessTick) {
+    LaunchedEffect(visibleContacts, mapboxMap, stalenessTick) {
         mapboxMap?.let { m ->
             soy.engindearing.omnitak.mobile.ui.components.ContactMarkerRenderer
-                .update(m, appContext, visibleContacts, stalenessOverlay)
+                .update(m, appContext, visibleContacts)
         }
     }
     // #152 — render user drawings AND the transient range rings through the

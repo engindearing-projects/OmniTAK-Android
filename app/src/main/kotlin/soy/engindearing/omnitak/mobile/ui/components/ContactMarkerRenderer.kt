@@ -59,6 +59,9 @@ object ContactMarkerRenderer {
     private var contacts: List<CoTEvent> = emptyList()
     private var idleListener: MapLibreMap.OnCameraIdleListener? = null
     // #178 — when true, a contact pin shows its age and fades as it goes stale.
+    // #274: held here, set only by [setStalenessOverlay], like [labelFactor]. It used to
+    // be a parameter of update() with a default of false, so each TacticalMap call that
+    // did not pass it switched the age suffix off until the next 30 s tick switched it on.
     private var stalenessOverlay: Boolean = false
 
     // #213: the phone's font size x the Label size setting: one multiplier for
@@ -83,22 +86,33 @@ object ContactMarkerRenderer {
         render()
     }
 
+    /** Whether pins show their age and fade now. Read by the unit tests; set with [setStalenessOverlay]. */
+    internal val stalenessOverlayOn: Boolean get() = stalenessOverlay
+
     /**
-     * Replace the rendered contacts; (re)registers the camera-idle re-render.
-     *
-     * #178 — [stalenessOverlay] turns on the per-pin age label + staleness fade.
-     * Off by default so the existing marker look is unchanged when the operator
-     * hasn't opted in.
+     * #178 / #274: turn the per-pin age label + staleness fade on or off and redraw
+     * the pins at once if it changed. Off until the operator opts in, so the existing
+     * marker look is unchanged. Safe to call before the map is bound: the next
+     * [render] uses it. Nothing else changes it: [update] has no parameter for it, so
+     * a call that knows nothing about the setting cannot put it back.
+     */
+    fun setStalenessOverlay(enabled: Boolean) {
+        if (enabled == stalenessOverlay) return
+        stalenessOverlay = enabled
+        render()
+    }
+
+    /**
+     * Replace the rendered contacts; (re)registers the camera-idle re-render. The
+     * pins use the held [setStalenessOverlay] and [setLabelFactor] settings.
      */
     fun update(
         map: MapLibreMap,
         context: Context,
         contacts: Collection<CoTEvent>,
-        stalenessOverlay: Boolean = false,
     ) {
         this.ctx = context
         this.contacts = contacts.toList()
-        this.stalenessOverlay = stalenessOverlay
         if (boundMap !== map) {
             idleListener?.let { l -> runCatching { boundMap?.removeOnCameraIdleListener(l) } }
             boundMap = map
