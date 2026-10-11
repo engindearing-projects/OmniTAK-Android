@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -102,9 +104,14 @@ fun OfflineMapsSheet(
     val canDownload = initialBbox != null && template != null && tileCount > 0 && !downloading
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet, containerColor = Color(0xFF0F1115)) {
+        // #222: the zoom range, the estimate, the Download button and the region
+        // list stack up past a landscape phone; without the scroll the sheet
+        // stopped at the Downloaded regions header. The region list keeps its
+        // fixed 180 dp height, so it stays bounded inside the scroll.
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 24.dp),
         ) {

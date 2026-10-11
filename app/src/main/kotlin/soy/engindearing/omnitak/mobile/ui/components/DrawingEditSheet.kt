@@ -10,7 +10,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.OpenWith
 import androidx.compose.material3.Button
@@ -66,9 +68,13 @@ fun DrawingEditSheet(
         sheetState = sheetState,
         containerColor = Color(0xFF1A1F2E),
     ) {
+        // #222: fits a landscape phone only when fully expanded and the keyboard
+        // is down; with the keyboard up the label field and the Save / Move /
+        // Delete row sat behind it with no way to scroll to them.
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp, vertical = 12.dp)
                 .padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),

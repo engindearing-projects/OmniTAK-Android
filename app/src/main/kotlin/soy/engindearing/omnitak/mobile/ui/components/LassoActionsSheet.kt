@@ -10,7 +10,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Delete
@@ -68,9 +70,12 @@ fun LassoActionsSheet(
         sheetState = sheet,
         containerColor = Color(0xFF0F1115),
     ) {
+        // #222: five or six action rows plus the header are taller than a
+        // landscape phone; Delete was half cut off and Clear Selection was gone.
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(bottom = 24.dp),
         ) {
             // Header — count + subtitle
