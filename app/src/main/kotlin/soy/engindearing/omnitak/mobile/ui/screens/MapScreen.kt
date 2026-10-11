@@ -78,6 +78,7 @@ import soy.engindearing.omnitak.mobile.ui.components.CompassOverlay
 import soy.engindearing.omnitak.mobile.ui.components.ContactsPanel
 import soy.engindearing.omnitak.mobile.ui.components.LayersDialog
 import soy.engindearing.omnitak.mobile.ui.components.MarkerEditSheet
+import soy.engindearing.omnitak.mobile.ui.components.OnRequest
 import soy.engindearing.omnitak.mobile.ui.components.RadialAction
 import soy.engindearing.omnitak.mobile.ui.components.RadialMenu
 import soy.engindearing.omnitak.mobile.ui.components.SelfPositionCard
@@ -277,11 +278,12 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     var panTargetTick by remember { mutableStateOf(0) }
     // "Go to Coordinate" sheet (TWD97 / MGRS / Lat-Lon). Opened from the
     // Tools popup via CoordinateEntryEvents; reference coord = map centre
-    // so 5+5 TWD97 grid input recovers the right 100 km cell.
+    // so 5+5 TWD97 grid input recovers the right 100 km cell. The request is
+    // taken when the sheet opens, so coming back to this tab later does not
+    // open it again (#286).
     var coordEntryOpen by remember { mutableStateOf(false) }
-    val coordEntryGen by soy.engindearing.omnitak.mobile.ui.components.CoordinateEntryEvents.openGeneration.collectAsState()
-    LaunchedEffect(coordEntryGen) {
-        if (coordEntryGen > 0L) coordEntryOpen = true
+    OnRequest(soy.engindearing.omnitak.mobile.ui.components.CoordinateEntryEvents.open) {
+        coordEntryOpen = true
     }
     // ADS-B is now a plugin (:plugins:example-adsb). The plugin owns its
     // AdsbService, its map overlay (which paints via AircraftLayer on the live
