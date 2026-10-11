@@ -17,6 +17,7 @@ import soy.engindearing.omnitak.mobile.domain.LocalMarkerStore
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.data.AdminResponse
 import soy.engindearing.omnitak.mobile.data.CertVault
+import soy.engindearing.omnitak.mobile.data.ChatHistoryFile
 import soy.engindearing.omnitak.mobile.data.ConfigProfileStore
 import soy.engindearing.omnitak.mobile.data.LocationProvider
 import soy.engindearing.omnitak.mobile.data.MeshDeviceConfigStore
@@ -45,6 +46,12 @@ class OmniTAKApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+
+        // #260 - read the saved chat log now, on a background thread, so it is ready by
+        // the time the first chat message or the Chat tab needs it. The store is built
+        // on first use under the lazy lock, so whoever asks first waits for the read
+        // and nobody ever sees a half-restored store.
+        appScope.launch(Dispatchers.IO) { chatStore }
 
         // #139 — give MapLibre an HTTP client that sends an app-identifying
         // User-Agent. OSM/OpenTopoMap serve a "403 Access blocked" tile to
@@ -386,7 +393,14 @@ class OmniTAKApp : Application() {
     val pendingChatConversation = MutableStateFlow<String?>(null)
 
     val chatStore: ChatStore by lazy {
-        ChatStore().also { store ->
+        // #260 - conversations and messages come back from <filesDir>/chat/history.json
+        // here, on first use (onCreate starts that on a background thread), so they are in
+        // the store before the Chat screen or any ingest path can touch it. Changes are
+        // written back off the main thread.
+        ChatStore(
+            history = ChatHistoryFile.inFilesDir(filesDir),
+            scope = appScope,
+        ).also { store ->
             // GAP-122 — Mesh primary channel always visible so users can
             // open it before any text traffic has arrived.
             store.upsertConversationIfMissing(
@@ -713,7 +727,7 @@ class OmniTAKApp : Application() {
         ServerManager(
             store = TAKServerStore(this),
             contactStore = contactStore,
-            chatStore = chatStore,
+            chatStoreProvider = { chatStore },
             certVault = certVault,
             userPrefsStore = userPrefsStore,
             locationProvider = locationProvider,

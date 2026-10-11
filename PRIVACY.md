@@ -1,6 +1,6 @@
 # OmniTAK Mobile: Privacy Policy
 
-_Last updated: 2026-04-25_
+_Last updated: 2026-10-11_
 
 OmniTAK Mobile ("the app") is an open-source TAK (Team Awareness Kit) client
 published by Engindearing ("we", "us"). This document describes what data the
@@ -20,6 +20,9 @@ app handles and how it is treated.
 
 - **TAK server profiles** (name, host, port, transport, certificate references)
 - **User preferences** (callsign, theme, layer visibility, last-selected basemap)
+- **Chat history** (your conversations and their messages: the newest 500 per
+  conversation and the newest 100 conversations), so chat is still there after
+  the app restarts
 - **Client certificates** for mTLS, stored in the Android Keystore
 - **Cached map tiles** (standard MapLibre tile cache for offline performance)
 
