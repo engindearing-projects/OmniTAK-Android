@@ -1979,13 +1979,15 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         val r = uas.startPursueContact(uid, callsign) {
                             // Re-read each tick so we track the contact as it moves.
                             val live = app.contactStore.contacts.value[uid] ?: return@startPursueContact null
-                            // #249 - with the time we last heard it, so a contact that
-                            // has gone quiet is held and then dropped. 0 = never
-                            // ingested through the store: no time to give.
+                            // #249 - no time, on purpose: a contact has no age rule.
+                            // Its position is its last report and a dropped marker is
+                            // never repeated, so pursuing one keeps going to that point.
+                            // The contact max-age setting is what removes a silent
+                            // teammate.
                             soy.engindearing.omnitak.mobile.domain.FollowTargetPoint(
                                 lat = live.lat,
                                 lon = live.lon,
-                                timeMs = live.receivedAtMs.takeIf { it > 0L },
+                                timeMs = null,
                             )
                         }
                         val msg = when (r) {

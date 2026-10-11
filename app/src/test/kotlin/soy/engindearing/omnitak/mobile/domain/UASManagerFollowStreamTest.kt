@@ -27,7 +27,7 @@ import java.net.InetAddress
 import java.net.SocketTimeoutException
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 import io.dronefleet.mavlink.MavlinkConnection as DroneFleetConnection
 
@@ -38,8 +38,13 @@ import io.dronefleet.mavlink.MavlinkConnection as DroneFleetConnection
  * fix stops updating, not just what the rules decide.
  *
  * The limits are shortened (stale after 1 s, stop after 1.5 s of holding) so a
- * test takes seconds, not the 40 s a real stall takes. The stream ticks once a
+ * test takes seconds, not the 50 s a real stall takes. The stream ticks once a
  * second in real time, so each test waits on the clock for a few ticks.
+ *
+ * Fixes come in two kinds, as on a phone. The default [Gps] has no monotonic
+ * time, so the stream falls back to the fix's wall-clock time; a [Gps] with
+ * `monotonic = true` stamps each fix with the monotonic clock as well, and the
+ * stream ages it on that.
  */
 class UASManagerFollowStreamTest {
 
@@ -122,13 +127,24 @@ class UASManagerFollowStreamTest {
         vehicle.close()
     }
 
-    /** The GPS: live (time = now) until [freeze], then stuck at the moment it froze. */
-    private class Gps {
-        private val frozenAt = AtomicLong(0)
-        @Volatile var hasAltitude = true
+    /** The monotonic clock the manager is given: real time that only moves forward. */
+    private val elapsedClock: () -> Long = { System.nanoTime() / 1_000_000L }
 
-        fun freeze() = frozenAt.set(System.currentTimeMillis())
-        fun resume() = frozenAt.set(0)
+    /**
+     * The GPS: live (time = now) until frozen, then stuck at the moment it froze.
+     * The wall-clock time and the monotonic time freeze separately so a test
+     * can make them disagree. [wallSkewMs] is how far the device clock is off.
+     */
+    private class Gps(private val elapsedNow: () -> Long, @Volatile var monotonic: Boolean = false) {
+        @Volatile var hasAltitude = true
+        @Volatile var wallSkewMs = 0L
+        private val frozenWall = AtomicReference<Long?>(null)
+        private val frozenElapsed = AtomicReference<Long?>(null)
+
+        fun freezeWall() = frozenWall.set(System.currentTimeMillis())
+        fun freezeElapsed() = frozenElapsed.set(elapsedNow())
+        fun freeze() { freezeWall(); freezeElapsed() }
+        fun resume() { frozenWall.set(null); frozenElapsed.set(null) }
 
         fun fix() = SelfFix(
             lat = 47.6,
@@ -136,10 +152,13 @@ class UASManagerFollowStreamTest {
             altitudeM = if (hasAltitude) 600.0 else 0.0,
             speedKmh = 0.0,
             accuracyM = 5f,
-            timeMs = frozenAt.get().takeIf { it != 0L } ?: System.currentTimeMillis(),
+            timeMs = (frozenWall.get() ?: System.currentTimeMillis()) + wallSkewMs,
             hasAltitude = hasAltitude,
+            elapsedRealtimeMs = if (monotonic) (frozenElapsed.get() ?: elapsedNow()) else null,
         )
     }
+
+    private fun newGps(monotonic: Boolean = false) = Gps(elapsedClock, monotonic)
 
     /** A connected PX4 on the other end of loopback, and a manager wired to it. */
     private fun connectedManager(
@@ -156,6 +175,7 @@ class UASManagerFollowStreamTest {
             operatorFix = { gps.fix() },
             mavlink = link,
             followLimits = followLimits,
+            elapsedRealtimeMs = elapsedClock,
         )
         uas = manager
         manager.connect("127.0.0.1", vehicle.port)
@@ -189,7 +209,8 @@ class UASManagerFollowStreamTest {
 
     @Test
     fun aFixThatStopsUpdatingGoesQuietAndThenTheVehicleIsToldToLoiter() {
-        val gps = Gps()
+        // A fix with no monotonic time: aged on its wall-clock time, the fallback.
+        val gps = newGps()
         val manager = connectedManager(gps)
 
         assertEquals(UASManager.FollowMeResult.Started, runBlocking { manager.startFollowMe() })
@@ -239,7 +260,7 @@ class UASManagerFollowStreamTest {
 
     @Test
     fun aFixThatComesBackBeforeTheLimitResumesTheStream() {
-        val gps = Gps()
+        val gps = newGps()
         // Long enough to recover in, short enough to wait for.
         val manager = connectedManager(gps, followLimits = FollowLimits(maxTargetAgeMs = 1_000, maxHoldMs = 6_000))
 
@@ -261,7 +282,7 @@ class UASManagerFollowStreamTest {
 
     @Test
     fun stoppingFollowMeParksTheVehicleAndLeavesNothingToAnnounce() {
-        val gps = Gps()
+        val gps = newGps()
         val manager = connectedManager(gps)
         assertEquals(UASManager.FollowMeResult.Started, runBlocking { manager.startFollowMe() })
         awaitTrue(5_000, "the first target") { vehicle.followTargets().isNotEmpty() }
@@ -279,7 +300,7 @@ class UASManagerFollowStreamTest {
 
     @Test
     fun withNoAltitudeReferenceTheVehicleIsNeverSwitchedToFollow() {
-        val gps = Gps().apply { hasAltitude = false }
+        val gps = newGps().apply { hasAltitude = false }
         val manager = connectedManager(gps, terrain = StubTerrain(null))
 
         assertEquals(UASManager.FollowMeResult.NoAltitudeReference, runBlocking { manager.startFollowMe() })
@@ -296,7 +317,7 @@ class UASManagerFollowStreamTest {
     @Test
     fun px4IsSentTheTerrainUnderTheTargetPlusCruiseNotTheOperatorsAltitude() {
         // The operator's fix says 600 m; the terrain under it says 500 m.
-        val manager = connectedManager(Gps(), terrain = StubTerrain(500.0))
+        val manager = connectedManager(newGps(), terrain = StubTerrain(500.0))
         assertEquals(UASManager.FollowMeResult.Started, runBlocking { manager.startFollowMe() })
         awaitTrue(5_000, "the first target") { vehicle.followTargets().isNotEmpty() }
 
@@ -308,7 +329,7 @@ class UASManagerFollowStreamTest {
 
     @Test
     fun px4IsSentTheOperatorsAltitudePlusCruiseWhenThereIsNoTerrain() {
-        val manager = connectedManager(Gps(), terrain = StubTerrain(null))
+        val manager = connectedManager(newGps(), terrain = StubTerrain(null))
         assertEquals(UASManager.FollowMeResult.Started, runBlocking { manager.startFollowMe() })
         awaitTrue(5_000, "the first target") { vehicle.followTargets().isNotEmpty() }
 
@@ -318,7 +339,7 @@ class UASManagerFollowStreamTest {
 
     @Test
     fun anArduPilotCopterIsFedTheSameTargetAndGoesQuietTheSameWay() {
-        val gps = Gps()
+        val gps = newGps()
         val manager = connectedManager(
             gps,
             autopilot = MavAutopilot.MAV_AUTOPILOT_ARDUPILOTMEGA,
@@ -341,9 +362,96 @@ class UASManagerFollowStreamTest {
         assertTrue("the wire was quiet for $gap ms before LOITER", gap >= limits.maxHoldMs)
     }
 
+    // ------------------------------------------ which clock a fix is aged on
+
+    @Test
+    fun aFixAgedOnTheMonotonicClockIsNotHeldWhenTheWallClockIsWrong() {
+        // The device clock is an hour behind GPS time, so by wall time every
+        // fix is an hour old. By the monotonic clock each one is fresh.
+        val gps = newGps(monotonic = true).apply { wallSkewMs = -3_600_000 }
+        val manager = connectedManager(gps)
+
+        assertEquals(UASManager.FollowMeResult.Started, runBlocking { manager.startFollowMe() })
+
+        // Several ticks, well past the 1 s age limit, and every one is sent.
+        awaitTrue(8_000, "targets to keep flowing") { vehicle.followTargets().size >= 4 }
+        assertEquals(FollowHealth.Streaming, manager.followHealth.value)
+        assertTrue(manager.followMeActive.value)
+        assertTrue(vehicle.loiterCommands().isEmpty())
+    }
+
+    @Test
+    fun aFixThatStopsOnTheMonotonicClockIsHeldWhateverItsWallTimeSays() {
+        // The fix keeps a current wall time but its monotonic time stops: by the
+        // clock that cannot be moved, it is getting old.
+        val gps = newGps(monotonic = true)
+        val manager = connectedManager(gps)
+        assertEquals(UASManager.FollowMeResult.Started, runBlocking { manager.startFollowMe() })
+        awaitTrue(5_000, "the first targets") { vehicle.followTargets().size >= 2 }
+
+        gps.freezeElapsed()
+
+        manager.awaitHealth(8_000, "the stream to hold") { it is FollowHealth.Holding }
+        assertEquals(
+            FollowHoldReason.StaleFix,
+            (manager.followHealth.value as FollowHealth.Holding).reason,
+        )
+        manager.awaitHealth(10_000, "the stream to stop") { it is FollowHealth.Stopped }
+        awaitTrue(3_000, "the LOITER command to arrive") { vehicle.loiterCommands().isNotEmpty() }
+    }
+
+    // ------------------------------------------------------ pursuing a contact
+
+    private val contactPoint = FollowTargetPoint(lat = 47.7, lon = -117.5, timeMs = null)
+
+    @Test
+    fun aPursuedContactIsFollowedHoweverLongAgoItReported() {
+        // The age limit is 1 s here and a contact has no time, so it is not aged.
+        // The operator's fix has no altitude: the terrain under the contact is
+        // the reference.
+        val gps = newGps().apply { hasAltitude = false }
+        val manager = connectedManager(gps, terrain = StubTerrain(500.0))
+
+        val result = runBlocking { manager.startPursueContact("uid-1", "BRAVO") { contactPoint } }
+
+        assertEquals(UASManager.FollowMeResult.Started, result)
+        awaitTrue(8_000, "targets to keep flowing") { vehicle.followTargets().size >= 4 }
+        assertEquals(FollowHealth.Streaming, manager.followHealth.value)
+        val target = vehicle.followTargets().last().payload as FollowTarget
+        assertEquals(47.7e7, target.lat().toDouble(), 1.0)
+        assertEquals(-117.5e7, target.lon().toDouble(), 1.0)
+        assertEquals("500 m of terrain plus the default 80 m cruise", 580f, target.alt(), 0.01f)
+        assertTrue(vehicle.loiterCommands().isEmpty())
+    }
+
+    @Test
+    fun aPursuedContactThatLeavesTheStoreIsHeldAndThenTheVehicleLoiters() {
+        // What the contact max-age setting does to a silent teammate: it takes
+        // them out of the store, and the provider has no position to give.
+        val present = AtomicBoolean(true)
+        val manager = connectedManager(newGps(), terrain = StubTerrain(500.0))
+        assertEquals(
+            UASManager.FollowMeResult.Started,
+            runBlocking {
+                manager.startPursueContact("uid-1", "BRAVO") { if (present.get()) contactPoint else null }
+            },
+        )
+        awaitTrue(5_000, "the first targets") { vehicle.followTargets().size >= 2 }
+
+        present.set(false)
+
+        manager.awaitHealth(8_000, "the stream to hold") { it is FollowHealth.Holding }
+        manager.awaitHealth(10_000, "the stream to stop") { it is FollowHealth.Stopped }
+        assertEquals(
+            FollowHoldReason.StaleFix,
+            (manager.followHealth.value as FollowHealth.Stopped).reason,
+        )
+        awaitTrue(3_000, "the LOITER command to arrive") { vehicle.loiterCommands().isNotEmpty() }
+    }
+
     @Test
     fun anAltitudeThatDisappearsMidFlightHoldsAndThenStops() {
-        val gps = Gps()
+        val gps = newGps()
         val manager = connectedManager(gps, terrain = StubTerrain(null))
         assertEquals(UASManager.FollowMeResult.Started, runBlocking { manager.startFollowMe() })
         awaitTrue(5_000, "the first target") { vehicle.followTargets().isNotEmpty() }

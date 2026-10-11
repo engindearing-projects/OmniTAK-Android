@@ -1,5 +1,7 @@
 package soy.engindearing.omnitak.mobile.domain
 
+import soy.engindearing.omnitak.mobile.data.SelfFix
+
 /**
  * Why the follow stream is not sending (#249).
  */
@@ -25,12 +27,13 @@ sealed interface FollowHealth {
     data object Streaming : FollowHealth
 
     /** Following, but nothing is being sent because of [reason], since
-     *  [sinceMs] (wall clock). The vehicle keeps whatever it was last told. */
+     *  [sinceMs] on the stream's clock (see [FollowTargetRules]). The vehicle
+     *  keeps whatever it was last told. */
     data class Holding(val reason: FollowHoldReason, val sinceMs: Long) : FollowHealth
 
-    /** The stream gave up on its own at [atMs] after holding for
-     *  [FollowTargetRules.MAX_HOLD_MS] and the vehicle was told to LOITER.
-     *  Stays until the next engage or [UASManager.acknowledgeFollowStop]. */
+    /** The stream gave up on its own at [atMs] (the stream's clock) after
+     *  holding for [FollowTargetRules.MAX_HOLD_MS] and the vehicle was told to
+     *  LOITER. Stays until the next engage or [UASManager.acknowledgeFollowStop]. */
     data class Stopped(val reason: FollowHoldReason, val atMs: Long) : FollowHealth
 }
 
@@ -38,12 +41,12 @@ sealed interface FollowHealth {
  * A position for the vehicle to follow, with the time that position was
  * observed.
  *
- * [timeMs] is wall-clock epoch millis: the GPS fix time for the operator
- * ([soy.engindearing.omnitak.mobile.data.SelfFix.timeMs]), the receive time
- * for a pursued contact ([soy.engindearing.omnitak.mobile.data.CoTEvent.receivedAtMs]).
- * null means the source cannot say, and the age check is skipped for it. That
- * is the only way a point is ever treated as fresh without a time; nothing
- * fills a time in.
+ * [timeMs] is on the stream's clock (see [FollowTargetRules]): for the
+ * operator, when the GPS fix was taken ([FollowTargetRules.operatorPoint]).
+ * null means this source has no age rule and the point is never stale for being
+ * old. A pursued contact is that source: its position is its last report, and
+ * a dropped marker is never repeated, so pursuing one keeps going to that
+ * point. Nothing fills a time in.
  */
 data class FollowTargetPoint(
     val lat: Double,
@@ -90,23 +93,50 @@ data class FollowLimits(
  * higher than the sea. And when GPS stopped updating, the last position kept
  * going out once a second forever, as if it were current.
  *
- *  - A target with no position, or older than [MAX_TARGET_AGE_MS], is not
- *    followed: [FollowDecision.Hold] with [FollowHoldReason.StaleFix].
+ *  - A target with no position, or one with a time that is older than
+ *    [MAX_TARGET_AGE_MS], is not followed: [FollowDecision.Hold] with
+ *    [FollowHoldReason.StaleFix]. Only the operator's fix has a time; a
+ *    pursued contact has none and is never aged.
  *  - With no altitude reference, [FollowDecision.Hold] with
  *    [FollowHoldReason.NoAltitudeReference]. Zero is never a stand-in for a
  *    missing altitude.
  *  - A hold that has lasted [MAX_HOLD_MS] becomes [FollowDecision.Stop]; the
  *    caller parks the vehicle in LOITER and tells the operator why.
  *  - A fresh target with a reference ends the hold and sends.
+ *
+ * Time. `nowMs`, every [FollowTargetPoint.timeMs] and the hold start are on one
+ * clock, the stream's. In the app that is the device's monotonic clock
+ * (`SystemClock.elapsedRealtime()`), so setting the device clock, or a clock
+ * that is simply wrong, cannot make a fix look fresh or stale. The operator's
+ * fix is put on that clock by [operatorPoint].
  */
 object FollowTargetRules {
 
     /** A target position older than this is stale. Strictly older: a point
-     *  exactly this old still goes out. */
-    const val MAX_TARGET_AGE_MS: Long = 10_000L
+     *  exactly this old still goes out. Twice the 10 s interval
+     *  [soy.engindearing.omnitak.mobile.data.LocationProvider] asks GPS for, so
+     *  a healthy fix never trips it. */
+    const val MAX_TARGET_AGE_MS: Long = 20_000L
 
     /** A hold that has lasted this long (or longer) becomes a stop. */
     const val MAX_HOLD_MS: Long = 30_000L
+
+    /**
+     * The operator's fix as a follow target on the stream's clock, which is
+     * [elapsedNowMs]'s clock.
+     *
+     * A fix that carries its monotonic time ([SelfFix.elapsedRealtimeMs]) is
+     * aged on that, which the device clock cannot disturb. Any other fix is
+     * aged from its wall-clock time ([SelfFix.timeMs]) against [wallNowMs]; that
+     * age is carried onto the stream's clock by taking it off [elapsedNowMs], so
+     * the rules never see two clocks.
+     */
+    fun operatorPoint(fix: SelfFix, wallNowMs: Long, elapsedNowMs: Long): FollowTargetPoint =
+        FollowTargetPoint(
+            lat = fix.lat,
+            lon = fix.lon,
+            timeMs = fix.elapsedRealtimeMs ?: (elapsedNowMs - (wallNowMs - fix.timeMs)),
+        )
 
     /**
      * The altitude (MSL, metres) the cruise height is measured from: the
@@ -120,7 +150,9 @@ object FollowTargetRules {
     /**
      * True when [target] is missing or was observed more than [maxAgeMs]
      * before [nowMs]. A point with no time is never stale (see
-     * [FollowTargetPoint.timeMs]); a non-positive time is a real, very old time.
+     * [FollowTargetPoint.timeMs]). A point observed a little after [nowMs] (GPS
+     * time and the device clock can disagree by a few hundred milliseconds) is
+     * fresh, not negatively aged.
      */
     fun isStale(
         nowMs: Long,
@@ -135,8 +167,8 @@ object FollowTargetRules {
     /**
      * One tick of the follow stream.
      *
-     * @param nowMs wall clock, taken after any terrain lookup so the age is the
-     *   age at the moment of the decision
+     * @param nowMs the stream's clock, read after any terrain lookup so the age
+     *   is the age at the moment of the decision
      * @param target where to follow, or null when the source has no position
      * @param terrainMsl terrain elevation at [target], or null when the sample
      *   failed
@@ -170,8 +202,8 @@ object FollowTargetRules {
     }
 
     /** The hold clock is one clock: it keeps running if the reason changes
-     *  from one to the other, and a start time ahead of [nowMs] (the clock was
-     *  set back) counts as starting now. */
+     *  from one to the other. A start time ahead of [nowMs] can only come from
+     *  inconsistent inputs; it counts as starting now. */
     private fun holdOrStop(
         reason: FollowHoldReason,
         nowMs: Long,

@@ -38,6 +38,14 @@ data class SelfFix(
      *  meaning what it did. A restored fix ([restored]) is never used as an
      *  altitude reference whatever this says, so persistence does not carry it. */
     val hasAltitude: Boolean = true,
+    /** #249 - when the fix was taken on the device's monotonic clock: the
+     *  `SystemClock.elapsedRealtime()` timeline (milliseconds since boot, sleep
+     *  included), from [Location.getElapsedRealtimeNanos]. Unlike [timeMs] the
+     *  device clock cannot move it, so Follow-Me ages a fix on it when it has it.
+     *  Null when the source cannot say (a restored fix, a manual drop, a test
+     *  fixture), and [timeMs] is all there is. It means nothing after a reboot,
+     *  so it is never persisted. */
+    val elapsedRealtimeMs: Long? = null,
 )
 
 class LocationProvider(private val context: Context) {
@@ -173,5 +181,8 @@ class LocationProvider(private val context: Context) {
         accuracyM = if (hasAccuracy()) accuracy else Float.NaN,
         timeMs = time,
         hasAltitude = hasAltitude(),
+        // 0 = the source did not stamp it; fall back to timeMs rather than read
+        // "taken at boot" as a very old fix.
+        elapsedRealtimeMs = elapsedRealtimeNanos.takeIf { it > 0L }?.let { it / 1_000_000L },
     )
 }

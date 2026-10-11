@@ -70,7 +70,8 @@ class UASManagerFollowMeTest {
         mavlink = link,
     )
 
-    private val contact = FollowTargetPoint(lat = 11.0, lon = 21.0, timeMs = 1_790_000_000_000L)
+    /** A pursued contact: a position and no time, because a contact is not aged. */
+    private val contact = FollowTargetPoint(lat = 11.0, lon = 21.0, timeMs = null)
 
     // ---------------------------------------------------------------- #235
 
@@ -194,16 +195,6 @@ class UASManagerFollowMeTest {
     fun pursueWithNoContactPositionIsNoGpsFix() = runBlocking {
         val uas = connectedManager(StubTerrain(300.0)) { fix(restored = false) }
         assertEquals(UASManager.FollowMeResult.NoGpsFix, uas.startPursueContact("uid-1", "BRAVO") { null })
-    }
-
-    @Test
-    fun pursueAcceptsAContactWithNoReceiveTime() = runBlocking {
-        val uas = connectedManager(StubTerrain(300.0)) { null }
-        val noTime = FollowTargetPoint(lat = 11.0, lon = 21.0, timeMs = null)
-        assertEquals(
-            UASManager.FollowMeResult.Started,
-            uas.startPursueContact("uid-1", "BRAVO") { noTime },
-        )
     }
 
     // ---------------------------------------- #249: the order of the checks

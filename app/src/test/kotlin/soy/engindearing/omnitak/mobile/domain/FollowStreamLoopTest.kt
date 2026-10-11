@@ -103,31 +103,31 @@ class FollowStreamLoopTest {
         h.target = { FollowTargetPoint(lat, lon, minOf(h.nowMs(), lastFix)) }
         val job = backgroundScope.launch { FollowStreamLoop(h).run() }
 
-        // At 15 s the fix is exactly 10 s old: still sent.
-        runFor(15_000)
-        assertEquals(16, h.sent.size)
+        // At 25 s the fix is exactly 20 s old: still sent.
+        runFor(25_000)
+        assertEquals(26, h.sent.size)
 
-        // At 16 s it is 11 s old: nothing goes out and the HUD is told.
+        // At 26 s it is 21 s old: nothing goes out and the HUD is told.
         runFor(1_000)
-        assertEquals(16, h.sent.size)
-        assertEquals(FollowHealth.Holding(FollowHoldReason.StaleFix, t0 + 16_000), h.published.last())
+        assertEquals(26, h.sent.size)
+        assertEquals(FollowHealth.Holding(FollowHoldReason.StaleFix, t0 + 26_000), h.published.last())
 
-        // The hold is 29 s old at 45 s: still nothing, still no stop.
+        // The hold is 29 s old at 55 s: still nothing, still no stop.
         runFor(29_000)
-        assertEquals(16, h.sent.size)
+        assertEquals(26, h.sent.size)
         assertTrue(h.stops.isEmpty())
         assertTrue(job.isActive)
 
-        // 30 s of hold, at 46 s: the stream gives up, once, and ends.
+        // 30 s of hold, at 56 s: the stream gives up, once, and ends.
         runFor(1_000)
-        assertEquals(listOf(FollowHoldReason.StaleFix to t0 + 46_000), h.stops)
+        assertEquals(listOf(FollowHoldReason.StaleFix to t0 + 56_000), h.stops)
         assertTrue(job.isCompleted)
 
         // After the stop the loop does nothing at all.
         val calls = h.terrainCalls
         val published = h.published.size
         runFor(10_000)
-        assertEquals(16, h.sent.size)
+        assertEquals(26, h.sent.size)
         assertEquals(1, h.stops.size)
         assertEquals(calls, h.terrainCalls)
         assertEquals(published, h.published.size)
@@ -141,10 +141,11 @@ class FollowStreamLoopTest {
         h.target = { FollowTargetPoint(lat, lon, minOf(h.nowMs(), lastFix)) }
         backgroundScope.launch { FollowStreamLoop(h).run() }
 
-        runFor(45_000)
+        runFor(55_000)
 
-        // Ticks 0..12 s sent (the fix is 10 s old at 12 s); 13 s on is stale.
-        assertEquals(13, h.sent.size)
+        // Ticks 0..22 s sent (the fix is 20 s old at 22 s); 23 s on is stale,
+        // and its 30 s of hold run out at 53 s.
+        assertEquals(23, h.sent.size)
         assertEquals(1, h.stops.size)
     }
 
@@ -152,35 +153,35 @@ class FollowStreamLoopTest {
     fun aFixThatComesBackBeforeTheLimitResumesTheStream() = runTest {
         val h = host()
         h.operatorAltitude = 600.0
-        // Stalled from 5 s to 25 s, back until 40 s, then stalled for good.
+        // Stalled from 5 s to 35 s, back until 60 s, then stalled for good.
         h.target = {
             val t = h.nowMs() - t0
             val fixAt = when {
                 t < 5_000 -> t
-                t < 25_000 -> 5_000
-                t < 40_000 -> t
-                else -> 40_000
+                t < 35_000 -> 5_000
+                t < 60_000 -> t
+                else -> 60_000
             }
             FollowTargetPoint(lat, lon, t0 + fixAt)
         }
         backgroundScope.launch { FollowStreamLoop(h).run() }
 
-        // Stale from 16 s to 24 s: a 9 s hold, ended by the fix at 25 s.
-        runFor(30_000)
+        // Stale from 26 s to 34 s: a 9 s hold, ended by the fix at 35 s.
+        runFor(40_000)
         assertEquals(FollowHealth.Streaming, h.published.last())
         assertTrue(h.stops.isEmpty())
-        assertEquals(16 + 6, h.sent.size) // sent 0..15 s, held 16..24 s, sent 25..30 s
+        assertEquals(26 + 6, h.sent.size) // sent 0..25 s, held 26..34 s, sent 35..40 s
         val sentAfterRecovery = h.sent.size
 
-        // The second stall is stale from 51 s. If the first hold had been
-        // counted too, the stream would stop at 72 s. It must not.
-        runFor(45_000) // to 75 s
+        // The second stall is stale from 81 s. If the first hold had been
+        // counted too, the stream would stop right there. It must not.
+        runFor(65_000) // to 105 s
         assertTrue(h.stops.isEmpty())
         assertTrue(h.sent.size > sentAfterRecovery)
 
-        // Its own 30 s run out at 81 s.
+        // Its own 30 s run out at 111 s.
         runFor(6_000)
-        assertEquals(listOf(FollowHoldReason.StaleFix to t0 + 81_000), h.stops)
+        assertEquals(listOf(FollowHoldReason.StaleFix to t0 + 111_000), h.stops)
     }
 
     @Test
@@ -196,6 +197,38 @@ class FollowStreamLoopTest {
 
         runFor(30_000)
         assertEquals(listOf(FollowHoldReason.StaleFix to t0 + 35_000), h.stops)
+    }
+
+    // ------------------------------------------- a target that has no age
+
+    @Test
+    fun aTargetWithNoTimeIsStreamedForAsLongAsItIsThere() = runTest {
+        // A pursued contact: last report, however old, is where it is.
+        val h = host()
+        h.target = { FollowTargetPoint(lat, lon, timeMs = null) }
+        h.terrain = { 500.0 }
+        val job = backgroundScope.launch { FollowStreamLoop(h).run() }
+
+        runFor(600_000) // ten minutes
+
+        assertEquals(601, h.sent.size)
+        assertEquals(setOf<FollowHealth>(FollowHealth.Streaming), h.published.toSet())
+        assertTrue(h.stops.isEmpty())
+        assertTrue(job.isActive)
+    }
+
+    @Test
+    fun aTargetWithNoTimeStillNeedsAnAltitudeReference() = runTest {
+        val h = host()
+        h.target = { FollowTargetPoint(lat, lon, timeMs = null) }
+        h.terrain = { null }
+        h.operatorAltitude = null
+        backgroundScope.launch { FollowStreamLoop(h).run() }
+
+        runFor(30_000)
+
+        assertTrue(h.sent.isEmpty())
+        assertEquals(listOf(FollowHoldReason.NoAltitudeReference to t0 + 30_000), h.stops)
     }
 
     // ------------------------------------------------ no altitude reference
@@ -262,16 +295,16 @@ class FollowStreamLoopTest {
     fun theAgeIsJudgedAfterTheTerrainLookupNotBefore() = runTest {
         val h = host()
         // One fix, taken at t0 and never updated. The terrain lookup takes
-        // 11 s; when it returns the fix is stale, though it was fresh when read.
+        // 21 s; when it returns the fix is stale, though it was fresh when read.
         h.target = { FollowTargetPoint(lat, lon, t0) }
         h.terrain = { 500.0 }
-        h.terrainDelayMs = 11_000
+        h.terrainDelayMs = 21_000
         backgroundScope.launch { FollowStreamLoop(h).run() }
 
-        runFor(11_000)
+        runFor(21_000)
 
         assertTrue(h.sent.isEmpty())
-        assertEquals(FollowHealth.Holding(FollowHoldReason.StaleFix, t0 + 11_000), h.published.last())
+        assertEquals(FollowHealth.Holding(FollowHoldReason.StaleFix, t0 + 21_000), h.published.last())
         assertTrue(h.stops.isEmpty())
     }
 }

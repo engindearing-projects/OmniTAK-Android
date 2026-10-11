@@ -1,5 +1,6 @@
 package soy.engindearing.omnitak.mobile.domain
 
+import android.os.SystemClock
 import android.util.Log
 import io.dronefleet.mavlink.common.FollowTarget
 import io.dronefleet.mavlink.common.GlobalPositionInt
@@ -62,6 +63,11 @@ class UASManager(
      *  hold before it stops. The app always takes the defaults; a test that has
      *  to watch a real stream give up shortens them. */
     private val followLimits: FollowLimits = FollowLimits(),
+    /** #249 - the monotonic clock the follow stream measures time on:
+     *  milliseconds since boot, sleep included (what
+     *  [SelfFix.elapsedRealtimeMs] is stamped from). A parameter because the
+     *  Android clock is a stub in a JVM test; the app takes the default. */
+    private val elapsedRealtimeMs: () -> Long = { SystemClock.elapsedRealtime() },
 ) {
     val state: StateFlow<DroneState> = mavlink.state
 
@@ -320,9 +326,15 @@ class UASManager(
      */
     private fun liveOperatorFix(): SelfFix? = operatorFix()?.takeUnless { it.restored }
 
-    /** The operator as a follow target: the live fix and the time it was taken. */
+    /**
+     * The operator as a follow target: the live fix and the time it was taken,
+     * on the stream's clock. Aged on the fix's monotonic time when it has one,
+     * on its wall-clock time otherwise ([FollowTargetRules.operatorPoint]).
+     */
     private fun operatorTarget(): FollowTargetPoint? =
-        liveOperatorFix()?.let { FollowTargetPoint(it.lat, it.lon, it.timeMs) }
+        liveOperatorFix()?.let {
+            FollowTargetRules.operatorPoint(it, System.currentTimeMillis(), elapsedRealtimeMs())
+        }
 
     /**
      * The operator's GPS altitude, or null when the live fix has none (#249).
@@ -339,15 +351,22 @@ class UASManager(
      * [positionProvider] is called each tick to fetch the contact's
      * current position (the manager doesn't own the contact store, so
      * the UI passes it in as a closure over its live state). It returns
-     * the point with the time it was received
-     * ([soy.engindearing.omnitak.mobile.data.CoTEvent.receivedAtMs]) so a
-     * contact that has stopped reporting is held and then dropped like a
-     * stale GPS fix (#249); a null time skips that age check.
+     * null when the contact has no position, and then the stream holds and,
+     * after [FollowTargetRules.MAX_HOLD_MS], stops, like a lost fix.
+     *
+     * #249 - a contact has no age rule: the caller passes a point with no
+     * time, which is never stale. A contact's position is its last report and
+     * a dropped marker is never repeated, so pursuing one keeps going to that
+     * point however long ago it was reported. A contact that has gone silent
+     * is therefore not detected here; the contact max-age setting (#215) is
+     * what hides and removes a silent teammate.
      *
      * Returns the same [FollowMeResult] sealed type as Follow-Me —
      * [FollowMeResult.NoGpsFix] now means "contact has no position yet".
      * For a contact far from the operator the altitude reference is the
      * terrain under the contact, or failing that the operator's own altitude.
+     * With neither the pursuit is refused ([FollowMeResult.NoAltitudeReference]);
+     * if the reference is lost mid-pursuit the stream holds, as for Follow-Me.
      */
     suspend fun startPursueContact(
         uid: String,
@@ -458,7 +477,7 @@ class UASManager(
         isPX4: Boolean,
         targetProvider: () -> FollowTargetPoint?,
     ) = object : FollowStreamLoop.Host {
-        override fun nowMs() = System.currentTimeMillis()
+        override fun nowMs() = elapsedRealtimeMs()
 
         override fun readTarget() = targetProvider()
 

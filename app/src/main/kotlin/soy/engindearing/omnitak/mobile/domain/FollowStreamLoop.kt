@@ -20,10 +20,13 @@ internal class FollowStreamLoop(
 ) {
 
     interface Host {
-        /** Wall clock, epoch millis. */
+        /** The stream's clock, in milliseconds: [readTarget]'s times are on the
+         *  same one, and so are the hold times the loop publishes. The app uses
+         *  the device's monotonic clock. */
         fun nowMs(): Long
 
-        /** The target's current position and when it was observed, or null. */
+        /** The target's current position and when it was observed (on the
+         *  [nowMs] clock; null = it has no age), or null when there is none. */
         fun readTarget(): FollowTargetPoint?
 
         /** Terrain elevation (MSL) at the point, or null when unavailable. */
