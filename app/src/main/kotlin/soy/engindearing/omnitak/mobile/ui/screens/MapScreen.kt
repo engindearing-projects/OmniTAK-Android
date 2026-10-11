@@ -978,14 +978,17 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         val cruiseAlt by uas.cruiseAlt.collectAsState()
         val followActive by uas.followMeActive.collectAsState()
         val followHealth by uas.followHealth.collectAsState()
-        // #249 - the follow stream gave up on its own (GPS fix too old, or no
-        // altitude reference) and parked the drone. Say so once, then clear it
-        // so coming back to the map does not repeat it. If the map was not on
-        // screen when it happened, this runs when it comes back.
+        val followingWhat by uas.followingWhat.collectAsState()
+        // #249 - the follow stream gave up on its own (GPS fix too old, a pursued
+        // contact's position lost, or no altitude reference) and parked the
+        // drone. Say so once, then clear it so coming back to the map does not
+        // repeat it. If the map was not on screen when it happened, this runs
+        // when it comes back.
         LaunchedEffect(uas, followHealth) {
             val stopped = followHealth as? soy.engindearing.omnitak.mobile.domain.FollowHealth.Stopped
                 ?: return@LaunchedEffect
-            toast(soy.engindearing.omnitak.mobile.ui.components.followStoppedMessage(stopped.reason))
+            // The subject comes with the stop: the follow state is already cleared.
+            toast(soy.engindearing.omnitak.mobile.ui.components.followStoppedMessage(stopped.reason, stopped.subject))
             uas.acknowledgeFollowStop()
         }
         var altSheetOpen by remember { mutableStateOf(false) }
@@ -1062,6 +1065,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     soy.engindearing.omnitak.mobile.ui.components.UasFollowMePill(
                         active = followActive,
                         health = followHealth,
+                        subject = followingWhat,
                         onToggle = {
                             scope.launch {
                                 if (followActive) {

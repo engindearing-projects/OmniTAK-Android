@@ -463,11 +463,13 @@ class UASManager(
             followMeJob?.cancel()
             val generation = ++followGeneration
             followMeJob = scope?.launch {
-                FollowStreamLoop(streamHost(generation, isPX4, targetProvider), followLimits).run()
+                FollowStreamLoop(streamHost(generation, isPX4, target, targetProvider), followLimits).run()
             }
+            // Health first: a HUD that reads these flows one at a time never
+            // pairs the new subject with the last engagement's "holding".
+            _followHealth.value = FollowHealth.Streaming
             _followingWhat.value = target
             _followMeActive.value = true
-            _followHealth.value = FollowHealth.Streaming
         }
     }
 
@@ -475,6 +477,7 @@ class UASManager(
     private fun streamHost(
         generation: Long,
         isPX4: Boolean,
+        subject: FollowSubject,
         targetProvider: () -> FollowTargetPoint?,
     ) = object : FollowStreamLoop.Host {
         override fun nowMs() = elapsedRealtimeMs()
@@ -500,7 +503,7 @@ class UASManager(
 
         override suspend fun stop(reason: FollowHoldReason, atMs: Long) {
             Log.w(TAG, "FOLLOW stopping on its own: $reason for ${followLimits.maxHoldMs} ms")
-            disengageFollow(FollowHealth.Stopped(reason, atMs), onlyIfGeneration = generation)
+            disengageFollow(FollowHealth.Stopped(reason, atMs, subject), onlyIfGeneration = generation)
         }
     }
 

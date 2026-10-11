@@ -7,7 +7,10 @@ import soy.engindearing.omnitak.mobile.data.SelfFix
  */
 enum class FollowHoldReason {
     /** The target has no position, or its position is older than
-     *  [FollowTargetRules.MAX_TARGET_AGE_MS]. */
+     *  [FollowTargetRules.MAX_TARGET_AGE_MS]. For the operator that is a GPS
+     *  fix gone missing or old. A pursued contact is never aged, so for a
+     *  contact it only ever means it has no position (it left the contact
+     *  store); the wording follows the subject, see [UASManager.FollowSubject]. */
     StaleFix,
 
     /** Nothing to measure the cruise height from: no terrain sample at the
@@ -33,8 +36,14 @@ sealed interface FollowHealth {
 
     /** The stream gave up on its own at [atMs] (the stream's clock) after
      *  holding for [FollowTargetRules.MAX_HOLD_MS] and the vehicle was told to
-     *  LOITER. Stays until the next engage or [UASManager.acknowledgeFollowStop]. */
-    data class Stopped(val reason: FollowHoldReason, val atMs: Long) : FollowHealth
+     *  LOITER. Stays until the next engage or [UASManager.acknowledgeFollowStop].
+     *  [subject] is who was being followed: stopping clears the follow state, and
+     *  the message to the operator is worded by subject, so it travels here. */
+    data class Stopped(
+        val reason: FollowHoldReason,
+        val atMs: Long,
+        val subject: UASManager.FollowSubject,
+    ) : FollowHealth
 }
 
 /**

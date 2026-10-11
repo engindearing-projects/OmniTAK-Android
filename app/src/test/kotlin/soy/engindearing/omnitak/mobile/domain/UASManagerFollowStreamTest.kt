@@ -18,6 +18,8 @@ import org.junit.Test
 import soy.engindearing.omnitak.mobile.data.SelfFix
 import soy.engindearing.omnitak.mobile.data.uas.MavlinkConnection
 import soy.engindearing.omnitak.mobile.data.uas.TerrainSampler
+import soy.engindearing.omnitak.mobile.ui.components.followHoldLabel
+import soy.engindearing.omnitak.mobile.ui.components.followStoppedMessage
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -203,6 +205,21 @@ class UASManagerFollowStreamTest {
     private fun UASManager.awaitHealth(timeoutMs: Long, what: String, predicate: (FollowHealth) -> Boolean) =
         awaitTrue(timeoutMs, what) { predicate(followHealth.value) }
 
+    /** Waits for the stream to hold and returns what the HUD would see at that
+     *  moment: the health, and who is being followed. */
+    private fun awaitHolding(
+        manager: UASManager,
+        timeoutMs: Long = 8_000,
+    ): Pair<FollowHealth.Holding, UASManager.FollowSubject?> {
+        var seen: Pair<FollowHealth.Holding, UASManager.FollowSubject?>? = null
+        awaitTrue(timeoutMs, "the stream to hold") {
+            val held = manager.followHealth.value as? FollowHealth.Holding ?: return@awaitTrue false
+            seen = held to manager.followingWhat.value
+            true
+        }
+        return seen!!
+    }
+
     private fun Frame.msSince(earlier: Frame) = (atNanos - earlier.atNanos) / 1_000_000
 
     // ------------------------------------------------------------------ tests
@@ -221,11 +238,10 @@ class UASManagerFollowStreamTest {
 
         // GPS stops updating.
         gps.freeze()
-        manager.awaitHealth(8_000, "the stream to hold") { it is FollowHealth.Holding }
-        assertEquals(
-            FollowHoldReason.StaleFix,
-            (manager.followHealth.value as FollowHealth.Holding).reason,
-        )
+        val (held, subjectWhileHeld) = awaitHolding(manager)
+        assertEquals(FollowHoldReason.StaleFix, held.reason)
+        assertEquals(UASManager.FollowSubject.Operator, subjectWhileHeld)
+        assertEquals("Follow: waiting for GPS", followHoldLabel(held.reason, subjectWhileHeld))
         assertTrue("still following while it holds", manager.followMeActive.value)
 
         // After the hold limit it gives up on its own.
@@ -233,7 +249,13 @@ class UASManagerFollowStreamTest {
         val stopped = manager.followHealth.value as FollowHealth.Stopped
         assertEquals(FollowHoldReason.StaleFix, stopped.reason)
         assertFalse(manager.followMeActive.value)
+        // The follow state is cleared by now; the stop carries who it was.
         assertNull(manager.followingWhat.value)
+        assertEquals(UASManager.FollowSubject.Operator, stopped.subject)
+        assertEquals(
+            "Follow stopped: GPS fix too old — drone parked in LOITER",
+            followStoppedMessage(stopped.reason, stopped.subject),
+        )
 
         // The vehicle was told to loiter, once...
         awaitTrue(3_000, "the LOITER command to arrive") { vehicle.loiterCommands().isNotEmpty() }
@@ -440,11 +462,21 @@ class UASManagerFollowStreamTest {
 
         present.set(false)
 
-        manager.awaitHealth(8_000, "the stream to hold") { it is FollowHealth.Holding }
+        val contact = UASManager.FollowSubject.Contact("uid-1", "BRAVO")
+        val (held, subjectWhileHeld) = awaitHolding(manager)
+        assertEquals(FollowHoldReason.StaleFix, held.reason)
+        assertEquals(contact, subjectWhileHeld)
+        assertEquals("Follow: contact position lost", followHoldLabel(held.reason, subjectWhileHeld))
+
         manager.awaitHealth(10_000, "the stream to stop") { it is FollowHealth.Stopped }
+        val stopped = manager.followHealth.value as FollowHealth.Stopped
+        assertEquals(FollowHoldReason.StaleFix, stopped.reason)
+        // The follow state is cleared by now; the stop carries who it was.
+        assertNull(manager.followingWhat.value)
+        assertEquals(contact, stopped.subject)
         assertEquals(
-            FollowHoldReason.StaleFix,
-            (manager.followHealth.value as FollowHealth.Stopped).reason,
+            "Follow stopped: contact position lost — drone parked in LOITER",
+            followStoppedMessage(stopped.reason, stopped.subject),
         )
         awaitTrue(3_000, "the LOITER command to arrive") { vehicle.loiterCommands().isNotEmpty() }
     }
@@ -458,16 +490,17 @@ class UASManagerFollowStreamTest {
 
         // The fix goes on arriving but loses its altitude, and there is no terrain.
         gps.hasAltitude = false
-        manager.awaitHealth(8_000, "the stream to hold") { it is FollowHealth.Holding }
-        assertEquals(
-            FollowHoldReason.NoAltitudeReference,
-            (manager.followHealth.value as FollowHealth.Holding).reason,
-        )
+        val (held, subjectWhileHeld) = awaitHolding(manager)
+        assertEquals(FollowHoldReason.NoAltitudeReference, held.reason)
+        assertEquals("Follow: no altitude reference", followHoldLabel(held.reason, subjectWhileHeld))
 
         manager.awaitHealth(10_000, "the stream to stop") { it is FollowHealth.Stopped }
+        val stopped = manager.followHealth.value as FollowHealth.Stopped
+        assertEquals(FollowHoldReason.NoAltitudeReference, stopped.reason)
+        assertEquals(UASManager.FollowSubject.Operator, stopped.subject)
         assertEquals(
-            FollowHoldReason.NoAltitudeReference,
-            (manager.followHealth.value as FollowHealth.Stopped).reason,
+            "Follow stopped: no altitude reference — drone parked in LOITER",
+            followStoppedMessage(stopped.reason, stopped.subject),
         )
         awaitTrue(3_000, "the LOITER command to arrive") { vehicle.loiterCommands().isNotEmpty() }
     }

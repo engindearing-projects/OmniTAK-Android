@@ -22,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import soy.engindearing.omnitak.mobile.domain.FollowHealth
 import soy.engindearing.omnitak.mobile.domain.FollowHoldReason
+import soy.engindearing.omnitak.mobile.domain.UASManager
 
 /**
  * Follow-Me toggle chip. Lives under the cruise altitude pill in the
@@ -31,7 +32,8 @@ import soy.engindearing.omnitak.mobile.domain.FollowHoldReason
  * Active: red "FOLLOWING · STOP" — operator can hit it from anywhere
  * to disengage and put the drone back in AUTO.LOITER.
  * Active but holding ([health] is [FollowHealth.Holding], #249): amber, with
- * the reason ("Follow: waiting for GPS"). Nothing is being sent to the
+ * the reason ("Follow: waiting for GPS", or "Follow: contact position lost"
+ * when the [subject] is a pursued contact). Nothing is being sent to the
  * vehicle, and the pill still stops following when tapped.
  */
 @Composable
@@ -40,8 +42,11 @@ fun UasFollowMePill(
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
     health: FollowHealth = FollowHealth.Idle,
+    subject: UASManager.FollowSubject? = null,
 ) {
-    val holdText = (health as? FollowHealth.Holding)?.takeIf { active }?.let { followHoldLabel(it.reason) }
+    val holdText = (health as? FollowHealth.Holding)
+        ?.takeIf { active }
+        ?.let { followHoldLabel(it.reason, subject) }
     val holding = holdText != null
     val bg = when {
         holding -> Color(0xFFFFC107).copy(alpha = 0.92f)
@@ -76,15 +81,28 @@ fun UasFollowMePill(
     }
 }
 
-/** Pill text while the follow stream is holding (#249). */
-fun followHoldLabel(reason: FollowHoldReason): String = when (reason) {
-    FollowHoldReason.StaleFix -> "Follow: waiting for GPS"
+/**
+ * Pill text while the follow stream is holding (#249). A stale position means
+ * different things for the two subjects, so the wording follows [subject]: the
+ * operator's GPS fix has stopped arriving, or a pursued contact has no position
+ * (it left the contact store). A null subject reads as the operator.
+ */
+fun followHoldLabel(reason: FollowHoldReason, subject: UASManager.FollowSubject?): String = when (reason) {
+    FollowHoldReason.StaleFix ->
+        if (subject is UASManager.FollowSubject.Contact) "Follow: contact position lost"
+        else "Follow: waiting for GPS"
     FollowHoldReason.NoAltitudeReference -> "Follow: no altitude reference"
 }
 
-/** Message when the follow stream stopped itself and put the drone in
- *  LOITER (#249). */
-fun followStoppedMessage(reason: FollowHoldReason): String = when (reason) {
-    FollowHoldReason.StaleFix -> "Follow stopped: GPS fix too old — drone parked in LOITER"
+/**
+ * Message when the follow stream stopped itself and put the drone in LOITER
+ * (#249). Worded by [subject] like [followHoldLabel]; the subject comes from
+ * [FollowHealth.Stopped], because the follow state is already cleared by the
+ * time this is shown.
+ */
+fun followStoppedMessage(reason: FollowHoldReason, subject: UASManager.FollowSubject?): String = when (reason) {
+    FollowHoldReason.StaleFix ->
+        if (subject is UASManager.FollowSubject.Contact) "Follow stopped: contact position lost — drone parked in LOITER"
+        else "Follow stopped: GPS fix too old — drone parked in LOITER"
     FollowHoldReason.NoAltitudeReference -> "Follow stopped: no altitude reference — drone parked in LOITER"
 }
