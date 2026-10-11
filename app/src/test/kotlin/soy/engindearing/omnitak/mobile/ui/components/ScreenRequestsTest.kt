@@ -4,10 +4,11 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import soy.engindearing.omnitak.mobile.domain.LassoSelectionService
 
 /**
- * The two things one screen asks another to do: open Go to Coordinate on the
- * map, and enter edit mode on the toolbar. Each is a
+ * The three things one screen asks another to do: open Go to Coordinate on the
+ * map, enter edit mode on the toolbar, start a lasso on the map. Each is a
  * [soy.engindearing.omnitak.mobile.domain.OneShotRequest] that the asker fires
  * and the screen listens to, and these pin that the asker and the listener are
  * the same request, taken once, and still there for a screen that is built
@@ -55,10 +56,22 @@ class ScreenRequestsTest {
         )
     }
 
-    @Test fun the_two_requests_do_not_share_one_flag() {
+    @Test fun a_lasso_asked_before_the_map_is_built_is_waiting_for_it() {
+        val lasso = LassoSelectionService()
+        assertFalse(lasso.activation.pending)
+
+        lasso.requestActivate()
+
+        assertTrue("the map built a frame later acts on it", lasso.activation.consume())
+        assertFalse(lasso.activation.consume())
+    }
+
+    @Test fun the_three_requests_do_not_share_one_flag() {
+        val lasso = LassoSelectionService()
         CoordinateEntryEvents.requestOpen()
 
         assertFalse(ToolbarEditBus.edit.pending)
+        assertFalse(lasso.activation.pending)
         assertTrue(CoordinateEntryEvents.open.consume())
     }
 }

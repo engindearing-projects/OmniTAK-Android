@@ -325,21 +325,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     var lassoActionsOpen by remember { mutableStateOf(false) }
     var contactPickerOpen by remember { mutableStateOf(false) }
     val appContext = LocalContext.current.applicationContext
-    // Observe activation requests via a generation counter — every
-    // increment means "user picked Lasso Select again." We track the
-    // last value we honored so we only flip lassoMode on a fresh
-    // edge. StateFlow keeps the latest value alive across MapScreen
-    // recompositions, so an emission that lands before the collector
-    // subscribed still gets applied as soon as we observe it.
-    val activationGen by lassoService.activationGeneration.collectAsState()
-    var lastHonoredGen by remember { mutableStateOf(activationGen) }
-    LaunchedEffect(activationGen) {
-        if (activationGen != lastHonoredGen) {
-            lastHonoredGen = activationGen
-            // Skip the initial "0" baseline — only react to real increments.
-            if (activationGen > 0L) lassoMode = true
-        }
-    }
+    // Every "user picked Lasso Select" is one request, taken here when
+    // lassoMode flips on. One asked for from another tab is still waiting
+    // when this screen is built after the switch to the map, and one already
+    // taken is gone, so a rebuilt map neither loses it nor replays it.
+    OnRequest(lassoService.activation) { lassoMode = true }
 
     fun toast(msg: String) {
         scope.launch { snackbar.showSnackbar(msg, withDismissAction = true) }

@@ -15,15 +15,18 @@ import kotlin.concurrent.thread
 
 /**
  * A request from one screen to another ("open the Go to Coordinate sheet",
- * "enter toolbar edit mode") has to be acted on exactly once.
+ * "start a lasso", "enter toolbar edit mode") has to be acted on exactly once.
  *
  * What went wrong before this (#286): the Tools launcher bumped a counter, and
  * the map opened its sheet whenever it saw a counter above zero. The counter
  * lives as long as the process, the map lives only while its tab is showing, so
  * every new composition of the map saw the old count and opened the sheet
- * again, on every return to the Map tab, until the app was killed.
+ * again, on every return to the Map tab, until the app was killed. The lasso
+ * had the opposite fault: its note of the last request handled was seeded from
+ * the counter when the map was built, so a request made from another tab (made
+ * in the same frame as the switch to the map) was taken for an old one and lost.
  *
- * These pin the rules that fix it: a request waits for a screen that is not
+ * These pin the rules that fix both: a request waits for a screen that is not
  * there yet, is gone once a screen has acted on it, and is acted on once.
  */
 @OptIn(ExperimentalCoroutinesApi::class)

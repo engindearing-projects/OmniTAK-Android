@@ -6,19 +6,21 @@ import kotlinx.coroutines.flow.update
 
 /**
  * A request one screen makes of another that must be acted on exactly once:
- * "open the Go to Coordinate sheet", "enter toolbar edit mode". The asker (the
- * Tools launcher, Settings) and the screen that acts (the map, the toolbar) are
- * in different places, so the request has to wait for the screen when it is not
- * showing yet, and has to be gone once a screen has acted on it.
+ * "open the Go to Coordinate sheet", "start a lasso", "enter toolbar edit
+ * mode". The asker (the Tools launcher, Settings) and the screen that acts (the
+ * map, the toolbar) are in different places, so the request has to wait for the
+ * screen when it is not showing yet, and has to be gone once a screen has acted
+ * on it.
  *
- * This replaces a counter that was only ever bumped, which left each screen to
- * work out for itself whether the count was new. The map opened Go to Coordinate
- * for any count above zero, so every new composition of the map (back from
- * another tab) saw the old count and opened the sheet again (#286); the toolbar
- * did the same for edit mode whenever the Activity was rebuilt. The count lasts
- * as long as the process and a screen's notes only as long as the screen; here
- * the record of what has been taken lives in the request itself, so it lasts as
- * long as the request.
+ * This replaces a counter that was only ever bumped. Each screen worked out for
+ * itself whether the count was new, and got it wrong in opposite ways: the map
+ * opened Go to Coordinate for any count above zero, so every new composition of
+ * the map (back from another tab) saw the old count and opened the sheet again
+ * (#286); the lasso compared the count with a note it seeded when the map was
+ * built, so a lasso asked for from another tab, in the same frame as the switch
+ * to the map, looked old and was lost. The count lasts as long as the process
+ * and a screen's notes only as long as the screen; here the record of what has
+ * been taken lives in the request itself, so it lasts as long as the request.
  *
  * Plain Kotlin and coroutines, no Android or Compose, so the rules are tested
  * on the JVM. Screens listen through `OnRequest` in ui/components.
