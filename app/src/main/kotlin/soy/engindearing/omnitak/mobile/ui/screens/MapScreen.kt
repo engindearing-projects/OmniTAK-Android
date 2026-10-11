@@ -78,6 +78,7 @@ import soy.engindearing.omnitak.mobile.ui.components.CompassOverlay
 import soy.engindearing.omnitak.mobile.ui.components.ContactsPanel
 import soy.engindearing.omnitak.mobile.ui.components.LayersDialog
 import soy.engindearing.omnitak.mobile.ui.components.MarkerEditSheet
+import soy.engindearing.omnitak.mobile.ui.components.OnRequest
 import soy.engindearing.omnitak.mobile.ui.components.RadialAction
 import soy.engindearing.omnitak.mobile.ui.components.RadialMenu
 import soy.engindearing.omnitak.mobile.ui.components.SelfPositionCard
@@ -277,11 +278,12 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     var panTargetTick by remember { mutableStateOf(0) }
     // "Go to Coordinate" sheet (TWD97 / MGRS / Lat-Lon). Opened from the
     // Tools popup via CoordinateEntryEvents; reference coord = map centre
-    // so 5+5 TWD97 grid input recovers the right 100 km cell.
+    // so 5+5 TWD97 grid input recovers the right 100 km cell. The request is
+    // taken when the sheet opens, so coming back to this tab later does not
+    // open it again (#286).
     var coordEntryOpen by remember { mutableStateOf(false) }
-    val coordEntryGen by soy.engindearing.omnitak.mobile.ui.components.CoordinateEntryEvents.openGeneration.collectAsState()
-    LaunchedEffect(coordEntryGen) {
-        if (coordEntryGen > 0L) coordEntryOpen = true
+    OnRequest(soy.engindearing.omnitak.mobile.ui.components.CoordinateEntryEvents.open) {
+        coordEntryOpen = true
     }
     // ADS-B is now a plugin (:plugins:example-adsb). The plugin owns its
     // AdsbService, its map overlay (which paints via AircraftLayer on the live
@@ -323,21 +325,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     var lassoActionsOpen by remember { mutableStateOf(false) }
     var contactPickerOpen by remember { mutableStateOf(false) }
     val appContext = LocalContext.current.applicationContext
-    // Observe activation requests via a generation counter — every
-    // increment means "user picked Lasso Select again." We track the
-    // last value we honored so we only flip lassoMode on a fresh
-    // edge. StateFlow keeps the latest value alive across MapScreen
-    // recompositions, so an emission that lands before the collector
-    // subscribed still gets applied as soon as we observe it.
-    val activationGen by lassoService.activationGeneration.collectAsState()
-    var lastHonoredGen by remember { mutableStateOf(activationGen) }
-    LaunchedEffect(activationGen) {
-        if (activationGen != lastHonoredGen) {
-            lastHonoredGen = activationGen
-            // Skip the initial "0" baseline — only react to real increments.
-            if (activationGen > 0L) lassoMode = true
-        }
-    }
+    // Every "user picked Lasso Select" is one request, taken here when
+    // lassoMode flips on. One asked for from another tab is still waiting
+    // when this screen is built after the switch to the map, and one already
+    // taken is gone, so a rebuilt map neither loses it nor replays it.
+    OnRequest(lassoService.activation) { lassoMode = true }
 
     fun toast(msg: String) {
         scope.launch { snackbar.showSnackbar(msg, withDismissAction = true) }

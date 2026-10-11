@@ -46,6 +46,7 @@ import soy.engindearing.omnitak.mobile.ui.components.BarCommand
 import soy.engindearing.omnitak.mobile.ui.components.BarItem
 import soy.engindearing.omnitak.mobile.ui.components.BarKind
 import soy.engindearing.omnitak.mobile.ui.components.CustomToolbar
+import soy.engindearing.omnitak.mobile.ui.components.OnRequest
 import soy.engindearing.omnitak.mobile.ui.components.ToolbarAddPalette
 import soy.engindearing.omnitak.mobile.ui.components.ToolbarCatalog
 import soy.engindearing.omnitak.mobile.ui.components.ToolbarEditBus
@@ -173,13 +174,12 @@ fun AppNav() {
         app.pendingChatConversation.value = null
     }
 
-    // Settings / Tools popup can request edit mode from another screen.
-    val editGen by ToolbarEditBus.editGeneration.collectAsState()
-    LaunchedEffect(editGen) {
-        if (editGen > 0L) {
-            navigateTo("map")
-            editing = true
-        }
+    // Settings / Tools popup can request edit mode from another screen. The
+    // request is taken here, so an Activity rebuilt later does not put the bar
+    // back into edit mode by itself.
+    OnRequest(ToolbarEditBus.edit) {
+        navigateTo("map")
+        editing = true
     }
 
     // DEBUG: auto-import a KML/KMZ staged in filesDir/import/ (mirrors the

@@ -72,22 +72,16 @@ class LassoSelectionService {
     /** Observable selection. Compose binds to this via `collectAsState`. */
     val current: StateFlow<SelectionContext> = _current.asStateFlow()
 
-    // Issue #16 — activation generation counter. The Tools popup
-    // ("Lasso Select") increments [activationGeneration]; MapScreen
-    // observes the value via collectAsState and flips its local
-    // lassoMode whenever the counter changes. StateFlow + counter
-    // avoids the SharedFlow(replay=0) race where AppNav's emit fires
-    // before MapScreen has subscribed (which happens because Tools
-    // tab triggers a nav.navigate to map AND requestActivate in the
-    // same frame — MapScreen's LaunchedEffect doesn't start collecting
-    // until the next composition pass).
-    private val _activationGeneration = MutableStateFlow(0L)
-    val activationGeneration: StateFlow<Long> = _activationGeneration.asStateFlow()
+    // Issue #16, activation request. The Tools popup ("Lasso Select")
+    // asks; MapScreen acts on [activation] through OnRequest and flips its
+    // local lassoMode. A request waits for the map when the Tools launcher
+    // navigates to it and asks in the same frame (MapScreen is composed
+    // after the ask), and is gone once acted on, so a map built again does
+    // not replay it.
+    val activation = OneShotRequest()
 
-    /** Fired by the Tools popup. MapScreen observes via [activationGeneration]. */
-    fun requestActivate() {
-        _activationGeneration.value = _activationGeneration.value + 1
-    }
+    /** Fired by the Tools popup. MapScreen acts on it via [activation]. */
+    fun requestActivate() = activation.request()
 
     /**
      * Pure, no-side-effects: given a lasso polygon and a population of

@@ -13,9 +13,7 @@ import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import soy.engindearing.omnitak.mobile.domain.OneShotRequest
 
 /**
  * User-customizable bottom toolbar — catalog + rules. Mirrors the iOS
@@ -113,31 +111,26 @@ object ToolbarCatalog {
 
 /**
  * Lets the Settings screen / Tools popup ask the bar (hosted in AppNav) to
- * enter edit mode. Mirrors the LassoSelectionService activation-counter
- * pattern so AppNav can collect it via collectAsState without a SharedFlow
- * subscribe-timing race.
+ * enter edit mode. AppNav acts on [edit] through `OnRequest`. A request waits
+ * if AppNav is not composed yet, and is gone once acted on, so an Activity
+ * rebuilt later (dark mode switched, font size changed) does not put the bar
+ * back into edit mode by itself.
  */
 object ToolbarEditBus {
-    private val _editGeneration = MutableStateFlow(0L)
-    val editGeneration: StateFlow<Long> = _editGeneration.asStateFlow()
+    val edit = OneShotRequest()
 
-    fun requestEdit() {
-        _editGeneration.value = _editGeneration.value + 1
-    }
+    fun requestEdit() = edit.request()
 }
 
 /**
  * Lets the Tools popup (hosted in AppNav) ask the map (hosted in MapScreen)
- * to open the "Go to Coordinate" sheet. Same activation-counter pattern as
- * [ToolbarEditBus] — MapScreen collects via collectAsState, sidestepping the
- * SharedFlow subscribe-timing race when AppNav navigates to map and requests
- * the sheet in the same frame.
+ * to open the "Go to Coordinate" sheet. MapScreen acts on [open] through
+ * `OnRequest`. A request waits when AppNav navigates to the map and asks in
+ * the same frame (the map is composed after the ask), and is gone once acted
+ * on, so coming back to the Map tab later does not open the sheet again (#286).
  */
 object CoordinateEntryEvents {
-    private val _openGeneration = MutableStateFlow(0L)
-    val openGeneration: StateFlow<Long> = _openGeneration.asStateFlow()
+    val open = OneShotRequest()
 
-    fun requestOpen() {
-        _openGeneration.value = _openGeneration.value + 1
-    }
+    fun requestOpen() = open.request()
 }
