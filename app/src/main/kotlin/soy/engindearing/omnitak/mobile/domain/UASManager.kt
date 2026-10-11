@@ -1,5 +1,6 @@
 package soy.engindearing.omnitak.mobile.domain
 
+import android.os.SystemClock
 import android.util.Log
 import io.dronefleet.mavlink.common.FollowTarget
 import io.dronefleet.mavlink.common.GlobalPositionInt
@@ -7,9 +8,11 @@ import io.dronefleet.mavlink.common.MavCmd
 import io.dronefleet.mavlink.common.ParamRequestRead
 import io.dronefleet.mavlink.minimal.MavAutopilot
 import io.dronefleet.mavlink.minimal.MavType
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -19,6 +22,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import soy.engindearing.omnitak.mobile.data.SelfFix
 import soy.engindearing.omnitak.mobile.data.uas.AltFrame
 import soy.engindearing.omnitak.mobile.data.uas.CruiseAltitude
@@ -52,8 +56,19 @@ class UASManager(
      *  where to track. Defaults to "no fix" so Follow-Me cleanly errors
      *  out in tests that don't wire a real LocationProvider. */
     private val operatorFix: () -> SelfFix? = { null },
+    /** The MAVLink link. A parameter so a unit test can put the manager in a
+     *  connected state without a socket; the app always takes the default. */
+    private val mavlink: MavlinkConnection = MavlinkConnection(),
+    /** #249 - how stale a follow target may be and how long the stream may
+     *  hold before it stops. The app always takes the defaults; a test that has
+     *  to watch a real stream give up shortens them. */
+    private val followLimits: FollowLimits = FollowLimits(),
+    /** #249 - the monotonic clock the follow stream measures time on:
+     *  milliseconds since boot, sleep included (what
+     *  [SelfFix.elapsedRealtimeMs] is stamped from). A parameter because the
+     *  Android clock is a stub in a JVM test; the app takes the default. */
+    private val elapsedRealtimeMs: () -> Long = { SystemClock.elapsedRealtime() },
 ) {
-    private val mavlink = MavlinkConnection()
     val state: StateFlow<DroneState> = mavlink.state
 
     /** Mission the operator is drawing / has uploaded. Single store —
@@ -104,6 +119,26 @@ class UASManager(
     /** Convenience derived flow for the UAS HUD pill. */
     private val _followMeActive = MutableStateFlow(false)
     val followMeActive: StateFlow<Boolean> = _followMeActive.asStateFlow()
+
+    /** #249 - what the follow stream is doing: sending, holding because the
+     *  target position is stale or there is no altitude reference, or stopped on
+     *  its own after holding too long. [FollowHealth.Idle] when not following. */
+    private val _followHealth = MutableStateFlow<FollowHealth>(FollowHealth.Idle)
+    val followHealth: StateFlow<FollowHealth> = _followHealth.asStateFlow()
+
+    /** The operator has been told about a [FollowHealth.Stopped]; clear it so it
+     *  is not announced again. Does nothing in any other state, so a new
+     *  engagement that already replaced it is left alone. */
+    fun acknowledgeFollowStop() {
+        _followHealth.update { if (it is FollowHealth.Stopped) FollowHealth.Idle else it }
+    }
+
+    // Follow state is written from the UI (engage, stop) and from the stream's
+    // own coroutine (hold, stop). The generation numbers the engagements, so a
+    // stream that was stopped or replaced cannot change the state of its
+    // successor or LOITER a vehicle the operator has just re-engaged.
+    private val followLock = Any()
+    private var followGeneration = 0L
 
     /** Where the drone's live camera stream comes from. [VideoSource.None]
      *  = no video PIP rendered. Set from UAS Quick Connect screen.
@@ -185,18 +220,16 @@ class UASManager(
     fun disconnect() {
         cotPumpJob?.cancel()
         missionExecWatcherJob?.cancel()
-        followMeJob?.cancel()
+        resetFollow(FollowHealth.Idle)
         terrainSamplerJob?.cancel()
         batteryWatcherJob?.cancel()
         failsafeWatcherJob?.cancel()
         scope?.cancel()
         cotPumpJob = null
         missionExecWatcherJob = null
-        followMeJob = null
         terrainSamplerJob = null
         batteryWatcherJob = null
         failsafeWatcherJob = null
-        _followMeActive.value = false
         _terrainBelowDroneMsl.value = null
         _failsafeParams.value = emptyMap()
         scope = null
@@ -243,6 +276,12 @@ class UASManager(
         object NoGpsFix : FollowMeResult
         object NotConnected : FollowMeResult
         data class AutopilotNotSupported(val autopilot: String?) : FollowMeResult
+
+        /** #249 - nothing to measure the follow height from: no terrain sample
+         *  at the target and no GPS altitude on the operator's live fix. Refused
+         *  before any command reaches the vehicle, because the alternative was
+         *  "cruise metres above sea level". */
+        object NoAltitudeReference : FollowMeResult
     }
 
     /**
@@ -260,12 +299,23 @@ class UASManager(
      * ArduPilot Copter has a FOLLOW mode (custom_mode=23) but uses a
      * different position source (GCS heartbeat / FOLL_OFS params) —
      * fast-follow.
+     *
+     * Refusals, in the order they are checked: [FollowMeResult.NoGpsFix] (no
+     * live operator fix), [FollowMeResult.NotConnected],
+     * [FollowMeResult.AutopilotNotSupported], then
+     * [FollowMeResult.NoAltitudeReference] (#249). The cheap checks come first
+     * so a dead link never costs a terrain lookup; the altitude check comes
+     * before the mode switch so a refusal never leaves the vehicle in FOLLOW
+     * with nothing to follow.
+     *
+     * Once engaged the stream holds, sending nothing, while the fix is older
+     * than [FollowTargetRules.MAX_TARGET_AGE_MS] or there is no altitude
+     * reference, and stops with LOITER after [FollowTargetRules.MAX_HOLD_MS] of
+     * that. [followHealth] says which.
      */
     suspend fun startFollowMe(): FollowMeResult {
         if (liveOperatorFix() == null) return FollowMeResult.NoGpsFix
-        return startFollow(FollowSubject.Operator) {
-            liveOperatorFix()?.let { it.lat to it.lon }
-        }
+        return startFollow(FollowSubject.Operator) { operatorTarget() }
     }
 
     /**
@@ -277,19 +327,51 @@ class UASManager(
     private fun liveOperatorFix(): SelfFix? = operatorFix()?.takeUnless { it.restored }
 
     /**
+     * The operator as a follow target: the live fix and the time it was taken,
+     * on the stream's clock. Aged on the fix's monotonic time when it has one,
+     * on its wall-clock time otherwise ([FollowTargetRules.operatorPoint]).
+     */
+    private fun operatorTarget(): FollowTargetPoint? =
+        liveOperatorFix()?.let {
+            FollowTargetRules.operatorPoint(it, System.currentTimeMillis(), elapsedRealtimeMs())
+        }
+
+    /**
+     * The operator's GPS altitude, or null when the live fix has none (#249).
+     * Like the position, a restored fix does not count: its altitude is from
+     * wherever the operator was last session. A 0.0 that only stands in for a
+     * missing altitude does not count either ([SelfFix.hasAltitude]).
+     */
+    private fun operatorAltitudeM(): Double? =
+        liveOperatorFix()?.takeIf { it.hasAltitude }?.altitudeM
+
+    /**
      * Pursue a CoT contact — drone tracks the contact's position
      * exactly like Follow-Me but with the contact as the source.
      * [positionProvider] is called each tick to fetch the contact's
-     * current lat/lon (the manager doesn't own the contact store, so
-     * the UI passes it in as a closure over its live state).
+     * current position (the manager doesn't own the contact store, so
+     * the UI passes it in as a closure over its live state). It returns
+     * null when the contact has no position, and then the stream holds and,
+     * after [FollowTargetRules.MAX_HOLD_MS], stops, like a lost fix.
+     *
+     * #249 - a contact has no age rule: the caller passes a point with no
+     * time, which is never stale. A contact's position is its last report and
+     * a dropped marker is never repeated, so pursuing one keeps going to that
+     * point however long ago it was reported. A contact that has gone silent
+     * is therefore not detected here; the contact max-age setting (#215) is
+     * what hides and removes a silent teammate.
      *
      * Returns the same [FollowMeResult] sealed type as Follow-Me —
      * [FollowMeResult.NoGpsFix] now means "contact has no position yet".
+     * For a contact far from the operator the altitude reference is the
+     * terrain under the contact, or failing that the operator's own altitude.
+     * With neither the pursuit is refused ([FollowMeResult.NoAltitudeReference]);
+     * if the reference is lost mid-pursuit the stream holds, as for Follow-Me.
      */
     suspend fun startPursueContact(
         uid: String,
         callsign: String,
-        positionProvider: () -> Pair<Double, Double>?,
+        positionProvider: () -> FollowTargetPoint?,
     ): FollowMeResult {
         if (positionProvider() == null) return FollowMeResult.NoGpsFix
         return startFollow(FollowSubject.Contact(uid, callsign), positionProvider)
@@ -305,7 +387,7 @@ class UASManager(
      *    has FOLLOW mode but uses different param plumbing). */
     private suspend fun startFollow(
         target: FollowSubject,
-        positionProvider: () -> Pair<Double, Double>?,
+        targetProvider: () -> FollowTargetPoint?,
     ): FollowMeResult {
         val st = state.value
         if (!st.isConnected()) return FollowMeResult.NotConnected
@@ -326,6 +408,11 @@ class UASManager(
             return FollowMeResult.AutopilotNotSupported(st.autopilot)
         }
 
+        // #249: refuse now, before the vehicle is switched to FOLLOW, if the
+        // first target has nothing to measure the height from.
+        val first = targetProvider() ?: return FollowMeResult.NoGpsFix
+        if (!hasAltitudeReference(first)) return FollowMeResult.NoAltitudeReference
+
         // 1. Switch the drone to its FOLLOW mode.
         if (isPX4) {
             // PX4 AUTO.FOLLOW_TARGET = main 4, sub 8.
@@ -339,39 +426,99 @@ class UASManager(
 
         // 2. Spin the 1 Hz streamer. Cancel any prior so we never have
         //    two streams racing.
-        followMeJob?.cancel()
-        followMeJob = scope?.launch {
-            while (isActive) {
-                val pos = positionProvider()
-                if (pos != null) {
-                    if (isPX4) sendFollowTargetMsg(pos.first, pos.second)
-                    else sendArduCopterFollowPos(pos.first, pos.second)
-                }
-                delay(1_000)
-            }
-        }
-        _followingWhat.value = target
-        _followMeActive.value = true
+        engageStream(target, isPX4, targetProvider)
         Log.i(TAG, "FOLLOW engaged: target=$target autopilot=${if (isPX4) "PX4" else "ArduCopter"} cruise=${_cruiseAlt.value.meters}m ${_cruiseAlt.value.frame}")
         return FollowMeResult.Started
+    }
+
+    /**
+     * #249 - true when [first] has something to measure the cruise height
+     * from: the operator's GPS altitude, or a terrain sample at the target.
+     * The terrain lookup is a network call, so it is skipped when the
+     * operator's altitude already settles the answer.
+     */
+    private suspend fun hasAltitudeReference(first: FollowTargetPoint): Boolean {
+        val operatorAltitude = operatorAltitudeM()
+        val terrainMsl = if (operatorAltitude == null) sampleTerrain(first.lat, first.lon) else null
+        return FollowTargetRules.referenceMsl(terrainMsl, operatorAltitude) != null
+    }
+
+    /** Terrain elevation (MSL) at the point, or null if the lookup fails. */
+    private suspend fun sampleTerrain(latDeg: Double, lonDeg: Double): Double? =
+        try {
+            terrain.sampleMeters(latDeg, lonDeg)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+
+    /** Starts the stream for a new engagement and records it as the current one. */
+    private fun engageStream(
+        target: FollowSubject,
+        isPX4: Boolean,
+        targetProvider: () -> FollowTargetPoint?,
+    ) {
+        synchronized(followLock) {
+            followMeJob?.cancel()
+            val generation = ++followGeneration
+            followMeJob = scope?.launch {
+                FollowStreamLoop(streamHost(generation, isPX4, target, targetProvider), followLimits).run()
+            }
+            // Health first: a HUD that reads these flows one at a time never
+            // pairs the new subject with the last engagement's "holding".
+            _followHealth.value = FollowHealth.Streaming
+            _followingWhat.value = target
+            _followMeActive.value = true
+        }
+    }
+
+    /** The real side of [FollowStreamLoop], for the engagement numbered [generation]. */
+    private fun streamHost(
+        generation: Long,
+        isPX4: Boolean,
+        subject: FollowSubject,
+        targetProvider: () -> FollowTargetPoint?,
+    ) = object : FollowStreamLoop.Host {
+        override fun nowMs() = elapsedRealtimeMs()
+
+        override fun readTarget() = targetProvider()
+
+        override suspend fun terrainMslAt(latDeg: Double, lonDeg: Double) =
+            sampleTerrain(latDeg, lonDeg)
+
+        override fun operatorAltitudeM() = this@UASManager.operatorAltitudeM()
+
+        override fun cruiseMeters() = _cruiseAlt.value.meters
+
+        override suspend fun send(target: FollowDecision.Send) {
+            if (isPX4) sendFollowTargetMsg(target) else sendArduCopterFollowPos(target)
+        }
+
+        override fun publish(health: FollowHealth) {
+            synchronized(followLock) {
+                if (generation == followGeneration) _followHealth.value = health
+            }
+        }
+
+        override suspend fun stop(reason: FollowHoldReason, atMs: Long) {
+            Log.w(TAG, "FOLLOW stopping on its own: $reason for ${followLimits.maxHoldMs} ms")
+            disengageFollow(FollowHealth.Stopped(reason, atMs, subject), onlyIfGeneration = generation)
+        }
     }
 
     /** ArduPilot Copter FOLLOW: stream GLOBAL_POSITION_INT *as the
      *  target* — the autopilot listens to sysid 255 (or whatever
      *  FOLL_SYSID points at) and treats those packets as the position
      *  to chase. Altitude rule matches the PX4 path. */
-    private suspend fun sendArduCopterFollowPos(latDeg: Double, lonDeg: Double) {
-        val cruise = _cruiseAlt.value.meters
-        val terrainMsl = runCatching { terrain.sampleMeters(latDeg, lonDeg) }.getOrNull()
-        val baseMsl = terrainMsl ?: operatorFix()?.altitudeM ?: 0.0
-        val altMsl = baseMsl + cruise
+    private suspend fun sendArduCopterFollowPos(t: FollowDecision.Send) {
         val msg = GlobalPositionInt.builder()
             // ArduPilot doesn't care about exact value, just monotonicity.
             .timeBootMs(System.currentTimeMillis() and 0xFFFFFFFFL)
-            .lat((latDeg * 1e7).toInt())
-            .lon((lonDeg * 1e7).toInt())
-            .alt((altMsl * 1000).toInt())
-            .relativeAlt((cruise * 1000).toInt())
+            .lat((t.latDeg * 1e7).toInt())
+            .lon((t.lonDeg * 1e7).toInt())
+            .alt((t.altMsl * 1000).toInt())
+            .relativeAlt((t.cruiseMeters * 1000).toInt())
             .vx(0).vy(0).vz(0)
             .hdg(0)
             .build()
@@ -382,38 +529,66 @@ class UASManager(
     /** Disengage whatever follow/pursue is active. Stops the streamer
      *  and parks the drone in AUTO.LOITER. */
     suspend fun stopFollowMe() {
-        followMeJob?.cancel()
-        followMeJob = null
-        _followMeActive.value = false
-        _followingWhat.value = null
-        if (state.value.isConnected()) {
-            // PX4 AUTO.LOITER = main 4, sub 3.
-            mavlink.sendCommand(
-                MavCmd.MAV_CMD_DO_SET_MODE,
-                p1 = 1f, p2 = 4f, p3 = 3f,
-            )
-        }
+        disengageFollow(FollowHealth.Idle)
         Log.i(TAG, "FOLLOW disengaged")
     }
 
-    /** Build + send one FOLLOW_TARGET message at [latDeg]/[lonDeg].
-     *  Altitude rule: prefer terrain elevation at the target plus cruise
-     *  (so the drone holds AGL above the target's actual ground level);
-     *  fall back to operator-altitude + cruise when terrain isn't
-     *  available. Result is a consistent above-the-thing-you're-tracking
-     *  flight height regardless of whether the target is the operator
-     *  or a contact on a hill across town. */
-    private suspend fun sendFollowTargetMsg(latDeg: Double, lonDeg: Double) {
-        val cruise = _cruiseAlt.value.meters
-        val terrainMsl = runCatching { terrain.sampleMeters(latDeg, lonDeg) }.getOrNull()
-        val baseMsl = terrainMsl ?: operatorFix()?.altitudeM ?: 0.0
-        val altMsl = baseMsl + cruise
+    /**
+     * Ends the engagement and parks the vehicle in AUTO.LOITER. [health] is
+     * what the HUD shows afterwards: [FollowHealth.Idle] when the operator
+     * stopped it, [FollowHealth.Stopped] when the stream gave up. With
+     * [onlyIfGeneration], does nothing if a newer engagement has replaced that
+     * one.
+     */
+    private suspend fun disengageFollow(health: FollowHealth, onlyIfGeneration: Long? = null) {
+        if (!resetFollow(health, onlyIfGeneration)) return
+        if (state.value.isConnected()) {
+            // The stream calls this from its own coroutine, which resetFollow
+            // has just cancelled. The LOITER command must still go out.
+            withContext(NonCancellable) {
+                // PX4 AUTO.LOITER = main 4, sub 3.
+                mavlink.sendCommand(
+                    MavCmd.MAV_CMD_DO_SET_MODE,
+                    p1 = 1f, p2 = 4f, p3 = 3f,
+                )
+            }
+        }
+    }
+
+    /**
+     * Drops every piece of follow state at once and retires the running
+     * stream. Returns false, changing nothing, when [onlyIfGeneration] is given
+     * and is no longer the current engagement.
+     */
+    private fun resetFollow(health: FollowHealth, onlyIfGeneration: Long? = null): Boolean =
+        synchronized(followLock) {
+            if (onlyIfGeneration != null && onlyIfGeneration != followGeneration) {
+                return@synchronized false
+            }
+            followGeneration++
+            followMeJob?.cancel()
+            followMeJob = null
+            _followMeActive.value = false
+            _followingWhat.value = null
+            _followHealth.value = health
+            true
+        }
+
+    /** Send one FOLLOW_TARGET message for [t]. Altitude rule (decided in
+     *  [FollowTargetRules]): terrain elevation at the target plus cruise (so the
+     *  drone holds AGL above the target's actual ground level); the operator's
+     *  own GPS altitude plus cruise when terrain isn't available; and when
+     *  neither exists, nothing is sent at all (#249 - it used to be sea level
+     *  plus cruise). Result is a consistent above-the-thing-you're-tracking
+     *  flight height regardless of whether the target is the operator or a
+     *  contact on a hill across town. */
+    private suspend fun sendFollowTargetMsg(t: FollowDecision.Send) {
         val msg = FollowTarget.builder()
             .timestamp(java.math.BigInteger.valueOf(System.currentTimeMillis()))
             .estCapabilities(1) // bit 0 = position
-            .lat((latDeg * 1e7).toInt())
-            .lon((lonDeg * 1e7).toInt())
-            .alt(altMsl.toFloat())
+            .lat((t.latDeg * 1e7).toInt())
+            .lon((t.lonDeg * 1e7).toInt())
+            .alt(t.altMsl.toFloat())
             .customState(java.math.BigInteger.ZERO)
             .build()
         runCatching { mavlink.send(msg) }
@@ -863,8 +1038,7 @@ class UASManager(
     suspend fun emergencyStop() {
         // Stop any background streamers first so they don't keep trying
         // to push commands at a now-falling vehicle.
-        followMeJob?.cancel()
-        _followMeActive.value = false
+        resetFollow(FollowHealth.Idle)
         mavlink.sendCommand(MavCmd.MAV_CMD_DO_FLIGHTTERMINATION, p1 = 1f)
         Log.w(TAG, "EMERGENCY STOP — flight termination sent")
     }
