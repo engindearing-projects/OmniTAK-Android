@@ -59,6 +59,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.flow.flowOf
 import soy.engindearing.omnitak.mobile.OmniTAKApp
+import soy.engindearing.omnitak.mobile.data.CaTrust
 import soy.engindearing.omnitak.mobile.data.ConnectionProtocol
 import soy.engindearing.omnitak.mobile.data.TAKServer
 import soy.engindearing.omnitak.mobile.data.discovery.TakNsdDiscovery
@@ -84,6 +85,12 @@ fun AddServerScreen(onDone: () -> Unit) {
     var certName by remember { mutableStateOf<String?>(null) }
     var certPassword by remember { mutableStateOf("") }
     var certError by remember { mutableStateOf<String?>(null) }
+    // Manual CA pin for servers on a private CA without CSR enrollment.
+    // Stored as a PEM chain in the vault and wired to caCertificateName,
+    // which TakTls already treats as the per-server root of trust.
+    var caName by remember { mutableStateOf<String?>(null) }
+    var caFingerprint by remember { mutableStateOf<String?>(null) }
+    var caError by remember { mutableStateOf<String?>(null) }
     // BUG-A — visibility toggles so users can confirm what they typed.
     // Default to masked (dots) on both password fields.
     var passwordVisible by remember { mutableStateOf(false) }
@@ -100,6 +107,29 @@ fun AddServerScreen(onDone: () -> Unit) {
             certError = null
         } else {
             certError = "Couldn't read that file. Pick a .p12 from local storage."
+        }
+    }
+
+    val pickCaLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val bytes = runCatching {
+            context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+        }.getOrNull()
+        val cas = bytes?.let { CaTrust.parseCaFile(it) }.orEmpty()
+        if (cas.isEmpty()) {
+            caError = "No CA certificate found in that file. Pick the CA (.pem/.crt) your admin gave you."
+            return@rememberLauncherForActivityResult
+        }
+        val base = (queryDisplayName(context, uri) ?: "ca").substringBeforeLast('.')
+        val saved = certVault.importBytes("ca-manual-$base.pem", CaTrust.encodePemChain(cas))
+        if (saved != null) {
+            caName = saved
+            caFingerprint = CaTrust.sha256Fingerprint(cas.first())
+            caError = null
+        } else {
+            caError = "Couldn't save that CA certificate."
         }
     }
 
@@ -166,6 +196,7 @@ fun AddServerScreen(onDone: () -> Unit) {
                                 certificatePassword = certPassword.takeIf {
                                     useTLS && certName != null && it.isNotEmpty()
                                 },
+                                caCertificateName = caName.takeIf { useTLS },
                             ),
                         )
                         onDone()
@@ -378,6 +409,63 @@ fun AddServerScreen(onDone: () -> Unit) {
                 if (certError != null) {
                     Text(
                         certError!!,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+
+                Spacer(Modifier.height(4.dp))
+
+                Text(
+                    "Server CA certificate",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+                Text(
+                    "For servers on a private CA. The server's certificate must " +
+                        "chain to this CA or the connection is refused. Leave empty " +
+                        "only if the server uses a publicly-trusted certificate.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            caName ?: "No CA selected (system trust)",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (caName != null) {
+                                TacticalAccent
+                            } else {
+                                MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                            },
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    OutlinedButton(
+                        onClick = {
+                            caError = null
+                            pickCaLauncher.launch(arrayOf("*/*"))
+                        },
+                    ) {
+                        Text(if (caName == null) "Choose CA" else "Replace")
+                    }
+                }
+
+                if (caFingerprint != null) {
+                    Text(
+                        "SHA-256: $caFingerprint\nCompare with the fingerprint your admin gave you.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+                    )
+                }
+
+                if (caError != null) {
+                    Text(
+                        caError!!,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
