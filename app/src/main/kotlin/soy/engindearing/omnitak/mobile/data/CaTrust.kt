@@ -72,6 +72,28 @@ object CaTrust {
     }
 
     /**
+     * Parse an operator-supplied CA file (PEM chain or a single DER cert)
+     * for manual pinning on the Add Server screen. Only certificates that
+     * are CAs (basicConstraints cA=TRUE) are returned: pinning a leaf would
+     * silently stop working at the server's next cert rotation, and pinning
+     * the wrong file type should fail loudly rather than fall back.
+     */
+    fun parseCaFile(bytes: ByteArray): List<X509Certificate> {
+        val certs = decodePemChain(bytes).ifEmpty {
+            runCatching {
+                val cf = CertificateFactory.getInstance("X.509")
+                listOf(cf.generateCertificate(ByteArrayInputStream(bytes)) as X509Certificate)
+            }.getOrDefault(emptyList())
+        }
+        return certs.filter { it.basicConstraints >= 0 }
+    }
+
+    /** Colon-separated uppercase SHA-256 fingerprint, as `openssl x509 -fingerprint -sha256` prints it. */
+    fun sha256Fingerprint(cert: X509Certificate): String =
+        java.security.MessageDigest.getInstance("SHA-256").digest(cert.encoded)
+            .joinToString(":") { "%02X".format(it) }
+
+    /**
      * Build a trust manager that accepts certs anchored to any cert in
      * [pinnedCAs]. Standard Android pattern: keystore with the CA(s),
      * fed through [TrustManagerFactory]. Path validation (expiry, chain
