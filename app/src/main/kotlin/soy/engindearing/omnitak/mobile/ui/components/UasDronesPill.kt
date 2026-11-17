@@ -7,7 +7,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Flight
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -91,9 +93,12 @@ fun UasDronesPickerSheet(
         sheetState = sheetState,
         containerColor = Color(0xFF1A1F2E),
     ) {
+        // #222: one card per connected drone; from the third drone on, the list
+        // outgrew a landscape phone and the extra drones could not be picked.
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 12.dp)
                 .padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),

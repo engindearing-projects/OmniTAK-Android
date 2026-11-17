@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -62,7 +64,13 @@ fun LayersDialog(
             )
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            // #222: up to nine switches plus the Offline maps button are taller
+            // than a landscape phone; without the scroll only the first three
+            // switches could be reached there.
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
                 LayerRow("3D terrain", map3dEnabled, onToggle3d)
                 LayerRow("Contacts", contactsVisible, onToggleContacts)
                 LayerRow("Mesh nodes", meshNodesVisible, onToggleMeshNodes)

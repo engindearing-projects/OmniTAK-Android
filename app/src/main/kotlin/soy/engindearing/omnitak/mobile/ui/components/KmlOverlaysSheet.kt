@@ -15,7 +15,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
@@ -233,7 +235,9 @@ private fun OverlayList(
     onMbDelete: (String) -> Unit,
     onDeleteAll: () -> Unit,
 ) {
-    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+    // #222: one row per imported overlay plus the Imagery and Tiles sections, so
+    // the list outgrows a landscape phone after a few imports.
+    Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
         Text("Map Overlays", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
 
@@ -368,7 +372,9 @@ private fun OverlayEditor(
     var name by remember(overlay.id) { mutableStateOf(overlay.name) }
     var confirmDelete by remember { mutableStateOf(false) }
 
-    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+    // #222: the editor is taller than a landscape phone; Zoom to overlay and
+    // Delete overlay sat below the fold with no way to reach them.
+    Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 8.dp, end = 20.dp, top = 4.dp)) {
             IconButton(onClick = { onRename(name); onBack() }) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
