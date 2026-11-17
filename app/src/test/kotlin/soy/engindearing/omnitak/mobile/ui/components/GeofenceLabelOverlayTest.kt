@@ -42,8 +42,12 @@ class GeofenceLabelOverlayTest {
             id = "g", name = "Yard", type = GeofenceType.CIRCLE, color = GeofenceColor.ORANGE,
             centerLat = 47.0, centerLon = -117.0, radiusMeters = 100.0,
         )
-        val labels = GeofenceLabels.of(GeofenceDrawings.from(listOf(fence)))
-        assertEquals(listOf(GeofenceLabel("Yard", 47.0, -117.0, GeofenceColor.ORANGE.hex)), labels)
+        val label = GeofenceLabels.of(GeofenceDrawings.from(listOf(fence))).single()
+        assertEquals("Yard", label.text)
+        assertEquals(GeofenceColor.ORANGE.hex, label.colorHex)
+        // On the north edge of the circle, as the iOS app writes it.
+        assertEquals(47.0 + Math.toDegrees(100.0 / 6_371_008.8), label.lat, 1e-9)
+        assertEquals(-117.0, label.lon, 1e-9)
     }
 
     @Test fun a_very_long_name_is_cut() {
@@ -65,8 +69,19 @@ class GeofenceLabelOverlayTest {
         assertEquals(listOf(inView, justOffTheLeft), kept)
     }
 
-    @Test fun the_name_starts_clear_of_the_operators_marker_under_the_middle_of_the_zone() {
-        // The operator's own marker is about 54 px (20 dp) tall and sits on the middle of the zone it is in.
-        assertTrue(GeofenceLabels.BELOW_DP > 54f / 2f / 2.625f)
+    @Test fun the_name_sits_above_its_point_with_the_bottom_of_its_letters_a_little_over_it() {
+        // Text is drawn from its baseline; the descent is how far letters like g and y reach below it.
+        val baseline = GeofenceLabels.baselineY(pointY = 1_000f, descentPx = 7f, gapPx = 5f)
+        assertEquals("the bottom of the descenders is the gap above the point", 1_000f - 5f, baseline + 7f, 0f)
+        assertTrue("so the whole name is above the point", baseline < 1_000f)
+    }
+
+    @Test fun the_name_is_clear_of_the_operators_marker_on_the_middle_of_the_zone_once_the_zone_is_bigger_than_the_marker() {
+        // The operator's own marker is about 54 px (20 dp) tall, centred on the middle of the zone they are in. The
+        // name's point is a radius north of the middle: from a radius of 20 dp on screen it is clear of the marker.
+        val markerHalfHeightPx = 54f / 2f
+        val radiusPx = 20f * 2.625f
+        val baseline = GeofenceLabels.baselineY(pointY = -radiusPx, descentPx = 7f, gapPx = GeofenceLabels.GAP_DP * 2.625f)
+        assertTrue(baseline + 7f < -markerHalfHeightPx)
     }
 }

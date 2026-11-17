@@ -987,7 +987,7 @@ fun MapScreen(
             mapToolActive = measurementActive || rangeRingsActive || drawingKind != null || lassoMode,
             toolbarClearanceDp = toolbarClearance,
         )
-        // The names of the geofences (#155), written under the middle of each zone. Over the map, under
+        // The names of the geofences (#155), written on the north edge of each zone. Over the map, under
         // every control, and they take no touches.
         GeofenceLabelOverlay(
             map = mapboxMap,

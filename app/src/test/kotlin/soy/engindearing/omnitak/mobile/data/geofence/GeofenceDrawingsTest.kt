@@ -110,11 +110,14 @@ class GeofenceDrawingsTest {
         assertEquals(g.points!!.map { it.lat to it.lon }, shape.points)
     }
 
-    @Test fun the_name_is_written_at_the_centre_of_a_circle_and_the_mean_of_a_polygon() {
+    @Test fun the_name_is_written_on_the_north_edge_of_a_circle_and_at_the_mean_of_a_polygon() {
         val round = shapesOf(GeofenceDrawings.from(listOf(circle("a", name = "North gate")))).single()
         assertEquals("North gate", round.label!!.text)
-        assertEquals(centerLat, round.label!!.lat, 0.0)
-        assertEquals(centerLon, round.label!!.lon, 0.0)
+        assertEquals("due north of the centre", centerLon, round.label!!.lon, 1e-9)
+        assertEquals("one radius out", 500.0, GeoMath.haversineMeters(centerLat, centerLon, round.label!!.lat, round.label!!.lon), 0.01)
+        val firstCorner = round.points.first()
+        assertEquals("it is on the zone's own outline, where the ring starts", firstCorner.first, round.label!!.lat, 1e-9)
+        assertEquals(firstCorner.second, round.label!!.lon, 1e-9)
 
         val square = shapesOf(GeofenceDrawings.from(listOf(yard()))).single()
         assertEquals(centerLat, square.label!!.lat, 1e-9)

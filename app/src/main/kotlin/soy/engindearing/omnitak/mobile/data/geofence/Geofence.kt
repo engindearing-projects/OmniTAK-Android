@@ -1,6 +1,7 @@
 package soy.engindearing.omnitak.mobile.data.geofence
 
 import kotlinx.serialization.Serializable
+import soy.engindearing.omnitak.mobile.data.rangebearing.RangeBearing
 
 /** The shapes a geofence can have. */
 @Serializable
@@ -101,16 +102,27 @@ data class Geofence(
     val dwellMs: Long get() = dwellMinutes.coerceAtLeast(0) * 60_000L
 
     /**
-     * Where its name is written: the middle of a circle, the mean of a polygon's corners. Null when
-     * there are no corners or no centre. ("Show on map" does not go here: it frames the whole shape,
-     * see [GeofenceFraming].)
+     * Where its name is written, as the iOS app writes it: on the north edge of a circle (so the operator's
+     * own marker, which sits on the middle of the zone they are in, never covers it), at the mean of a
+     * polygon's corners. The text sits above the point. Null when there are no corners or no centre. A circle
+     * with no size has no edge, so its name goes on its centre. ("Show on map" does not go here: it frames
+     * the whole shape, see [GeofenceFraming].)
      */
     val labelPoint: LatLon?
         get() = when (type) {
             GeofenceType.CIRCLE -> {
                 val lat = centerLat
                 val lon = centerLon
-                if (lat != null && lon != null) LatLon(lat, lon) else null
+                val radius = radiusMeters
+                if (lat == null || lon == null) {
+                    null
+                } else if (radius != null && radius.isFinite() && radius > 0.0) {
+                    // The first point of the ring the zone is drawn with is due north of the centre.
+                    val north = RangeBearing.ringPoints(lat, lon, radius, 4).first()
+                    LatLon(north[0], north[1])
+                } else {
+                    LatLon(lat, lon)
+                }
             }
             GeofenceType.POLYGON -> {
                 val corners = points

@@ -14,7 +14,7 @@ import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.maps.MapLibreMap
 import soy.engindearing.omnitak.mobile.data.Drawing
 
-/** A name to write on the 2D map: [text] under the point ([lat], [lon]), in [colorHex]. */
+/** A name to write on the 2D map: [text] above the point ([lat], [lon]), in [colorHex]. */
 internal data class GeofenceLabel(val text: String, val lat: Double, val lon: Double, val colorHex: String)
 
 /** Where a name goes on the screen, in px. */
@@ -32,8 +32,18 @@ internal object GeofenceLabels {
     /** The name's text size, in dp, before the phone's font size and the Label size setting. */
     const val TEXT_DP = 11.5f
 
-    /** How far under the point the name starts, in dp: clear of the operator's own marker, which sits on the middle of the zone it is in. */
-    const val BELOW_DP = 14f
+    /**
+     * How far over the point the bottom of the name sits, in dp: the name is written on top of its point, the
+     * way the iOS app anchors it. The point is the north edge of a circle, so the operator's own marker, on the
+     * middle of the zone they are in, is not under the name.
+     */
+    const val GAP_DP = 2f
+
+    /**
+     * The y, in px, text is drawn from (its baseline) so that the bottom of its letters is [gapPx] over the
+     * point at [pointY]. [descentPx] is how far letters like g and y reach under the baseline.
+     */
+    fun baselineY(pointY: Float, descentPx: Float, gapPx: Float): Float = pointY - gapPx - descentPx
 
     /** The names the shapes in [drawings] carry, and the colour of each, in order. */
     fun of(drawings: List<Drawing>): List<GeofenceLabel> = drawings.mapNotNull { d ->
@@ -62,11 +72,11 @@ internal object GeofenceLabels {
 }
 
 /**
- * Writes the names of the geofences on the 2D map: each under the middle of its zone, in the zone's
- * colour on a dark outline.
+ * Writes the names of the geofences on the 2D map: each on top of its point (the north edge of a circle,
+ * the middle of a polygon's corners), in the zone's colour on a dark outline.
  *
  * A native polygon has no text, and a marker with the name in its bitmap takes taps (a measure
- * point or a drawing point placed near a zone's middle would land on the name instead). So the names
+ * point or a drawing point placed near a zone's edge would land on the name instead). So the names
  * are drawn here, over the map and under every control, and take no touches. They are painted by
  * Compose, not by the map's GL layers, so they show on the Adreno and Mali drivers where a GeoJSON
  * symbol layer does not, and a style reload does not touch them. Like the other overlays that float
@@ -106,14 +116,14 @@ internal fun GeofenceLabelOverlay(
         fill.textSize = size
         halo.textSize = size
         halo.strokeWidth = size * 0.2f
-        val below = GeofenceLabels.BELOW_DP * density
+        val gap = GeofenceLabels.GAP_DP * density
         val visible = GeofenceLabels.onScreen(projected, this.size.width, this.size.height, marginPx = size * GeofenceLabels.MAX_CHARS / 2)
         drawIntoCanvas { canvas ->
             val native = canvas.nativeCanvas
             for (label in visible) {
                 fill.color = runCatching { android.graphics.Color.parseColor(label.colorHex) }.getOrDefault(android.graphics.Color.WHITE)
-                // The point is where the middle of the zone is; the text starts [below] under it.
-                val baseline = label.y + below - fill.fontMetrics.ascent
+                // The point is on the zone's edge; the bottom of the text is [gap] over it.
+                val baseline = GeofenceLabels.baselineY(label.y, fill.fontMetrics.descent, gap)
                 native.drawText(label.text, label.x, baseline, halo)
                 native.drawText(label.text, label.x, baseline, fill)
             }

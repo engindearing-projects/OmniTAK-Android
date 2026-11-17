@@ -109,8 +109,8 @@ class CesiumDrawingsJsonTest {
         assertEquals(0.12, shape.getDouble("fillAlpha"), 1e-6)
         assertEquals("North gate", shape.getString("label"))
         val at = shape.getJSONArray("labelAt")
-        assertEquals(-117.4260, at.getDouble(0), 1e-9)
-        assertEquals(47.6588, at.getDouble(1), 1e-9)
+        assertEquals("due north of the centre, on the north edge", -117.4260, at.getDouble(0), 1e-9)
+        assertEquals(47.6588 + Math.toDegrees(200.0 / 6_371_008.8), at.getDouble(1), 1e-9)
         assertEquals(64, shape.getJSONArray("coords").length())
     }
 }

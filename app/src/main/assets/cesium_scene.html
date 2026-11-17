@@ -332,10 +332,11 @@
         opts.position=Cesium.Cartesian3.fromDegrees(center[0],center[1],0);
         opts.ellipse={semiMajorAxis:radius,semiMinorAxis:radius,material:fillC,outline:true,outlineColor:color,outlineWidth:width,heightReference:Cesium.HeightReference.CLAMP_TO_GROUND};}
       else return;
-      // A name the app writes on the shape (a geofence's): at labelAt, [lon, lat], over the ground and 24 px under it, so it is clear of the
-      // operator's own marker (which sits on the middle of the zone it is in) and of the callsign above that marker. Same fields as the iOS page.
+      // A name the app writes on the shape (a geofence's): at labelAt, [lon, lat], over the ground, its bottom 2 px over that point. The point is
+      // the north edge of a circle and the mean of a polygon's corners, as on iOS, so the operator's own marker and callsign (on the middle of the
+      // zone they are in) never cover it. Same fields and the same look as the name on the iOS page.
       if(typeof d.label==='string'&&d.label&&Array.isArray(d.labelAt)&&d.labelAt.length>=2){opts.position=Cesium.Cartesian3.fromDegrees(d.labelAt[0],d.labelAt[1],0);
-        opts.label={text:d.label,font:'12px -apple-system, sans-serif',fillColor:Cesium.Color.WHITE,outlineColor:Cesium.Color.BLACK,outlineWidth:2,style:Cesium.LabelStyle.FILL_AND_OUTLINE,verticalOrigin:Cesium.VerticalOrigin.TOP,pixelOffset:new Cesium.Cartesian2(0,24),heightReference:Cesium.HeightReference.CLAMP_TO_GROUND,disableDepthTestDistance:Number.POSITIVE_INFINITY};}
+        opts.label={text:d.label,font:'bold 13px -apple-system, sans-serif',fillColor:Cesium.Color.WHITE,outlineColor:Cesium.Color.BLACK,outlineWidth:3,style:Cesium.LabelStyle.FILL_AND_OUTLINE,verticalOrigin:Cesium.VerticalOrigin.BOTTOM,pixelOffset:new Cesium.Cartesian2(0,-2),heightReference:Cesium.HeightReference.CLAMP_TO_GROUND,disableDepthTestDistance:Number.POSITIVE_INFINITY};}
       _state.horizonDirty=true;
       _state.drawings.set(d.uid,v.entities.add(opts));
     },
