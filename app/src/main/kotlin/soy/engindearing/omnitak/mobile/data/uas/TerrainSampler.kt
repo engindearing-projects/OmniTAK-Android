@@ -35,8 +35,11 @@ import java.net.URL
  * a correctness standpoint; we cap on memory not staleness.
  *
  * Threading: all network + bitmap work runs on Dispatchers.IO.
+ *
+ * Open (with [sample] and [sampleMeters]) so a unit test can stand in for the
+ * tile feed without a network or a Bitmap; nothing in the app subclasses it.
  */
-class TerrainSampler(
+open class TerrainSampler(
     private val baseUrl: String = DEFAULT_BASE_URL,
     private val preferredZoom: Int = PREFERRED_ZOOM,
     private val httpTimeoutMs: Int = 4_000,
@@ -55,10 +58,10 @@ class TerrainSampler(
      * back down to [MIN_ZOOM] (coverage is dense at low zoom).
      * Returns null on full network failure or transparent pixels.
      */
-    suspend fun sampleMeters(latDeg: Double, lonDeg: Double): Double? =
+    open suspend fun sampleMeters(latDeg: Double, lonDeg: Double): Double? =
         sample(latDeg, lonDeg)?.meters
 
-    suspend fun sample(latDeg: Double, lonDeg: Double): Sample? = withContext(Dispatchers.IO) {
+    open suspend fun sample(latDeg: Double, lonDeg: Double): Sample? = withContext(Dispatchers.IO) {
         for (z in preferredZoom downTo MIN_ZOOM) {
             val tx = lonToTileX(lonDeg, z)
             val ty = latToTileY(latDeg, z)
