@@ -188,4 +188,24 @@ class ToolsDrawerLayoutTest {
             ),
         )
     }
+
+    // ---- #155: the dial has an eleventh tool, Geofences
+
+    @Test fun eleven_tools_still_get_labels_on_a_normal_landscape_phone() {
+        // 914 x 411 dp (the emulator turned sideways): the rail is two thirds of the width, and eleven
+        // labelled cells make two rows, the most a labelled rail may have.
+        assertTrue(
+            ToolsDrawerLayout.landscapeShowsLabels(
+                toolCount = 11, toolSizeDp = 40, spacingDp = 8, fabSizeDp = 48,
+                railWidthDp = 914 * 2 / 3, availableHeightDp = 395, longestLabelChars = 12, fontScale = 1.0f,
+            ),
+        )
+    }
+
+    @Test fun eleven_tools_in_portrait_scroll_on_a_short_phone_and_not_on_a_tall_one() {
+        // 11 x 48 + 10 x 12 = 648 dp of rows.
+        assertEquals(648, ToolsDrawerLayout.dialHeightDp(toolCount = 11, toolSizeDp = 48, spacingDp = 12))
+        assertTrue(ToolsDrawerLayout.dialScrolls(11, 48, 12, availableHeightDp = 640, fabSizeDp = 56))
+        assertFalse(ToolsDrawerLayout.dialScrolls(11, 48, 12, availableHeightDp = 856, fabSizeDp = 56))
+    }
 }

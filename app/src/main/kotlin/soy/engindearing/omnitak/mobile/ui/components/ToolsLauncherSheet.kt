@@ -17,6 +17,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Fence
 import androidx.compose.material.icons.filled.FlightTakeoff
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.MyLocation
@@ -55,6 +56,7 @@ import soy.engindearing.omnitak.mobile.i18n.Loc
 @Composable
 fun ToolsLauncherSheet(
     onLasso: () -> Unit,
+    onGeofences: () -> Unit = {},
     onUAS: () -> Unit = {},
     onOnvifCamera: () -> Unit = {},
     onGoToCoordinate: () -> Unit = {},
@@ -72,7 +74,7 @@ fun ToolsLauncherSheet(
         sheetState = sheet,
         containerColor = Color(0xFF0F1115),
     ) {
-        // #207 — eight rows are taller than a landscape phone; without the
+        // #207 — nine rows are taller than a landscape phone; without the
         // scroll only the first four could be reached there.
         Column(
             modifier = Modifier
@@ -85,6 +87,18 @@ fun ToolsLauncherSheet(
                 title = "Lasso Select",
                 subtitle = "Long-press + drag on the map to multi-select features",
                 onClick = onLasso,
+            )
+
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 76.dp),
+                color = Color.White.copy(alpha = 0.08f),
+            )
+
+            ToolsRow(
+                icon = { Icon(Icons.Filled.Fence, contentDescription = null, tint = Color(0xFFFFCC00)) },
+                title = Loc.t("tools.geofence"),
+                subtitle = Loc.t("tools.geofence.desc"),
+                onClick = onGeofences,
             )
 
             HorizontalDivider(

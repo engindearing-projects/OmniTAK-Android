@@ -15,6 +15,9 @@ import soy.engindearing.omnitak.mobile.data.DrawingKind
  *
  * Coordinate order is [lon, lat] to match `Cesium.Cartesian3.fromDegrees`,
  * which the bridge calls as `fromDegrees(c[0], c[1], 0)`.
+ *
+ * The geofences ride the same payload as transient drawings (`GeofenceDrawings`), with the two
+ * optional fields the iOS page also reads: `fillAlpha` and `label` / `labelAt`.
  */
 internal fun buildCesiumDrawingsJson(drawings: List<Drawing>): String {
     val arr = JSONArray()
@@ -31,6 +34,14 @@ internal fun buildCesiumDrawingsJson(drawings: List<Drawing>): String {
                 put("coords", coords)
                 put("color", d.colorHex)
                 put("width", d.widthPx.toDouble())
+                // Only a shape that asks for a fill other than the usual one says so: the operator's
+                // own drawings go over the bridge exactly as they always did.
+                if (d.fillAlpha != Drawing.DEFAULT_FILL_ALPHA) put("fillAlpha", d.fillAlpha.toDouble())
+                // A name the app writes on the shape (a geofence's), at [lon, lat].
+                d.label?.let { label ->
+                    put("label", label.text)
+                    put("labelAt", JSONArray().put(label.lon).put(label.lat))
+                }
             },
         )
     }
