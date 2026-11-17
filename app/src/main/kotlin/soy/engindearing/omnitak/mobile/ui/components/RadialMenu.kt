@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
@@ -52,8 +53,9 @@ data class RadialAction(
  * starting at 12 o'clock and proceeding clockwise.
  *
  * [anchor] is in map-surface pixels, typically from
- * `TacticalMap(onMapLongPress)`. The ring is clamped inside the overlay
- * bounds so it stays visible near screen edges.
+ * `TacticalMap(onMapLongPress)`. In the open the ring is centred on it. Near an edge the
+ * whole ring, centre cancel button included, moves inward just far enough to stay inside the
+ * safe area ([RadialPlacement]).
  */
 @Composable
 fun RadialMenu(
@@ -76,21 +78,31 @@ fun RadialMenu(
         animationSpec = tween(durationMillis = 160),
         label = "radial-scale",
     )
+    val safe = mapSafeAreaPx()
 
-    Box(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .background(Color.Black.copy(alpha = 0.35f))
             .clickable(indication = null, interactionSource = null, onClick = onDismiss),
     ) {
+        // The ring's centre: the press, or the press moved inward until the whole ring is inside the safe area.
+        val centre = RadialPlacement.centre(
+            anchor,
+            RadialPlacement.reachPx(radiusDp, itemSizeDp, density.density),
+            safe.left.toFloat(),
+            safe.top.toFloat(),
+            (constraints.maxWidth - safe.right).toFloat(),
+            (constraints.maxHeight - safe.bottom).toFloat(),
+        )
         // Ring items, evenly spaced starting from top (−π/2).
         val count = actions.size
         actions.forEachIndexed { index, action ->
             val angle = -Math.PI / 2.0 + (2.0 * Math.PI * index / count)
             val dx = (radiusPx * cos(angle)).toFloat()
             val dy = (radiusPx * sin(angle)).toFloat()
-            val cx = (anchor.x + dx - itemPx / 2f).roundToInt()
-            val cy = (anchor.y + dy - itemPx / 2f).roundToInt()
+            val cx = (centre.x + dx - itemPx / 2f).roundToInt()
+            val cy = (centre.y + dy - itemPx / 2f).roundToInt()
 
             val ringTint = if (action.enabled) action.color else Color.Gray
             Box(
@@ -116,10 +128,10 @@ fun RadialMenu(
             }
         }
 
-        // Center cancel button on the anchor.
+        // Center cancel button on the ring's centre.
         val cancelPx = with(density) { 48.dp.toPx() }
-        val cx = (anchor.x - cancelPx / 2f).roundToInt()
-        val cy = (anchor.y - cancelPx / 2f).roundToInt()
+        val cx = (centre.x - cancelPx / 2f).roundToInt()
+        val cy = (centre.y - cancelPx / 2f).roundToInt()
         Box(
             modifier = Modifier
                 .offset { IntOffset(cx, cy) }
