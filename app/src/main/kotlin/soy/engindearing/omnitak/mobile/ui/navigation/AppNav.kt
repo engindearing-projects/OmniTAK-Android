@@ -36,8 +36,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.navigation.NamedNavArgument
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavGraphBuilder
@@ -55,11 +57,13 @@ import soy.engindearing.omnitak.mobile.ui.components.BarCommand
 import soy.engindearing.omnitak.mobile.ui.components.BarItem
 import soy.engindearing.omnitak.mobile.ui.components.BarKind
 import soy.engindearing.omnitak.mobile.ui.components.CustomToolbar
+import soy.engindearing.omnitak.mobile.ui.components.MapOrnamentLayout
 import soy.engindearing.omnitak.mobile.ui.components.OnRequest
 import soy.engindearing.omnitak.mobile.ui.components.ToolbarAddPalette
 import soy.engindearing.omnitak.mobile.ui.components.ToolbarCatalog
 import soy.engindearing.omnitak.mobile.ui.components.ToolbarEditBus
 import soy.engindearing.omnitak.mobile.ui.components.ToolsLauncherSheet
+import soy.engindearing.omnitak.mobile.ui.components.mapSafeAreaPx
 import soy.engindearing.omnitak.mobile.ui.screens.AboutScreen
 import soy.engindearing.omnitak.mobile.ui.screens.AddServerScreen
 import soy.engindearing.omnitak.mobile.ui.screens.ChatScreen
@@ -132,6 +136,22 @@ fun AppNav() {
     var toolbarVisible by remember { mutableStateOf(true) }
     var revealTrigger by remember { mutableIntStateOf(0) }
     val autoHideActive = prefs.autoHideToolbar && currentRoute == "map"
+
+    // How far the floating toolbar reaches up from the safe area's bottom edge while it is on
+    // screen over the map (its tip, a larger font and the edit header all make it taller), 0
+    // otherwise. The map lifts its bottom controls above it, so none is drawn under the toolbar
+    // or its tip. Handed to the map through a State, so the graph below does not capture a value
+    // that changes every time the toolbar comes and goes; the map reads it outside composition.
+    var toolbarHeightPx by remember { mutableIntStateOf(0) }
+    val density = LocalDensity.current.density
+    val safeBottomPx = mapSafeAreaPx().bottom
+    val toolbarOccupiedDp = rememberUpdatedState(
+        if (currentRoute == "map" && toolbarVisible) {
+            MapOrnamentLayout.toolbarOccupiedDp(toolbarHeightPx, safeBottomPx, density)
+        } else {
+            0
+        },
+    )
     LaunchedEffect(autoHideActive, editing, revealTrigger) {
         if (autoHideActive && !editing) {
             toolbarVisible = true
@@ -343,7 +363,10 @@ fun AppNav() {
             startDestination = "map",
         ) {
             composable("map") {
-                MapScreen(onOpenTab = { route -> navigateTo(route) })
+                MapScreen(
+                    onOpenTab = { route -> navigateTo(route) },
+                    toolbarOccupiedDp = { toolbarOccupiedDp.value },
+                )
             }
             paddedComposable("servers", screenPadding) {
                 ServersScreen(
@@ -465,7 +488,7 @@ fun AppNav() {
                 enter = fadeIn(tween(150)) + slideInVertically(tween(150)) { it },
                 exit = fadeOut(tween(150)) + slideOutVertically(tween(150)) { it },
             ) {
-                toolbarContent()
+                Box(Modifier.onSizeChanged { toolbarHeightPx = it.height }) { toolbarContent() }
             }
         }
 

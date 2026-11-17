@@ -74,6 +74,7 @@ import soy.engindearing.omnitak.mobile.ui.components.ATAKStatusBar
 import soy.engindearing.omnitak.mobile.ui.components.CompassOverlay
 import soy.engindearing.omnitak.mobile.ui.components.ContactsPanel
 import soy.engindearing.omnitak.mobile.ui.components.LayersDialog
+import soy.engindearing.omnitak.mobile.ui.components.MapOrnamentLayout
 import soy.engindearing.omnitak.mobile.ui.components.MarkerEditSheet
 import soy.engindearing.omnitak.mobile.ui.components.OnRequest
 import soy.engindearing.omnitak.mobile.ui.components.RadialAction
@@ -81,7 +82,9 @@ import soy.engindearing.omnitak.mobile.ui.components.RadialMenu
 import soy.engindearing.omnitak.mobile.ui.components.SelfPositionCard
 import soy.engindearing.omnitak.mobile.ui.components.positionCardMaxWidthDp
 import soy.engindearing.omnitak.mobile.ui.components.TacticalMap
+import soy.engindearing.omnitak.mobile.ui.components.liftAboveToolbar
 import soy.engindearing.omnitak.mobile.ui.components.mapSafeAreaPadding
+import soy.engindearing.omnitak.mobile.ui.components.rememberToolbarClearance
 import soy.engindearing.omnitak.mobile.ui.components.styleJsonForProvider
 import soy.engindearing.omnitak.mobile.ui.components.ToolEntry
 import soy.engindearing.omnitak.mobile.ui.components.ToolsDrawer
@@ -106,13 +109,26 @@ private const val DRAWING_TAP_TOLERANCE_PX = 24f
 private const val CONTACT_TAP_DEFER_PX = 72.0
 
 @Composable
-fun MapScreen(onOpenTab: (String) -> Unit = {}) {
+fun MapScreen(
+    onOpenTab: (String) -> Unit = {},
+    /**
+     * How many dp the floating toolbar reaches above the safe area's bottom edge right now (its tip
+     * and a larger font included), 0 while it is hidden. Read outside composition: the controls
+     * along the bottom move above it, in about 150 ms, without recomposing this screen.
+     */
+    toolbarOccupiedDp: () -> Int = { 0 },
+) {
     val app = LocalContext.current.applicationContext as OmniTAKApp
     // #182 — landscape is the plate-carrier orientation (Pixel 9/10 Pro) and
     // has little vertical room. The map chrome (tools drawer, zoom/center
     // control stack) lays out compactly there so it doesn't eat the short map.
     val isLandscape = LocalConfiguration.current.orientation ==
         android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    // The room the floating toolbar takes at the bottom of the map, animated. The controls along
+    // the bottom are lifted above it (liftAboveToolbar) while it shows and come back down when
+    // it hides. Only ever read while laying out, so a toolbar that comes and goes does not
+    // recompose this screen.
+    val toolbarClearance = rememberToolbarClearance(toolbarOccupiedDp)
     val active by app.serverManager.activeServer.collectAsState()
     val connState by app.serverManager.connectionState.collectAsState()
     val allServers by app.serverManager.servers.collectAsState()
@@ -876,6 +892,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             // These need the map to stay where the operator put it: the first fix of a first
             // run does not slide it away while one is active.
             mapToolActive = measurementActive || rangeRingsActive || drawingKind != null || lassoMode,
+            toolbarClearanceDp = toolbarClearance,
         )
         // Plugin map overlays on the MAPLIBRE engine. The handle is the live
         // MapLibreMap (captured via onMapReady above; null briefly until the
@@ -1195,6 +1212,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 modifier = Modifier
                     .fillMaxSize()
                     .mapSafeAreaPadding()
+                    .liftAboveToolbar(toolbarClearance, 90f)
                     .padding(end = 12.dp, bottom = 90.dp),
                 contentAlignment = Alignment.BottomEnd,
             ) {
@@ -1228,6 +1246,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 modifier = Modifier
                     .fillMaxSize()
                     .mapSafeAreaPadding()
+                    .liftAboveToolbar(toolbarClearance, 24f)
                     .padding(bottom = 24.dp),
                 contentAlignment = Alignment.BottomCenter,
             ) {
@@ -1565,7 +1584,10 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .mapSafeAreaPadding()
-                    .padding(end = 12.dp, bottom = 96.dp)
+                    // Lifts with the tools button under it, by the same distance, so it
+                    // keeps its place above the button.
+                    .liftAboveToolbar(toolbarClearance, MapOrnamentLayout.toolsButtonBottomDp(isLandscape).toFloat())
+                    .padding(end = 12.dp, bottom = MapOrnamentLayout.POSITION_CARD_BOTTOM_DP.dp)
                     // #213 - wrap rather than run under the map buttons at the left
                     // when the label size and the phone font are both large.
                     .widthIn(max = positionCardMaxWidthDp(LocalConfiguration.current.screenWidthDp).dp),
@@ -1662,28 +1684,10 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             },
             expanded = toolsOpen,
             onExpandedChange = { toolsOpen = it },
-            modifier = Modifier.align(Alignment.BottomEnd).mapSafeAreaPadding(),
-        )
-
-        // Issue #96 — compass overlay. Floats at top-start corner, just below
-        // the status bar. Shows live bearing; tapping snaps map to north.
-        // The MapLibre built-in compass is already on top-start (issue #81),
-        // but it disappears when north-up — this one is always visible and
-        // provides the manual snap action.
-        CompassOverlay(
-            bearingDeg = currentBearing,
-            onTapToNorth = {
-                if (userPrefs.northUpLocked) {
-                    // Already locked — snap is automatic; just a no-op tap.
-                } else {
-                    snapNorthTick++
-                }
-            },
             modifier = Modifier
-                .align(Alignment.TopStart)
-                // Measured from the safe area, like the ATAKStatusBar above it.
+                .align(Alignment.BottomEnd)
                 .mapSafeAreaPadding()
-                .padding(start = 12.dp, top = 72.dp),
+                .liftAboveToolbar(toolbarClearance, MapOrnamentLayout.toolsButtonBottomDp(isLandscape).toFloat()),
         )
 
         // Map control stack — zoom in / zoom out / center-on-me — at the
@@ -1746,7 +1750,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     // single compact row in landscape, so the controls sit just
                     // above the safe area instead of clearing a tall bar.
                     .mapSafeAreaPadding()
-                    .padding(start = 16.dp, bottom = 12.dp),
+                    .liftAboveToolbar(toolbarClearance, MapOrnamentLayout.ZOOM_ROW_BOTTOM_DP.toFloat())
+                    .padding(start = 16.dp, bottom = MapOrnamentLayout.ZOOM_ROW_BOTTOM_DP.dp),
                 horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -1757,7 +1762,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .mapSafeAreaPadding()
-                    .padding(start = 16.dp, bottom = 110.dp),
+                    .liftAboveToolbar(toolbarClearance, MapOrnamentLayout.ZOOM_STACK_BOTTOM_DP.toFloat())
+                    .padding(start = 16.dp, bottom = MapOrnamentLayout.ZOOM_STACK_BOTTOM_DP.dp),
                 verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
             ) {
                 mapControlButtons()
@@ -2185,44 +2191,6 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             onDismiss = { femaPaletteLatLng = null },
         )
 
-        if (drawingKind != null) {
-            DrawingOverlay(
-                kind = drawingKind!!,
-                pointCount = drawingPoints.size,
-                onUndo = {
-                    if (drawingPoints.isNotEmpty()) {
-                        drawingPoints = drawingPoints.dropLast(1)
-                    }
-                },
-                onCancel = {
-                    drawingKind = null
-                    drawingPoints = emptyList()
-                },
-                onFinish = {
-                    val minPts = when (drawingKind!!) {
-                        DrawingKind.LINE -> 2
-                        DrawingKind.POLYGON -> 3
-                        DrawingKind.CIRCLE -> 2
-                    }
-                    if (drawingPoints.size >= minPts) {
-                        app.drawingStore.add(
-                            Drawing(
-                                id = "draw-${System.currentTimeMillis()}",
-                                kind = drawingKind!!,
-                                points = drawingPoints.map { it.latitude to it.longitude },
-                            )
-                        )
-                        toast("Saved ${drawingKind!!.name.lowercase()}")
-                    } else {
-                        toast("Need at least $minPts points")
-                    }
-                    drawingKind = null
-                    drawingPoints = emptyList()
-                },
-                modifier = Modifier.align(Alignment.TopStart).mapSafeAreaPadding(),
-            )
-        }
-
         if (drawingPickerOpen) {
             DrawingKindPicker(
                 onPick = { kind ->
@@ -2255,32 +2223,100 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             )
         }
 
-        if (measurementActive) {
-            MeasurementOverlay(
-                points = measurementPoints,
-                onUndo = {
-                    if (measurementPoints.isNotEmpty()) {
-                        measurementPoints = measurementPoints.dropLast(1)
+        // The top-left corner under the status strip: the tool banners (Drawing, Measure, Range
+        // rings) and the compass. A banner takes the top of the corner and the compass sits under
+        // it, so one is never drawn on the other; with no banner the compass is where it always
+        // was. One column, so the layout does the stacking whatever height a banner has: a large
+        // font or a long range ring list wraps the banner onto more lines.
+        //
+        // Issue #96 — the compass floats here, shows the live bearing and snaps the map to north
+        // when tapped. The MapLibre built-in compass is at top-end (issue #81) and disappears when
+        // north-up; this one is always visible and provides the manual snap action.
+        val bannerShowing = drawingKind != null || measurementActive || rangeRingsActive
+        Column(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                // Measured from the safe area, like the ATAKStatusBar above it.
+                .mapSafeAreaPadding()
+                .padding(top = MapOrnamentLayout.TOP_CHROME_DP.dp),
+        ) {
+            if (drawingKind != null) {
+                DrawingOverlay(
+                    kind = drawingKind!!,
+                    pointCount = drawingPoints.size,
+                    onUndo = {
+                        if (drawingPoints.isNotEmpty()) {
+                            drawingPoints = drawingPoints.dropLast(1)
+                        }
+                    },
+                    onCancel = {
+                        drawingKind = null
+                        drawingPoints = emptyList()
+                    },
+                    onFinish = {
+                        val minPts = when (drawingKind!!) {
+                            DrawingKind.LINE -> 2
+                            DrawingKind.POLYGON -> 3
+                            DrawingKind.CIRCLE -> 2
+                        }
+                        if (drawingPoints.size >= minPts) {
+                            app.drawingStore.add(
+                                Drawing(
+                                    id = "draw-${System.currentTimeMillis()}",
+                                    kind = drawingKind!!,
+                                    points = drawingPoints.map { it.latitude to it.longitude },
+                                )
+                            )
+                            toast("Saved ${drawingKind!!.name.lowercase()}")
+                        } else {
+                            toast("Need at least $minPts points")
+                        }
+                        drawingKind = null
+                        drawingPoints = emptyList()
+                    },
+                )
+            }
+
+            if (measurementActive) {
+                MeasurementOverlay(
+                    points = measurementPoints,
+                    onUndo = {
+                        if (measurementPoints.isNotEmpty()) {
+                            measurementPoints = measurementPoints.dropLast(1)
+                        }
+                    },
+                    onClose = {
+                        measurementActive = false
+                        measurementPoints = emptyList()
+                    },
+                )
+            }
+
+            if (rangeRingsActive) {
+                RangeRingsOverlay(
+                    center = rangeRingCenter,
+                    distancesMeters = soy.engindearing.omnitak.mobile.data.rangebearing.RangeRings.DEFAULT_DISTANCES_M,
+                    onClear = { rangeRingCenter = null },
+                    onClose = {
+                        rangeRingsActive = false
+                        rangeRingCenter = null
+                    },
+                )
+            }
+
+            CompassOverlay(
+                bearingDeg = currentBearing,
+                onTapToNorth = {
+                    if (userPrefs.northUpLocked) {
+                        // Already locked — snap is automatic; just a no-op tap.
+                    } else {
+                        snapNorthTick++
                     }
                 },
-                onClose = {
-                    measurementActive = false
-                    measurementPoints = emptyList()
-                },
-                modifier = Modifier.align(Alignment.TopStart).mapSafeAreaPadding(),
-            )
-        }
-
-        if (rangeRingsActive) {
-            RangeRingsOverlay(
-                center = rangeRingCenter,
-                distancesMeters = soy.engindearing.omnitak.mobile.data.rangebearing.RangeRings.DEFAULT_DISTANCES_M,
-                onClear = { rangeRingCenter = null },
-                onClose = {
-                    rangeRingsActive = false
-                    rangeRingCenter = null
-                },
-                modifier = Modifier.align(Alignment.TopStart).mapSafeAreaPadding(),
+                modifier = Modifier.padding(
+                    start = 12.dp,
+                    top = MapOrnamentLayout.compassTopGapDp(bannerShowing).dp,
+                ),
             )
         }
 
@@ -2408,7 +2444,10 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
 
         SnackbarHost(
             hostState = snackbar,
-            modifier = Modifier.align(Alignment.BottomCenter).mapSafeAreaPadding(),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .mapSafeAreaPadding()
+                .liftAboveToolbar(toolbarClearance, 0f),
         )
     }
 }
@@ -2474,7 +2513,7 @@ private fun DrawingOverlay(
 ) {
     androidx.compose.foundation.layout.Row(
         modifier = modifier
-            .padding(top = 76.dp, start = 12.dp, end = 12.dp)
+            .padding(start = 12.dp, end = 12.dp)
             .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
             .background(TacticalBackground.copy(alpha = 0.9f))
             .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -2521,7 +2560,7 @@ private fun MeasurementOverlay(
 
     androidx.compose.foundation.layout.Row(
         modifier = modifier
-            .padding(top = 76.dp, start = 12.dp, end = 12.dp)
+            .padding(start = 12.dp, end = 12.dp)
             .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
             .background(TacticalBackground.copy(alpha = 0.9f))
             .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -2574,7 +2613,7 @@ private fun RangeRingsOverlay(
 ) {
     androidx.compose.foundation.layout.Row(
         modifier = modifier
-            .padding(top = 76.dp, start = 12.dp, end = 12.dp)
+            .padding(start = 12.dp, end = 12.dp)
             .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
             .background(TacticalBackground.copy(alpha = 0.9f))
             .padding(horizontal = 12.dp, vertical = 8.dp),

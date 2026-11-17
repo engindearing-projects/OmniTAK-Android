@@ -63,25 +63,10 @@ class MapOrnamentLayoutTest {
         assertEquals("the bar's height is added once", 63, gesture.bottom - none.bottom)
     }
 
-    @Test fun the_attribution_button_is_clear_of_the_floating_toolbar() {
-        // The toolbar overlay stands on the navigation bar: 86 dp of pill and its padding, so 96
-        // with room for a larger font. It is wider than the screen minus 28 dp, so the only way
-        // out from under it is up.
-        val portrait = MapOrnamentLayout.attributionMarginsPx(EdgePx(), 1f, landscape = false)
-        val landscape = MapOrnamentLayout.attributionMarginsPx(EdgePx(), 1f, landscape = true)
-        assertTrue("above the pill in portrait", portrait.bottom >= MapOrnamentLayout.FLOATING_TOOLBAR_PORTRAIT_DP)
-        assertTrue("above the compact pill in landscape", landscape.bottom >= MapOrnamentLayout.FLOATING_TOOLBAR_LANDSCAPE_DP)
-    }
-
     @Test fun the_attribution_button_is_clear_of_the_landscape_control_row() {
         // The zoom and centre buttons lie along the bottom edge in landscape: 12 dp up, 48 dp tall.
         val m = MapOrnamentLayout.attributionMarginsPx(EdgePx(), 1f, landscape = true)
         assertTrue(m.bottom >= 12 + 48)
-    }
-
-    @Test fun landscape_needs_less_lift_than_portrait() {
-        // The landscape toolbar is a compact row, so the button does not float as high.
-        assertTrue(MapOrnamentLayout.attributionClearanceDp(landscape = true) < MapOrnamentLayout.attributionClearanceDp(landscape = false))
     }
 
     @Test fun the_attribution_button_stays_to_the_right_of_the_zoom_buttons() {

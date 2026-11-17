@@ -7,6 +7,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.State
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -146,6 +148,10 @@ fun TacticalMap(
      *  then leaves the camera where the operator put it (see [RetainedMapRules.firstFixMove];
      *  Follow is read from [followMeActive]). */
     mapToolActive: Boolean = false,
+    /** How many dp above the safe area's bottom edge the floating toolbar needs kept free, animated
+     *  (see [rememberToolbarClearance]); null when there is no toolbar. MapLibre's attribution button
+     *  sits above it, and comes back down when the toolbar hides. */
+    toolbarClearanceDp: State<Float>? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -501,18 +507,32 @@ fun TacticalMap(
     val screenDensity = LocalDensity.current.density
     val landscape = LocalConfiguration.current.orientation ==
         android.content.res.Configuration.ORIENTATION_LANDSCAPE
-    DisposableEffect(mapView, safeArea, screenDensity, landscape) {
+    DisposableEffect(mapView, safeArea, screenDensity) {
         if (RetainedMapView.isHeldBy(holder)) {
             mapView.getMapAsync { map ->
                 val compass = MapOrnamentLayout.compassMarginsPx(safeArea, screenDensity)
-                val attribution = MapOrnamentLayout.attributionMarginsPx(safeArea, screenDensity, landscape)
                 map.uiSettings.setCompassMargins(compass.left, compass.top, compass.right, compass.bottom)
-                map.uiSettings.setAttributionMargins(
-                    attribution.left, attribution.top, attribution.right, attribution.bottom,
-                )
             }
         }
         onDispose { }
+    }
+    // The attribution button rides above the floating toolbar and its tip while they show, and
+    // comes back down when they hide: the same distance and the same ~150 ms as the Compose
+    // controls beside it. The animated value is read here, outside composition, so the map does
+    // not recompose for it. The margin is set again too when the safe area or the orientation
+    // changes (the first value of the flow).
+    val currentClearance = rememberUpdatedState(toolbarClearanceDp)
+    LaunchedEffect(mapView, safeArea, screenDensity, landscape) {
+        snapshotFlow { currentClearance.value?.value ?: 0f }.collect { clearanceDp ->
+            if (RetainedMapView.isHeldBy(holder)) {
+                mapView.getMapAsync { map ->
+                    val attribution = MapOrnamentLayout.attributionMarginsPx(safeArea, screenDensity, landscape, clearanceDp)
+                    map.uiSettings.setAttributionMargins(
+                        attribution.left, attribution.top, attribution.right, attribution.bottom,
+                    )
+                }
+            }
+        }
     }
 
     // Flip the location layer on when permission is granted after the
