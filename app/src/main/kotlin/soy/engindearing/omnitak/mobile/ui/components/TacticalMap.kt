@@ -30,6 +30,7 @@ import org.maplibre.android.location.LocationComponentActivationOptions
 import org.maplibre.android.location.LocationComponentOptions
 import org.maplibre.android.location.modes.CameraMode
 import soy.engindearing.omnitak.mobile.R
+import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import soy.engindearing.omnitak.mobile.data.CoTEvent
@@ -141,6 +142,10 @@ fun TacticalMap(
     onStyleReady: ((org.maplibre.android.maps.MapLibreMap, Style) -> Unit)? = null,
     /** #82 — called when the operator taps the self-marker. Opens reposition sheet. */
     onSelfMarkerTap: (() -> Unit)? = null,
+    /** A drawing, measure, range-ring or lasso tool is active. The first fix of a first run
+     *  then leaves the camera where the operator put it (see [RetainedMapRules.firstFixMove];
+     *  Follow is read from [followMeActive]). */
+    mapToolActive: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -167,6 +172,7 @@ fun TacticalMap(
     val currentTerrain3d by rememberUpdatedState(terrain3d)
     val currentSelfFix by rememberUpdatedState(selfFix)
     val currentFollowMe by rememberUpdatedState(followMeActive)
+    val currentMapToolActive by rememberUpdatedState(mapToolActive)
     val currentUseMilStd by rememberUpdatedState(useMilStdSelfSymbol)
     val currentTeamColor by rememberUpdatedState(selfTeamColor)
     val currentSelfEchelon by rememberUpdatedState(selfEchelon)
@@ -280,6 +286,15 @@ fun TacticalMap(
                     setAttributionDialogManager(HostActivityAttributionDialogManager(ctx, map))
                     // The compass and attribution margins are set below, from the
                     // live safe area: they follow rotation and the navigation mode.
+                }
+                // A drag, a pinch, a fling or a turn by hand: the operator has taken the
+                // map, and the first fix of a first run must not move it from under them.
+                // Registered once, with the view, so it writes to the state that lives on
+                // the view and not to anything a composition owns.
+                map.addOnCameraMoveStartedListener { reason ->
+                    if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) {
+                        RetainedMapView.firstFix.operatorMovedCamera()
+                    }
                 }
                 // Persist camera state on idle so bottom-nav switches
                 // (Map → Settings → Map etc.) don't reset the operator's
@@ -587,17 +602,14 @@ fun TacticalMap(
         onDispose { }
     }
 
-    // Each time [recenterTrigger] changes, briefly flip camera to
-    // TRACKING to pan to the user, then restore NONE so the user can
-    // still pan freely.
-    //
-    // Two things send the map to the operator's position: a press on "Center
-    // on me", and the composition that builds the view opening the map (with
-    // location on and a fix known, the first map of a process has always
-    // opened there, marker shown or hidden). Composing the map onto the view
-    // that already exists is not one of them (#7). The marker branch used to
-    // act on the value it was composed with there too, so every return to the
-    // map tab threw the operator's view away for their own position at zoom 15.
+    // Three things send the map to the operator's position, each as ONE camera move that
+    // pans and, from far out, zooms in (see [goToOperator]): a press on "Center on me",
+    // the composition that builds the view opening the map (with location on and a fix
+    // known, the first map of a process has always opened there, marker shown or hidden),
+    // and the first fix of a first run (the effect after this one). Composing the map
+    // onto the view that already exists is not one of them (#7). The marker branch used to
+    // act on the value it was composed with there too, so every return to the map tab threw
+    // the operator's view away for their own position at zoom 15.
     val currentCameraFollowsFix by rememberUpdatedState(cameraFollowsFix)
     DisposableEffect(mapView, recenterTrigger) {
         val reason = RetainedMapRules.recenterReason(recenterTrigger, initialRecenterTrigger, builtHere[0])
@@ -613,22 +625,17 @@ fun TacticalMap(
             mapView.getMapAsync { map ->
                 map.getStyle {
                     if (wanted) {
-                        val tracking = currentPuckActive && map.withReadyLocationComponent("open on own position") { component ->
-                            component.cameraMode = CameraMode.TRACKING
-                            component.zoomWhileTracking(15.0)
-                        }
-                        // Marker hidden: no location component to track with.
-                        // Go to the fix at the zoom the map already has, which
-                        // is what the tracking transition does.
-                        if (!tracking && currentCameraFollowsFix) {
-                            bindings.selfFix?.let { fix ->
-                                map.animateCamera(CameraUpdateFactory.newLatLng(LatLng(fix.lat, fix.lon)), 750)
-                            }
-                        }
+                        val fix = bindings.selfFix
+                        val went = (currentPuckActive || currentCameraFollowsFix) &&
+                            goToOperator(map, fix, currentPuckActive)
+                        // Only a live position counts as having arrived: a fix kept from the
+                        // last session is where the operator was, and the first live fix of
+                        // this one still moves the map (the effect below).
+                        if (went && fix != null && fix.isLive()) RetainedMapView.firstFix.openedOnOperator()
                     }
                 }
             }
-        } else if (pressed && puckActive) {
+        } else if (pressed && (puckActive || cameraFollowsFix)) {
             mapView.getMapAsync { map ->
                 // getStyle runs this now when a style is loaded, which is the
                 // normal case. With no style (none set yet, or the last one
@@ -636,24 +643,44 @@ fun TacticalMap(
                 // the location component has been moved onto it, so the press
                 // is not lost and cannot reach a component with no style.
                 map.getStyle {
-                    if (wanted) {
-                        map.withReadyLocationComponent("recenter") { component ->
-                            component.cameraMode = CameraMode.TRACKING
-                            component.zoomWhileTracking(15.0)
-                        }
+                    if (wanted && goToOperator(map, bindings.selfFix, currentPuckActive)) {
+                        // Pressed: the map has been sent to the operator, so the first fix of a
+                        // first run has nothing left to do.
+                        RetainedMapView.firstFix.movedToOperator()
                     }
                 }
             }
-        } else if (pressed) {
-            // #210 - marker hidden, so there is no LocationComponent to track
-            // with: pan and zoom straight to the raw fix.
-            val fix = selfFix
-            if (cameraFollowsFix && fix != null) {
-                mapView.getMapAsync { map ->
-                    map.animateCamera(
-                        CameraUpdateFactory.newLatLngZoom(LatLng(fix.lat, fix.lon), 15.0),
-                        600,
-                    )
+        }
+        onDispose { wanted = false }
+    }
+
+    // The first fix of a first run. On a first run the map is composed before the location
+    // permission is answered and before the first fix, so it opens on the world and stays
+    // there while the position card already shows where the operator is. The first live fix
+    // that arrives afterwards moves the camera to the operator, once per process, and only
+    // for a map nobody has taken over: [RetainedMapRules.firstFixMove] says when. A map that
+    // is in use at that moment (a tool is active, or Follow is on) is left alone for good.
+    //
+    // What it needs to remember lives on the retained view ([RetainedMapView.firstFix]),
+    // so a tab switch and an Activity rebuild neither repeat it nor forget it. A fix kept
+    // from the last session (restored) or older than 30 s is not the operator's position now,
+    // and does not count. The wait for the map and the style keeps it in order after the
+    // "open on own position" decision above, which was queued first.
+    val freshFix = selfFix?.isLive() == true
+    DisposableEffect(mapView, freshFix, puckActive, cameraFollowsFix) {
+        var wanted = true
+        if (freshFix && (puckActive || cameraFollowsFix)) {
+            mapView.getMapAsync { map ->
+                map.getStyle {
+                    val state = RetainedMapView.firstFix
+                    if (wanted && RetainedMapView.isHeldBy(holder)) {
+                        val action = state.onFreshFix(toolActive = currentMapToolActive || currentFollowMe)
+                        if (action == FirstFixState.Action.MOVE &&
+                            goToOperator(map, bindings.selfFix, currentPuckActive)
+                        ) {
+                            state.movedToOperator()
+                        }
+                    }
                 }
             }
         }
@@ -664,6 +691,7 @@ fun TacticalMap(
     // on tap, and we animate one zoom step per tick.
     DisposableEffect(mapView, zoomInTrigger) {
         if (zoomInTrigger > 0) {
+            RetainedMapView.firstFix.operatorMovedCamera()
             mapView.getMapAsync { map ->
                 map.animateCamera(CameraUpdateFactory.zoomIn(), 250)
             }
@@ -672,6 +700,7 @@ fun TacticalMap(
     }
     DisposableEffect(mapView, zoomOutTrigger) {
         if (zoomOutTrigger > 0) {
+            RetainedMapView.firstFix.operatorMovedCamera()
             mapView.getMapAsync { map ->
                 map.animateCamera(CameraUpdateFactory.zoomOut(), 250)
             }
@@ -704,6 +733,7 @@ fun TacticalMap(
     // Issue #95/#96 — manual snap-to-north: compass tap when lock is off.
     DisposableEffect(mapView, snapNorthTrigger) {
         if (snapNorthTrigger > 0) {
+            RetainedMapView.firstFix.operatorMovedCamera()
             mapView.getMapAsync { map ->
                 val cur = map.cameraPosition
                 if (kotlin.math.abs(cur.bearing) > 0.5) {
@@ -830,6 +860,7 @@ fun TacticalMap(
     DisposableEffect(mapView, panTargetTick) {
         val target = panTarget
         if (panTargetTick > 0 && target != null) {
+            RetainedMapView.firstFix.operatorMovedCamera()
             mapView.getMapAsync { map ->
                 map.withReadyLocationComponent("pan") { it.cameraMode = CameraMode.NONE }
                 map.animateCamera(
@@ -1052,6 +1083,51 @@ fun TacticalMap(
             }
             .padding(bottom = if (resizeNudge) 1.dp else 0.dp),
     )
+}
+
+/** How long the camera takes to go to the operator. MapLibre's own default for a camera mode change. */
+private const val OPERATOR_MOVE_MS = 750L
+
+/** This fix is the operator's position now ([RetainedMapRules.isLiveFix]). */
+private fun SelfFix.isLive(): Boolean =
+    RetainedMapRules.isLiveFix(restored, timeMs, System.currentTimeMillis())
+
+/**
+ * Send the camera to the operator in ONE move: the pan and, when the map is zoomed out past
+ * [RetainedMapRules.OPERATOR_FAR_OUT_ZOOM], the zoom in on them as well
+ * ([RetainedMapRules.zoomForOperator]; at 12 or closer the operator's zoom is kept). False, and
+ * nothing moves, when there is no [fix] to go to.
+ *
+ * With the puck on, the move is the LocationComponent's own camera transition to TRACKING, which
+ * also keeps the camera on the operator until they take the map. The zoom goes in that same
+ * call, `setCameraMode(mode, duration, zoom, bearing, tilt, listener)`. It used to be asked
+ * for right after, with `zoomWhileTracking(15.0)`, and MapLibre ignores that call while the
+ * camera is still turning to the location ("zoomWhileTracking method call is ignored because
+ * the camera mode is transitioning", seen in logcat): the pan happened and the zoom did not.
+ * The camera turns to the location by animating for any move up to 50,000 px at the current
+ * zoom (MapLibre jumps instead beyond that), so from the world view that is every press.
+ *
+ * `setCameraMode` does nothing when the mode is already engaged, so a TRACKING left from an
+ * earlier press is dropped first, and the fix is handed to the component so it has a location
+ * to turn to. Without the puck (marker hidden, or the component not ready) there is no
+ * component to track with and the same move is a plain camera animation to the fix.
+ */
+private fun goToOperator(map: MapLibreMap, fix: SelfFix?, viaPuck: Boolean): Boolean {
+    if (fix == null) return false
+    val zoom = RetainedMapRules.zoomForOperator(map.cameraPosition.zoom)
+    val viaComponent = viaPuck && map.withReadyLocationComponent("go to operator") { component ->
+        component.forceLocationUpdate(fix.toLocation())
+        component.cameraMode = CameraMode.NONE
+        component.setCameraMode(CameraMode.TRACKING, OPERATOR_MOVE_MS, zoom, null, null, null)
+    }
+    if (!viaComponent) {
+        val target = LatLng(fix.lat, fix.lon)
+        map.animateCamera(
+            if (zoom != null) CameraUpdateFactory.newLatLngZoom(target, zoom) else CameraUpdateFactory.newLatLng(target),
+            OPERATOR_MOVE_MS.toInt(),
+        )
+    }
+    return true
 }
 
 /** How long the map stays 1 dp short while it is nudged. Long enough for the render

@@ -183,6 +183,153 @@ class RetainedMapViewTest {
         }
     }
 
+    // MARK: how far in "Center on me" goes
+    //
+    // "Center on me" and opening the map pan to the operator and, from far out, zoom in on them
+    // in the same move. Through 0.45.0 the zoom was asked for after the pan had started, and
+    // MapLibre ignores a zoom while the camera is still turning to the location: the map
+    // arrived at the operator at the world zoom.
+
+    @Test fun from_far_out_the_camera_goes_in_to_street_level() {
+        assertEquals("the world view of a first run", 15.0, RetainedMapRules.zoomForOperator(2.0)!!, 0.0)
+        assertEquals(15.0, RetainedMapRules.zoomForOperator(0.0)!!, 0.0)
+        assertEquals("just short of the limit", 15.0, RetainedMapRules.zoomForOperator(11.99)!!, 0.0)
+    }
+
+    @Test fun at_zoom_12_or_closer_the_operators_own_zoom_is_kept() {
+        assertNull("exactly 12", RetainedMapRules.zoomForOperator(12.0))
+        assertNull(RetainedMapRules.zoomForOperator(15.0))
+        assertNull("zoomed in on a building", RetainedMapRules.zoomForOperator(17.0))
+        assertNull(RetainedMapRules.zoomForOperator(22.0))
+    }
+
+    @Test fun the_camera_never_goes_out_to_find_the_operator() {
+        // The hidden-marker branch used to send every press to zoom 15, so a press at zoom 17
+        // zoomed out. "Keep the zoom" must never turn into a smaller one.
+        for (zoom in listOf(0.0, 2.0, 11.99, 12.0, 14.9, 15.0, 17.0, 20.0)) {
+            val target = RetainedMapRules.zoomForOperator(zoom)
+            assertTrue("from zoom $zoom", target == null || target > zoom)
+        }
+    }
+
+    @Test fun an_unknown_zoom_is_left_alone() {
+        assertNull(RetainedMapRules.zoomForOperator(Double.NaN))
+    }
+
+    // MARK: the first fix of a first run
+    //
+    // On a first run the map is composed before the location permission is answered and before
+    // the first fix, so it opens on the world and stays there while the position card already
+    // shows where the operator is. The first fix that arrives moves the camera there once.
+
+    @Test fun the_first_fix_moves_a_map_nobody_has_touched() {
+        assertTrue(
+            RetainedMapRules.firstFixMove(
+                wentToOperatorAtOpen = false, userMovedCamera = false, toolActive = false, alreadyDone = false,
+            ),
+        )
+    }
+
+    @Test fun any_one_reason_is_enough_to_leave_the_camera_alone() {
+        // The map already opened on the operator.
+        assertFalse(RetainedMapRules.firstFixMove(true, false, false, false))
+        // The operator has already moved the map by hand.
+        assertFalse(RetainedMapRules.firstFixMove(false, true, false, false))
+        // A drawing, measure, range ring or lasso tool is active, or Follow is on.
+        assertFalse(RetainedMapRules.firstFixMove(false, false, true, false))
+        // It has already happened once.
+        assertFalse(RetainedMapRules.firstFixMove(false, false, false, true))
+    }
+
+    @Test fun every_combination_of_the_four_inputs() {
+        for (bits in 0 until 16) {
+            val went = bits and 1 != 0
+            val moved = bits and 2 != 0
+            val tool = bits and 4 != 0
+            val done = bits and 8 != 0
+            assertEquals(
+                "went=$went moved=$moved tool=$tool done=$done",
+                bits == 0,
+                RetainedMapRules.firstFixMove(went, moved, tool, done),
+            )
+        }
+    }
+
+    @Test fun a_fresh_process_is_waiting_for_its_first_fix() {
+        val state = FirstFixState()
+        assertTrue(state.shouldMoveOnFix(toolActive = false))
+    }
+
+    @Test fun it_happens_once_per_process() {
+        val state = FirstFixState()
+        assertTrue(state.shouldMoveOnFix(toolActive = false))
+        state.movedToOperator()
+        assertFalse("the next fix leaves the camera where it is", state.shouldMoveOnFix(toolActive = false))
+        assertFalse(state.shouldMoveOnFix(toolActive = false))
+    }
+
+    @Test fun a_map_that_opened_on_the_operator_does_not_move_again() {
+        val state = FirstFixState()
+        state.openedOnOperator()
+        assertFalse(state.shouldMoveOnFix(toolActive = false))
+    }
+
+    @Test fun the_operator_moving_the_map_by_hand_ends_it_for_the_session() {
+        val state = FirstFixState()
+        state.operatorMovedCamera()
+        assertFalse(state.shouldMoveOnFix(toolActive = false))
+        // And it stays ended: a later fix, a tab switch or an Activity rebuild do not bring it back.
+        assertFalse(state.shouldMoveOnFix(toolActive = false))
+    }
+
+    @Test fun a_fresh_fix_on_an_untouched_map_means_move() {
+        val state = FirstFixState()
+        assertEquals(FirstFixState.Action.MOVE, state.onFreshFix(toolActive = false))
+    }
+
+    @Test fun a_fix_after_the_work_is_settled_means_nothing() {
+        val moved = FirstFixState().apply { movedToOperator() }
+        assertEquals(FirstFixState.Action.NOTHING, moved.onFreshFix(toolActive = false))
+        val opened = FirstFixState().apply { openedOnOperator() }
+        assertEquals(FirstFixState.Action.NOTHING, opened.onFreshFix(toolActive = false))
+        val taken = FirstFixState().apply { operatorMovedCamera() }
+        assertEquals(FirstFixState.Action.NOTHING, taken.onFreshFix(toolActive = false))
+        // An active tool changes nothing when there was nothing to do.
+        assertEquals(FirstFixState.Action.NOTHING, moved.onFreshFix(toolActive = true))
+    }
+
+    @Test fun a_map_already_in_use_when_the_first_fix_arrives_is_left_alone_for_the_session() {
+        // Measuring, drawing, a range ring, the lasso, or Follow, when the fix arrives: the
+        // camera does not move under the operator, and it does not move later either, when the
+        // tool is closed or the map tab is opened again. Waiting for the tool to end and then
+        // moving would be the old fault in a new place: the map moving by itself.
+        val state = FirstFixState()
+        assertEquals(FirstFixState.Action.LEAVE, state.onFreshFix(toolActive = true))
+        assertEquals("the tool is closed", FirstFixState.Action.NOTHING, state.onFreshFix(toolActive = false))
+        assertFalse(state.shouldMoveOnFix(toolActive = false))
+    }
+
+    @Test fun pressing_center_on_me_uses_the_move_up() {
+        val state = FirstFixState()
+        state.movedToOperator()
+        assertFalse(state.shouldMoveOnFix(toolActive = false))
+    }
+
+    @Test fun only_a_live_fix_counts_as_the_operator_having_arrived() {
+        val now = 1_000_000L
+        assertTrue("taken a second ago", RetainedMapRules.isLiveFix(restored = false, fixTimeMs = now - 1_000, nowMs = now))
+        assertTrue("right at the 30 s limit", RetainedMapRules.isLiveFix(restored = false, fixTimeMs = now - 30_000, nowMs = now))
+        assertFalse("a minute old: where the operator was", RetainedMapRules.isLiveFix(restored = false, fixTimeMs = now - 60_000, nowMs = now))
+        assertFalse("kept from the last session, however recent its stamp", RetainedMapRules.isLiveFix(restored = true, fixTimeMs = now, nowMs = now))
+        assertFalse("no time on it", RetainedMapRules.isLiveFix(restored = false, fixTimeMs = 0L, nowMs = now))
+    }
+
+    @Test fun the_state_is_one_object_for_the_whole_process() {
+        // It lives on the retained view, not in a composition: a tab switch or an Activity
+        // rebuild composes the map again and must find what the last one left.
+        assertSame(RetainedMapView.firstFix, RetainedMapView.firstFix)
+    }
+
     // MARK: bindings
 
     @Test fun clearing_the_callbacks_keeps_what_the_map_has_to_redraw() {
