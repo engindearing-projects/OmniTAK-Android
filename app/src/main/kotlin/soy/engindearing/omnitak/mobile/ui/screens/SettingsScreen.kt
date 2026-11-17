@@ -66,6 +66,7 @@ import soy.engindearing.omnitak.mobile.data.ContactMaxAge
 import soy.engindearing.omnitak.mobile.data.CoordFormat
 import soy.engindearing.omnitak.mobile.data.Echelon
 import soy.engindearing.omnitak.mobile.data.DistanceUnit
+import soy.engindearing.omnitak.mobile.data.LabelSize
 import soy.engindearing.omnitak.mobile.data.MapProvider
 import soy.engindearing.omnitak.mobile.data.UserPrefs
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
@@ -786,6 +787,25 @@ fun SettingsScreen(
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                 style = MaterialTheme.typography.bodySmall,
             )
+            // #213: Label size: names under markers and the position box on the map
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Label size",
+                    color = MaterialTheme.colorScheme.onBackground,
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text(
+                    "Names under markers and the position box on the map. " +
+                        "For all other text, use your phone's font size setting.",
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                SegmentedRow(
+                    options = LabelSize.CHOICES.map { it to "$it%" },
+                    selected = prefs.labelScalePercent,
+                    onSelect = { v -> mutate { it.copy(labelScalePercent = v) } },
+                )
+            }
 
             // About — the route was registered in AppNav since 0.1 but
             // nothing navigated to it after the bottom-bar rework dropped

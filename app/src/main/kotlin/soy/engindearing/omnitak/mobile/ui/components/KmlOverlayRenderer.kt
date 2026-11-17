@@ -122,26 +122,30 @@ private fun buildPushpinBitmap(): Bitmap {
  * unique name, cached by KmlMarkerRenderer. Typeface.DEFAULT_BOLD renders CJK
  * (Gavin's names) from the system font.
  */
-private fun buildLabeledPin(name: String): Bitmap {
+private fun buildLabeledPin(name: String, labelFactor: Float = 1f): Bitmap {
     val pin = buildPushpinBitmap()
     if (name.isBlank()) return pin
     val text = if (name.length > 28) name.take(27) + "…" else name
+    // #213: the name follows the label size; the pushpin keeps its size.
+    val g = MapLabelGeometry.forKmlPin(labelFactor)
     val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE; textSize = 30f; textAlign = Paint.Align.CENTER
+        color = Color.WHITE; textSize = g.textSize; textAlign = Paint.Align.CENTER
         typeface = Typeface.DEFAULT_BOLD
     }
     val halo = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#CC000000"); textSize = 30f; textAlign = Paint.Align.CENTER
-        typeface = Typeface.DEFAULT_BOLD; style = Paint.Style.STROKE; strokeWidth = 6f
+        color = Color.parseColor("#CC000000"); textSize = g.textSize; textAlign = Paint.Align.CENTER
+        typeface = Typeface.DEFAULT_BOLD; style = Paint.Style.STROKE; strokeWidth = g.haloStroke
     }
-    val pad = 12f
+    val pad = g.padding
     val textW = fill.measureText(text)
     val w = maxOf(pin.width.toFloat(), textW + pad * 2).toInt()
-    val labelH = 46
-    val bmp = Bitmap.createBitmap(w, pin.height + labelH, Bitmap.Config.ARGB_8888)
+    val labelH = g.band.toInt()
+    // #213: transparent rows that keep the pushpin where it is at every label size:
+    // MapLibre anchors the bitmap at its centre, so a taller strip would move the pin.
+    val bmp = Bitmap.createBitmap(w, g.topPad + pin.height + labelH + g.bottomPad, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bmp)
-    canvas.drawBitmap(pin, (w - pin.width) / 2f, 0f, null)
-    val ty = pin.height + 34f
+    canvas.drawBitmap(pin, (w - pin.width) / 2f, g.topPad.toFloat(), null)
+    val ty = g.topPad + pin.height + g.baseline
     canvas.drawText(text, w / 2f, ty, halo)
     canvas.drawText(text, w / 2f, ty, fill)
     return bmp
@@ -338,6 +342,26 @@ object KmlMarkerRenderer {
     private var pinIcon: Icon? = null
     private val clusterIconCache = mutableMapOf<Int, Icon>()
 
+    // #213: the phone's font size x the Label size setting, set by MapScreen.
+    // Held here, like ContactMarkerRenderer's, so a re-render from anywhere uses it.
+    private var labelFactor: Float = 1f
+
+    /** #213: the cache key for a labeled pin: the name AND the size it was drawn
+     *  at, so a pin cached at one size is not reused after the size changes. */
+    internal fun labelKey(name: String, labelFactor: Float): String = "$labelFactor|$name"
+
+    /**
+     * #213: set the label size multiplier ([soy.engindearing.omnitak.mobile.data.LabelSize.factor])
+     * and redraw the pins at once if it changed. Safe to call before the map is
+     * bound: the next [render] uses it.
+     */
+    fun setLabelFactor(factor: Float) {
+        if (factor == labelFactor) return
+        labelFactor = factor
+        labelIconCache.clear()
+        render()
+    }
+
     private var boundMap: MapLibreMap? = null
     private var ctx: Context? = null
     private var overlays: List<KmlVectorOverlay> = emptyList()
@@ -386,6 +410,7 @@ object KmlMarkerRenderer {
         val bounds = runCatching { proj.visibleRegion.latLngBounds }.getOrNull() ?: return
         val showLabels = map.cameraPosition.zoom >= LABEL_MIN_ZOOM
         val factory = IconFactory.getInstance(context)
+        val factor = labelFactor
         var budget = MAX_MARKERS
 
         for (overlay in overlays) {
@@ -406,7 +431,9 @@ object KmlMarkerRenderer {
                 val marker = if (cell.size == 1) {
                     val (lat, lon, name) = cell[0]
                     val icon = if (showLabels && name.isNotBlank())
-                        labelIconCache.getOrPut(name) { factory.fromBitmap(buildLabeledPin(name)) }
+                        labelIconCache.getOrPut(labelKey(name, factor)) {
+                            factory.fromBitmap(buildLabeledPin(name, factor))
+                        }
                     else (pinIcon ?: factory.fromBitmap(buildPushpinBitmap()).also { pinIcon = it })
                     runCatching {
                         map.addMarker(MarkerOptions().position(LatLng(lat, lon)).title(name).icon(icon))
