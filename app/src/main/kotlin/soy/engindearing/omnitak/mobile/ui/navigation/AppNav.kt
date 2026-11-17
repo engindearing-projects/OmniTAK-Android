@@ -11,6 +11,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -24,15 +27,20 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
+import androidx.navigation.NamedNavArgument
+import androidx.navigation.NavBackStackEntry
+import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -322,41 +330,49 @@ fun AppNav() {
         },
     ) { inner: PaddingValues ->
         Box(Modifier.fillMaxSize()) {
+        // The Scaffold's content padding: the system bars on every side, the bottom bar's
+        // height at the bottom. It belongs to the routes inside the Scaffold, not to the NavHost
+        // around them, because the map route is not one of them: it fills the whole window,
+        // under both system bars, and lays out its own controls inside the safe area.
+        // (Switching the Scaffold's insets off while the map shows would change the padding of
+        // the screen that is fading out as well, and it would jump.) Read through a State so
+        // the graph below does not capture a value that changes with the bottom bar.
+        val screenPadding = rememberUpdatedState(inner)
         NavHost(
             navController = nav,
             startDestination = "map",
-            modifier = Modifier.padding(inner),
         ) {
             composable("map") {
                 MapScreen(onOpenTab = { route -> navigateTo(route) })
             }
-            composable("servers") {
+            paddedComposable("servers", screenPadding) {
                 ServersScreen(
                     onAdd = { nav.navigate("servers/add") },
                     onQuickConnect = { nav.navigate("servers/enroll") },
                     onScanQr = { nav.navigate("servers/scan") },
                 )
             }
-            composable("servers/add") {
+            paddedComposable("servers/add", screenPadding) {
                 AddServerScreen(onDone = { nav.popBackStack() })
             }
-            composable("servers/enroll") {
+            paddedComposable("servers/enroll", screenPadding) {
                 EnrollServerScreen(onDone = { nav.popBackStack() })
             }
-            composable("servers/scan") {
+            paddedComposable("servers/scan", screenPadding) {
                 soy.engindearing.omnitak.mobile.ui.screens.ServerEnrollScanRoute(
                     onDone = { nav.popBackStack() },
                 )
             }
-            composable("uas") {
+            paddedComposable("uas", screenPadding) {
                 UASScreen(onDone = { nav.popBackStack() })
             }
-            composable("onvif") {
+            paddedComposable("onvif", screenPadding) {
                 soy.engindearing.omnitak.mobile.ui.screens.OnvifCameraScreen(onDone = { nav.popBackStack() })
             }
-            composable("chat") { ChatScreen() }
-            composable(
+            paddedComposable("chat", screenPadding) { ChatScreen() }
+            paddedComposable(
                 route = "chat?convoId={convoId}",
+                padding = screenPadding,
                 arguments = listOf(
                     androidx.navigation.navArgument("convoId") {
                         type = androidx.navigation.NavType.StringType
@@ -367,7 +383,7 @@ fun AppNav() {
             ) { backStackEntry ->
                 ChatScreen(initialConversationId = backStackEntry.arguments?.getString("convoId"))
             }
-            composable("mesh") {
+            paddedComposable("mesh", screenPadding) {
                 MeshtasticScreen(
                     onOpenTopology = { nav.navigate("mesh_topology") },
                     onOpenDeviceSettings = { nav.navigate("mesh/device-settings") },
@@ -381,21 +397,21 @@ fun AppNav() {
                     },
                 )
             }
-            composable("mesh_topology") {
+            paddedComposable("mesh_topology", screenPadding) {
                 MeshTopologyScreen(onBack = { nav.popBackStack() })
             }
-            composable("mesh/device-settings") {
+            paddedComposable("mesh/device-settings", screenPadding) {
                 MeshDeviceSettingsScreen(onDone = { nav.popBackStack() })
             }
-            composable("mesh/channels") {
+            paddedComposable("mesh/channels", screenPadding) {
                 soy.engindearing.omnitak.mobile.ui.screens.MeshChannelShareScreen(
                     onBack = { nav.popBackStack() },
                 )
             }
-            composable("missionsync") {
+            paddedComposable("missionsync", screenPadding) {
                 soy.engindearing.omnitak.mobile.ui.screens.MissionSyncScreen(onBack = { nav.popBackStack() })
             }
-            composable("settings") {
+            paddedComposable("settings", screenPadding) {
                 SettingsScreen(
                     onOpenAbout = { nav.navigate("about") },
                     onOpenDiagnostics = { nav.navigate("settings/diagnostics") },
@@ -404,15 +420,15 @@ fun AppNav() {
                     onOpenProfiles = { nav.navigate("settings/profiles") },
                 )
             }
-            composable("settings/profiles") {
+            paddedComposable("settings/profiles", screenPadding) {
                 ProfilesScreen(onBack = { nav.popBackStack() })
             }
-            composable("about") { AboutScreen() }
-            composable("settings/diagnostics") {
+            paddedComposable("about", screenPadding) { AboutScreen() }
+            paddedComposable("settings/diagnostics", screenPadding) {
                 soy.engindearing.omnitak.mobile.ui.screens.DiagnosticsLogScreen(onBack = { nav.popBackStack() })
             }
             // Top-level Plugins list (reads from PluginRegistry).
-            composable("plugins") {
+            paddedComposable("plugins", screenPadding) {
                 soy.engindearing.omnitak.mobile.ui.screens.PluginsListScreen(
                     onBack = { nav.popBackStack() },
                     onOpenPlugin = { pluginId -> nav.navigate("settings/plugin/$pluginId") },
@@ -420,8 +436,9 @@ fun AppNav() {
             }
             // Per-plugin detail page (enable toggle + settingsContent), reached
             // from the Settings Plugins row or the Plugins list.
-            composable(
+            paddedComposable(
                 route = "settings/plugin/{pluginId}",
+                padding = screenPadding,
                 arguments = listOf(
                     androidx.navigation.navArgument("pluginId") {
                         type = androidx.navigation.NavType.StringType
@@ -461,6 +478,10 @@ fun AppNav() {
                 Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
+                    // Above the navigation bar. With three-button navigation the bar fills
+                    // the bottom 48 dp, more than this strip is tall, so at the very edge
+                    // it could not be tapped.
+                    .windowInsetsPadding(WindowInsets.navigationBars)
                     .height(40.dp)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
@@ -569,6 +590,22 @@ fun AppNav() {
             },
             onDismiss = { app.pendingProfileImport.value = null },
         )
+    }
+}
+
+/**
+ * A route inside the Scaffold's content padding: below the status bar, above the bottom bar,
+ * clear of a navigation bar on the side. Every route but the map is one, and its layout is what
+ * it was when the NavHost carried this padding itself.
+ */
+private fun NavGraphBuilder.paddedComposable(
+    route: String,
+    padding: State<PaddingValues>,
+    arguments: List<NamedNavArgument> = emptyList(),
+    content: @Composable (NavBackStackEntry) -> Unit,
+) {
+    composable(route = route, arguments = arguments) { entry ->
+        Box(Modifier.fillMaxSize().padding(padding.value)) { content(entry) }
     }
 }
 

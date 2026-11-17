@@ -16,6 +16,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -139,11 +141,6 @@ fun TacticalMap(
     onStyleReady: ((org.maplibre.android.maps.MapLibreMap, Style) -> Unit)? = null,
     /** #82 — called when the operator taps the self-marker. Opens reposition sheet. */
     onSelfMarkerTap: (() -> Unit)? = null,
-    /** Issue #89 — system status-bar inset height in dp. Under
-     *  enableEdgeToEdge the map draws under the status bar, so the built-in
-     *  MapLibre compass margin adds this on top of [COMPASS_TOP_MARGIN_DP]
-     *  to clear the (inset-shifted) ATAKStatusBar on tall-notch devices. */
-    topInsetDp: Float = 0f,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -281,17 +278,8 @@ fun TacticalMap(
                     // (BadTokenException). This one finds the hosting Activity at
                     // the tap.
                     setAttributionDialogManager(HostActivityAttributionDialogManager(ctx, map))
-                    // Issue #81 — push the compass below the ATAKStatusBar.
-                    // setCompassMargins(left, top, right, bottom) takes raw
-                    // pixels; 4 dp matches MapLibre's built-in side defaults
-                    // so only the top changes.
-                    val density = context.resources.displayMetrics.density
-                    // Issue #89 — add the status-bar inset so the compass clears
-                    // the ATAKStatusBar after enableEdgeToEdge pushes it down.
-                    val compassTopPx =
-                        ((COMPASS_TOP_MARGIN_DP + topInsetDp) * density + 0.5f).toInt()
-                    val sideMarginPx = (4 * density + 0.5f).toInt()
-                    setCompassMargins(sideMarginPx, compassTopPx, sideMarginPx, sideMarginPx)
+                    // The compass and attribution margins are set below, from the
+                    // live safe area: they follow rotation and the navigation mode.
                 }
                 // Persist camera state on idle so bottom-nav switches
                 // (Map → Settings → Map etc.) don't reset the operator's
@@ -486,6 +474,30 @@ fun TacticalMap(
             mapView.getMapAsync { map -> if (!disposed) currentMapReady?.invoke(map) }
         }
         onDispose { disposed = true }
+    }
+
+    // MapLibre's own compass (top right) and attribution button (bottom left) take their
+    // margins from the edge of the map view, and the map fills the whole window under the
+    // system bars. So both are placed from the live safe area: below the status strip, over
+    // the navigation bar and the floating toolbar, clear of a cutout. Set again whenever
+    // the safe area changes (rotation, gesture or three-button navigation), not just when
+    // the view is built. See [MapOrnamentLayout].
+    val safeArea = mapSafeAreaPx()
+    val screenDensity = LocalDensity.current.density
+    val landscape = LocalConfiguration.current.orientation ==
+        android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    DisposableEffect(mapView, safeArea, screenDensity, landscape) {
+        if (RetainedMapView.isHeldBy(holder)) {
+            mapView.getMapAsync { map ->
+                val compass = MapOrnamentLayout.compassMarginsPx(safeArea, screenDensity)
+                val attribution = MapOrnamentLayout.attributionMarginsPx(safeArea, screenDensity, landscape)
+                map.uiSettings.setCompassMargins(compass.left, compass.top, compass.right, compass.bottom)
+                map.uiSettings.setAttributionMargins(
+                    attribution.left, attribution.top, attribution.right, attribution.bottom,
+                )
+            }
+        }
+        onDispose { }
     }
 
     // Flip the location layer on when permission is granted after the
@@ -1045,26 +1057,6 @@ fun TacticalMap(
 /** How long the map stays 1 dp short while it is nudged. Long enough for the render
  *  thread to take the first resize before the second one arrives. */
 private const val RESIZE_NUDGE_MS = 200L
-
-/**
- * Issue #81 — top margin for the MapLibre built-in compass so it clears
- * the ATAKStatusBar that sits at the very top of the map surface.
- *
- * Derivation (all in dp):
- *   ATAKStatusBar.padding(vertical = 8.dp): 8 top + 8 bottom  = 16 dp
- *   ATAKStatusBar row content (13sp text / 14dp icon)          ≈ 20 dp
- *   ATAKStatusBar total height                                  ≈ 36 dp
- *   Typical Android system status bar                          ≈ 24 dp
- *   Total top clearance                                        ≈ 60 dp
- *   + 4 dp breathing room                                       = 64 dp
- *
- * This is a fixed dp constant because ATAKStatusBar has a fixed layout
- * (no dynamic content that changes the bar height). The system status bar
- * typically ranges 20–28 dp; 64 dp clears both extremes comfortably.
- * setCompassMargins accepts raw pixels, so we convert at runtime via
- * context.resources.displayMetrics.density.
- */
-internal const val COMPASS_TOP_MARGIN_DP = 64
 
 private const val TAG = "TacticalMap"
 

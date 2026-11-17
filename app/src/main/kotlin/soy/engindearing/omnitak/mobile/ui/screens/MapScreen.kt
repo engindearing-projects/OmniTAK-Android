@@ -27,14 +27,9 @@ import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
@@ -86,6 +81,7 @@ import soy.engindearing.omnitak.mobile.ui.components.RadialMenu
 import soy.engindearing.omnitak.mobile.ui.components.SelfPositionCard
 import soy.engindearing.omnitak.mobile.ui.components.positionCardMaxWidthDp
 import soy.engindearing.omnitak.mobile.ui.components.TacticalMap
+import soy.engindearing.omnitak.mobile.ui.components.mapSafeAreaPadding
 import soy.engindearing.omnitak.mobile.ui.components.styleJsonForProvider
 import soy.engindearing.omnitak.mobile.ui.components.ToolEntry
 import soy.engindearing.omnitak.mobile.ui.components.ToolsDrawer
@@ -112,12 +108,6 @@ private const val CONTACT_TAP_DEFER_PX = 72.0
 @Composable
 fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     val app = LocalContext.current.applicationContext as OmniTAKApp
-    // Issue #89 — status-bar inset in dp. enableEdgeToEdge lets content draw
-    // under the system bars; overlays anchored near the top (compass, MapLibre
-    // built-in compass) add this so they clear the shifted ATAKStatusBar.
-    val statusBarTopInsetDp = WindowInsets.statusBars
-        .asPaddingValues()
-        .calculateTopPadding()
     // #182 — landscape is the plate-carrier orientation (Pixel 9/10 Pro) and
     // has little vertical room. The map chrome (tools drawer, zoom/center
     // control stack) lays out compactly there so it doesn't eat the short map.
@@ -699,7 +689,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         androidx.compose.runtime.CompositionLocalProvider(
             soy.engindearing.omnitak.plugin.LocalMapEngineHandle provides null,
         ) {
-            app.pluginHost.mapOverlays.forEach { it.content() }
+            // A plugin that draws controls of its own gets the safe area, as it had
+            // before the map filled the window.
+            androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().mapSafeAreaPadding()) {
+                app.pluginHost.mapOverlays.forEach { it.content() }
+            }
         }
         } else {
         TacticalMap(
@@ -877,9 +871,6 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             // Issue #95 — north-up lock + tap-to-reset support.
             northUpLocked = userPrefs.northUpLocked,
             snapNorthTrigger = snapNorthTick,
-            // Issue #89 — feed the status-bar inset so the built-in MapLibre
-            // compass margin clears the inset-shifted ATAKStatusBar.
-            topInsetDp = statusBarTopInsetDp.value,
         )
         // Plugin map overlays on the MAPLIBRE engine. The handle is the live
         // MapLibreMap (captured via onMapReady above; null briefly until the
@@ -889,9 +880,15 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         androidx.compose.runtime.CompositionLocalProvider(
             soy.engindearing.omnitak.plugin.LocalMapEngineHandle provides mapboxMap,
         ) {
-            app.pluginHost.mapOverlays.forEach { it.content() }
+            androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().mapSafeAreaPadding()) {
+                app.pluginHost.mapOverlays.forEach { it.content() }
+            }
         }
         }
+
+        // The map is drawn under the system bars; this keeps their light icons readable
+        // over a bright map. Under the controls below, and it takes no touches.
+        soy.engindearing.omnitak.mobile.ui.components.SystemBarScrims()
 
         // Issue #16 — lasso freehand multi-select overlay. Renders
         // ABOVE the map so the dashed orange path stays on top of
@@ -1013,6 +1010,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             androidx.compose.foundation.layout.Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .mapSafeAreaPadding()
                     .padding(top = 90.dp, end = 12.dp),
                 contentAlignment = Alignment.TopEnd,
             ) {
@@ -1127,6 +1125,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             androidx.compose.foundation.layout.Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .mapSafeAreaPadding()
                     .padding(top = 64.dp),
                 contentAlignment = Alignment.TopCenter,
             ) {
@@ -1140,6 +1139,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             androidx.compose.foundation.layout.Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .mapSafeAreaPadding()
                     .padding(top = 90.dp),
                 contentAlignment = Alignment.TopCenter,
             ) {
@@ -1189,6 +1189,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             androidx.compose.foundation.layout.Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .mapSafeAreaPadding()
                     .padding(end = 12.dp, bottom = 90.dp),
                 contentAlignment = Alignment.BottomEnd,
             ) {
@@ -1221,6 +1222,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             androidx.compose.foundation.layout.Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .mapSafeAreaPadding()
                     .padding(bottom = 24.dp),
                 contentAlignment = Alignment.BottomCenter,
             ) {
@@ -1285,6 +1287,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             androidx.compose.foundation.layout.Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .mapSafeAreaPadding()
                     .padding(top = 90.dp, end = 16.dp),
                 contentAlignment = Alignment.TopEnd,
             ) {
@@ -1496,11 +1499,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             modifier = Modifier
                 .fillMaxSize()
                 .align(Alignment.TopCenter)
-                // Issue #89 — MainActivity uses enableEdgeToEdge, so the map
-                // (and this top chrome) draws under the system status bar.
-                // Pad by the status-bar inset so the ATAKStatusBar clears the
-                // clock / notch on every device instead of being occluded.
-                .statusBarsPadding(),
+                // MainActivity uses enableEdgeToEdge and the map fills the whole window,
+                // so this top chrome starts below the status bar (and a cutout): the
+                // ATAKStatusBar clears the clock / notch on every device instead of
+                // being occluded.
+                .mapSafeAreaPadding(),
         ) {
             ATAKStatusBar(
                 serverName = headerLabel,
@@ -1556,6 +1559,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 } ?: "—",
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
+                    .mapSafeAreaPadding()
                     .padding(end = 12.dp, bottom = 96.dp)
                     // #213 - wrap rather than run under the map buttons at the left
                     // when the label size and the phone font are both large.
@@ -1568,6 +1572,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             androidx.compose.foundation.layout.Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .mapSafeAreaPadding()
                     .padding(top = 48.dp),
                 contentAlignment = Alignment.TopCenter,
             ) {
@@ -1650,7 +1655,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     }
                 }
             },
-            modifier = Modifier.align(Alignment.BottomEnd),
+            modifier = Modifier.align(Alignment.BottomEnd).mapSafeAreaPadding(),
         )
 
         // Issue #96 — compass overlay. Floats at top-start corner, just below
@@ -1669,11 +1674,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             },
             modifier = Modifier
                 .align(Alignment.TopStart)
-                // Issue #89 — the ATAKStatusBar shifts down by the status-bar
-                // inset under enableEdgeToEdge, so the compass (which sits just
-                // below it) must shift by the same amount or it overlaps the
-                // bar on tall-notch devices.
-                .padding(start = 12.dp, top = 72.dp + statusBarTopInsetDp),
+                // Measured from the safe area, like the ATAKStatusBar above it.
+                .mapSafeAreaPadding()
+                .padding(start = 12.dp, top = 72.dp),
         )
 
         // Map control stack — zoom in / zoom out / center-on-me — at the
@@ -1734,8 +1737,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     .align(Alignment.BottomStart)
                     // Lower bottom inset than portrait: the bottom toolbar is a
                     // single compact row in landscape, so the controls sit just
-                    // above the navigation-bar inset instead of clearing a tall bar.
-                    .navigationBarsPadding()
+                    // above the safe area instead of clearing a tall bar.
+                    .mapSafeAreaPadding()
                     .padding(start = 16.dp, bottom = 12.dp),
                 horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1746,6 +1749,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             androidx.compose.foundation.layout.Column(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
+                    .mapSafeAreaPadding()
                     .padding(start = 16.dp, bottom = 110.dp),
                 verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
             ) {
@@ -2208,7 +2212,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     drawingKind = null
                     drawingPoints = emptyList()
                 },
-                modifier = Modifier.align(Alignment.TopStart),
+                modifier = Modifier.align(Alignment.TopStart).mapSafeAreaPadding(),
             )
         }
 
@@ -2256,7 +2260,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     measurementActive = false
                     measurementPoints = emptyList()
                 },
-                modifier = Modifier.align(Alignment.TopStart),
+                modifier = Modifier.align(Alignment.TopStart).mapSafeAreaPadding(),
             )
         }
 
@@ -2269,7 +2273,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     rangeRingsActive = false
                     rangeRingCenter = null
                 },
-                modifier = Modifier.align(Alignment.TopStart),
+                modifier = Modifier.align(Alignment.TopStart).mapSafeAreaPadding(),
             )
         }
 
@@ -2397,7 +2401,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
 
         SnackbarHost(
             hostState = snackbar,
-            modifier = Modifier.align(Alignment.BottomCenter),
+            modifier = Modifier.align(Alignment.BottomCenter).mapSafeAreaPadding(),
         )
     }
 }
