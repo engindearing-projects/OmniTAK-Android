@@ -1,5 +1,6 @@
 package soy.engindearing.omnitak.mobile.data
 
+import kotlinx.serialization.Serializable
 import java.util.UUID
 
 enum class ChatStatus { SENDING, SENT, FAILED, RECEIVED }
@@ -9,7 +10,12 @@ enum class ChatStatus { SENDING, SENT, FAILED, RECEIVED }
  * attachments — image fileshare lands in a later slice alongside
  * the photo capture flow. conversationId is either [ChatRoom.ALL_USERS]
  * for broadcast traffic or a deterministic DM-{uidA}-{uidB} string.
+ *
+ * `@Serializable` so [ChatHistoryFile] can keep the chat log across restarts
+ * (#260). Every field is plain text, a number or a flag: there is no file path
+ * in a message that could stop existing while the message is kept.
  */
+@Serializable
 data class ChatMessage(
     val id: String = UUID.randomUUID().toString(),
     val conversationId: String,
@@ -29,11 +35,13 @@ data class ChatMessage(
     val serverId: String? = null,
 )
 
+@Serializable
 data class ChatParticipant(
     val uid: String,
     val callsign: String,
 )
 
+@Serializable
 data class ChatConversation(
     val id: String,
     val title: String,
@@ -57,6 +65,10 @@ data class ChatConversation(
      * so a direct message must never get one: it would be read by the whole
      * channel. Mesh conversations (MESH-..., MESHCORE-...) have their own send
      * path and are not mirrored either.
+     *
+     * Worked out from [id] on every read and never stored (#260): it has no
+     * backing field, so it is not part of the saved chat log, and a restored
+     * conversation answers the same way a new one does.
      */
     val mirrorsToMesh: Boolean get() = id == ChatRoom.ALL_USERS
 }
