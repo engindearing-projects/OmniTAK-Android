@@ -74,6 +74,39 @@ class AtakPluginParserTest {
         assertEquals(-122.3321, event.lon, 1e-9)
     }
 
+    @Test fun handcrafted_takmessage_without_how_is_read_as_a_machine_report() {
+        // #215: a TAKMessage that names no `how` is a position report from a device (m-g, as the
+        // XML this parser rebuilds says), so the max-age rule treats it as one.
+        val cot = ByteArrayOutputStream().apply {
+            writeTagString(this, field = 1, value = "a-f-G-U-C")
+            writeTagString(this, field = 5, value = "TEST-UID-HOW")
+            writeTagFixed64Double(this, field = 10, value = 47.6062)
+            writeTagFixed64Double(this, field = 11, value = -122.3321)
+        }.toByteArray()
+        val takMessage = ByteArrayOutputStream().apply { writeTagBytes(this, field = 2, value = cot) }.toByteArray()
+
+        val event = AtakPluginParser.parse(takMessage)
+        assertNotNull(event)
+        assertEquals("m-g", event!!.how)
+        assertTrue(event.rawXml!!.contains("how=\"m-g\""))
+    }
+
+    @Test fun handcrafted_takmessage_keeps_the_how_it_carries() {
+        // #215: a marker a person placed says h-..., and must not be taken for a position report.
+        val cot = ByteArrayOutputStream().apply {
+            writeTagString(this, field = 1, value = "a-h-G")
+            writeTagString(this, field = 5, value = "TEST-UID-MARKER")
+            writeTagString(this, field = 9, value = "h-g-i-g-o")
+            writeTagFixed64Double(this, field = 10, value = 47.6062)
+            writeTagFixed64Double(this, field = 11, value = -122.3321)
+        }.toByteArray()
+        val takMessage = ByteArrayOutputStream().apply { writeTagBytes(this, field = 2, value = cot) }.toByteArray()
+
+        val event = AtakPluginParser.parse(takMessage)
+        assertNotNull(event)
+        assertEquals("h-g-i-g-o", event!!.how)
+    }
+
     @Test fun handcrafted_takmessage_parses_detail_callsign() {
         // Detail { contact { callsign = "BRAVO-1" } }
         val contact = ByteArrayOutputStream().apply {

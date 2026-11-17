@@ -62,6 +62,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.OmniTAKApp
 import soy.engindearing.omnitak.mobile.i18n.Loc
+import soy.engindearing.omnitak.mobile.data.ContactMaxAge
 import soy.engindearing.omnitak.mobile.data.CoordFormat
 import soy.engindearing.omnitak.mobile.data.Echelon
 import soy.engindearing.omnitak.mobile.data.DistanceUnit
@@ -774,6 +775,17 @@ fun SettingsScreen(
                     onCheckedChange = { v -> mutate { it.copy(stalenessOverlayEnabled = v) } },
                 )
             }
+            // #215: hide a teammate that has stopped reporting, then remove it
+            ContactMaxAgeDropdown(
+                value = prefs.contactMaxAgeMinutes,
+                onSelect = { v -> mutate { it.copy(contactMaxAgeMinutes = v) } },
+            )
+            Text(
+                "Their marker leaves the map after this time without a report, and they are " +
+                    "removed after twice this time. A new report brings them back.",
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                style = MaterialTheme.typography.bodySmall,
+            )
 
             // About — the route was registered in AppNav since 0.1 but
             // nothing navigated to it after the bottom-bar rework dropped
@@ -945,6 +957,54 @@ private fun TeamColorDropdown(value: String, onSelect: (String) -> Unit) {
                     },
                     onClick = {
                         onSelect(label)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * #215: how long a teammate can go without a position report before their marker leaves the
+ * map. The choices are [ContactMaxAge.CHOICES]; the last one, Never, keeps the old behaviour.
+ * A saved value that is not one of them (a profile from another build) still shows as itself.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ContactMaxAgeDropdown(value: Int, onSelect: (Int) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded },
+    ) {
+        OutlinedTextField(
+            value = ContactMaxAge.minutesLabel(value),
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Hide teammates not heard from for") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            colors = settingsFieldColors(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(),
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.background(TacticalSurface),
+        ) {
+            ContactMaxAge.CHOICES.forEach { minutes ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            ContactMaxAge.minutesLabel(minutes),
+                            color = MaterialTheme.colorScheme.onBackground,
+                            fontWeight = if (minutes == value) FontWeight.SemiBold else FontWeight.Normal,
+                        )
+                    },
+                    onClick = {
+                        onSelect(minutes)
                         expanded = false
                     },
                 )
