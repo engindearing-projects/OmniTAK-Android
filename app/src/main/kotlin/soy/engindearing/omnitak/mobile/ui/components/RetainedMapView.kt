@@ -134,6 +134,13 @@ internal object RetainedMapView {
      */
     val firstFix = FirstFixState()
 
+    /**
+     * What the scale bar knows, with the map's own camera listeners writing to it. Kept here for the
+     * same reason as [firstFix]: the listeners are registered once, on the view, and outlive every
+     * composition, so they must write to something no composition owns. See [MapScaleSource].
+     */
+    val scale = MapScaleSource()
+
     private val slot = RetainedSlot<MapView>()
 
     /** #214: has the view come back at a different size than it left with? See [ReturnSizeWatch]. */

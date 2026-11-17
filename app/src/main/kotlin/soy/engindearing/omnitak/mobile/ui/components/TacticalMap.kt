@@ -302,6 +302,17 @@ fun TacticalMap(
                         RetainedMapView.firstFix.operatorMovedCamera()
                     }
                 }
+                // The scale bar measures the ground along its own row: two screen points, 50 dp
+                // either side of its middle, turned into positions by the map (the projection takes
+                // px, and knows the tilt and the turn). Measured while the camera moves, not only
+                // when it stops. Both registered once, with the view, and writing to the holder on
+                // the view: nothing a composition owns.
+                RetainedMapView.scale.bindProjection { xPx, yPx ->
+                    val at = map.projection.fromScreenLocation(android.graphics.PointF(xPx, yPx))
+                    if (at.latitude.isFinite() && at.longitude.isFinite()) at.latitude to at.longitude else null
+                }
+                map.addOnCameraMoveListener { RetainedMapView.scale.refresh() }
+                map.addOnCameraIdleListener { RetainedMapView.scale.refresh() }
                 // Persist camera state on idle so bottom-nav switches
                 // (Map → Settings → Map etc.) don't reset the operator's
                 // pan/zoom — see [MapCameraStore].
