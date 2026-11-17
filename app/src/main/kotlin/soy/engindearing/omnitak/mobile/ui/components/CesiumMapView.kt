@@ -25,6 +25,8 @@ import org.maplibre.android.geometry.LatLng
 import soy.engindearing.omnitak.mobile.BuildConfig
 import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.Drawing
+import soy.engindearing.omnitak.mobile.data.geofence.GeoBounds
+import soy.engindearing.omnitak.mobile.data.geofence.GeofenceFraming
 
 /**
  * Photoreal Cesium 3D globe map engine, hosted in a WebView. Mirrors the
@@ -86,6 +88,10 @@ fun CesiumMapView(
     // silently ignoring it (the "panel never appears on Cesium" class).
     panTarget: LatLng? = null,
     panTargetTick: Int = 0,
+    /** A box to show whole ("Show on map" for a geofence, #155): the globe looks straight down on it from
+     *  as high as it takes to fit it, whenever [frameBoundsTick] goes up. Same request as the 2D map's. */
+    frameBounds: GeoBounds? = null,
+    frameBoundsTick: Int = 0,
     /** Issue #95 — when true, globe rotates back to heading 0 (north-up)
      *  and the scene's rotation gestures are suppressed via the JS bridge.
      *  The Cesium HTML side must implement OmniBridge.setNorthUpLocked(bool). */
@@ -306,6 +312,26 @@ fun CesiumMapView(
         if (panTargetTick > 0 && t != null && ready.value) {
             webViewRef.value?.evaluateJavascript(
                 "window.OmniBridge.flyTo({lat:${t.latitude},lon:${t.longitude},range:3000});",
+                null,
+            )
+        }
+        onDispose { }
+    }
+
+    // Show a whole box (a geofence's zone, #155). The framing says how much ground to see across the screen;
+    // the page works the camera height out from its own field of view, over the ground there, and flies to it
+    // looking straight down with north up.
+    DisposableEffect(frameBoundsTick) {
+        val bounds = frameBounds
+        val wv = webViewRef.value
+        if (frameBoundsTick > 0 && bounds != null && ready.value && wv != null) {
+            val camera = GeofenceFraming.cameraFor(
+                bounds,
+                viewWidthDp = wv.width / density.toDouble(),
+                viewHeightDp = wv.height / density.toDouble(),
+            )
+            wv.evaluateJavascript(
+                "window.OmniBridge.lookDown({lat:${camera.lat},lon:${camera.lon},width:${camera.groundWidthMeters}});",
                 null,
             )
         }

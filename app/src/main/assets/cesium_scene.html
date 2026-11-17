@@ -98,6 +98,17 @@
   function _pickedUid(viewer,pos){const p=viewer.scene.pick(pos);return(p&&p.id&&typeof p.id.id==='string')?p.id.id:null}
   function _cartoFor(viewer,pos){let c=viewer.scene.pickPosition(pos);if(!Cesium.defined(c))c=viewer.camera.pickEllipsoid(pos,viewer.scene.globe.ellipsoid);if(!Cesium.defined(c))return null;const cc=Cesium.Cartographic.fromCartesian(c);return{lat:Cesium.Math.toDegrees(cc.latitude),lon:Cesium.Math.toDegrees(cc.longitude),hae:cc.height}}
   function _zoomFromHeight(h,latRad){const c=Math.max(Math.cos(latRad||0),0.01),mpp=(h*256)/1000.0,z=Math.log2(40075017*c/Math.max(mpp,1));return Math.max(0,Math.min(22,z))}
+  // How high above the ground the camera must be, looking straight down, to see `width` metres across the screen.
+  // The frustum's own numbers are used: its field of view is the vertical one on a portrait screen and the
+  // horizontal one on a landscape screen, and the half-width it sees is aspect * tan(fovy / 2) either way.
+  // Same names and maths as the iOS page.
+  // LOOKDOWN-BEGIN
+  function _lookDownAgl(width,aspect,fovy){const half=aspect*Math.tan(fovy/2);return(width>0&&half>0)?width/2/half:null}
+  // A ground height worth flying to, in metres above the ellipsoid: a real one, or sea level. The globe's own answer
+  // for a place far from the camera can come back as -39,874 m (with the camera over New York and the place in Spokane),
+  // and a camera sent 37 km under the ground ends up lying on it.
+  function _lookDownGround(h){return(typeof h==='number'&&isFinite(h)&&h>-1000&&h<10000)?h:0}
+  // LOOKDOWN-END
   // The scale bar: ground metres per CSS px (= dp) along the bar's own row. The row is where native says the bar is
   // (setScaleAnchor, CSS px from the page's top-left; the middle of the screen until it does). Five globe points on
   // that row, the anchor and 25 and 50 px either side, through the page's own pick helper (each clamped to the canvas).
@@ -213,6 +224,21 @@
     flyTo(arg){const e=_parse(arg);if(!e)return;const v=_state.viewer;if(!v)return;
       v.camera.flyTo({destination:Cesium.Cartesian3.fromDegrees(e.lon,e.lat,(typeof e.range==='number')?e.range:5000),
         orientation:{heading:Cesium.Math.toRadians(e.heading||0),pitch:Cesium.Math.toRadians(typeof e.pitch==='number'?e.pitch:-30),roll:0},duration:1.2});
+    },
+    // Straight down over {lat, lon}, north up, from high enough to see {width} metres across the screen ("Show on
+    // map" for a geofence). The height is measured from the ground there, so a place in the hills is framed the same
+    // as one at sea level. The ground's height is asked of the terrain service: the globe's own answer
+    // (globe.getHeight) is only good where the camera already is. The service gets 2 s; with no answer the
+    // ground is taken as sea level and the globe is still flown there. Same call as the iOS page.
+    lookDown(arg){const e=_parse(arg);if(!e||typeof e.lat!=='number'||typeof e.lon!=='number')return;const v=_state.viewer;if(!v)return;
+      const f=v.camera.frustum,agl=_lookDownAgl(typeof e.width==='number'?e.width:600,f.aspectRatio,f.fovy);if(agl===null)return;
+      let flown=false;
+      const go=function(ground){if(flown)return;flown=true;
+        v.camera.flyTo({destination:Cesium.Cartesian3.fromDegrees(e.lon,e.lat,_lookDownGround(ground)+agl),orientation:{heading:0,pitch:-Math.PI/2,roll:0},duration:1.2})};
+      if(v.terrainProvider&&Cesium.sampleTerrainMostDetailed){
+        Cesium.sampleTerrainMostDetailed(v.terrainProvider,[Cesium.Cartographic.fromDegrees(e.lon,e.lat)]).then(function(r){go(r[0]&&r[0].height)},function(){go(null)});
+        setTimeout(function(){go(null)},2000);return}
+      go(null);
     },
     // Toolbar +/- zoom buttons (gesture pinch already works natively).
     zoomIn(){_zoomBy(0.5)},

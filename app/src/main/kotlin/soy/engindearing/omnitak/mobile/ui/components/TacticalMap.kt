@@ -41,6 +41,8 @@ import soy.engindearing.omnitak.mobile.data.MapProvider
 import soy.engindearing.omnitak.mobile.data.SelfFix
 import soy.engindearing.omnitak.mobile.data.SelfFixPersistence
 import soy.engindearing.omnitak.mobile.data.TakTeamColor
+import soy.engindearing.omnitak.mobile.data.geofence.GeoBounds
+import soy.engindearing.omnitak.mobile.data.geofence.GeofenceFraming
 
 /**
  * MapLibre-backed map surface. Forwards Android lifecycle events to the
@@ -90,6 +92,10 @@ fun TacticalMap(
     // infrastructure* — see buildTacticalStyle and AircraftLayer's contract.
     panTarget: LatLng? = null,
     panTargetTick: Int = 0,
+    /** A box to show whole ("Show on map" for a geofence, #155): the camera goes to the zoom that fits it in
+     *  this view, straight from above, whenever [frameBoundsTick] goes up. */
+    frameBounds: GeoBounds? = null,
+    frameBoundsTick: Int = 0,
     followMeActive: Boolean = false,
     /** 3D terrain mode — tilts the camera so the DEM relief baked into
      *  the style JSON renders dimensionally. The style itself carries
@@ -896,6 +902,40 @@ fun TacticalMap(
                 map.withReadyLocationComponent("pan") { it.cameraMode = CameraMode.NONE }
                 map.animateCamera(
                     CameraUpdateFactory.newLatLngZoom(target, 14.0),
+                    600,
+                )
+            }
+        }
+        onDispose { }
+    }
+
+    // Show a whole box (a geofence's zone, #155): the camera that fits it in this view, with room around it,
+    // north up and looking straight down so the box is not cut off by a tilt or a turn. The same release of
+    // the follow mode as a pan, for the same reason. Only a request made while this map is on screen counts: a
+    // map built again later (the operator went to the globe and came back) is not sent back to a zone they
+    // looked at before.
+    val frameTickAtStart = remember { frameBoundsTick }
+    DisposableEffect(mapView, frameBoundsTick) {
+        val bounds = frameBounds
+        if (frameBoundsTick != frameTickAtStart && bounds != null) {
+            RetainedMapView.firstFix.operatorMovedCamera()
+            mapView.getMapAsync { map ->
+                map.withReadyLocationComponent("frame") { it.cameraMode = CameraMode.NONE }
+                val density = mapView.resources.displayMetrics.density
+                val camera = GeofenceFraming.cameraFor(
+                    bounds,
+                    viewWidthDp = mapView.width / density.toDouble(),
+                    viewHeightDp = mapView.height / density.toDouble(),
+                )
+                map.animateCamera(
+                    CameraUpdateFactory.newCameraPosition(
+                        CameraPosition.Builder()
+                            .target(LatLng(camera.lat, camera.lon))
+                            .zoom(camera.zoom)
+                            .bearing(0.0)
+                            .tilt(0.0)
+                            .build(),
+                    ),
                     600,
                 )
             }

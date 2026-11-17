@@ -101,8 +101,9 @@ data class Geofence(
     val dwellMs: Long get() = dwellMinutes.coerceAtLeast(0) * 60_000L
 
     /**
-     * Where its name is written and where "Show on map" goes: the middle of a circle, the mean of a
-     * polygon's corners. Null when there are no corners or no centre.
+     * Where its name is written: the middle of a circle, the mean of a polygon's corners. Null when
+     * there are no corners or no centre. ("Show on map" does not go here: it frames the whole shape,
+     * see [GeofenceFraming].)
      */
     val labelPoint: LatLon?
         get() = when (type) {

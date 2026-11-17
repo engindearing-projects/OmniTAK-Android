@@ -69,7 +69,9 @@ import soy.engindearing.omnitak.mobile.data.Drawing
 import soy.engindearing.omnitak.mobile.data.DrawingKind
 import soy.engindearing.omnitak.mobile.data.GeoMath
 import soy.engindearing.omnitak.mobile.data.LabelSize
+import soy.engindearing.omnitak.mobile.data.geofence.GeoBounds
 import soy.engindearing.omnitak.mobile.data.geofence.GeofenceDrawings
+import soy.engindearing.omnitak.mobile.data.geofence.GeofenceFraming
 import soy.engindearing.omnitak.mobile.data.geofence.LatLon
 import soy.engindearing.omnitak.mobile.domain.GeofenceNotificationPermission
 import soy.engindearing.omnitak.mobile.domain.GeofenceNotifier
@@ -329,6 +331,9 @@ fun MapScreen(
     var teamsPanelOpen by remember { mutableStateOf(false) }
     var panTarget by remember { mutableStateOf<LatLng?>(null) }
     var panTargetTick by remember { mutableStateOf(0) }
+    // A zone to show whole ("Show on map" for a geofence, #155). Each engine works the camera out from its own view.
+    var frameBounds by remember { mutableStateOf<GeoBounds?>(null) }
+    var frameBoundsTick by remember { mutableStateOf(0) }
     // "Go to Coordinate" sheet (TWD97 / MGRS / Lat-Lon). Opened from the
     // Tools popup via CoordinateEntryEvents; reference coord = map centre
     // so 5+5 TWD97 grid input recovers the right 100 km cell. The request is
@@ -778,6 +783,8 @@ fun MapScreen(
             // Center) fly the globe instead of being silently eaten.
             panTarget = panTarget,
             panTargetTick = panTargetTick,
+            frameBounds = frameBounds,
+            frameBoundsTick = frameBoundsTick,
             // Issue #95 — north-up lock + compass snap for the globe.
             northUpLocked = userPrefs.northUpLocked,
             snapNorthTrigger = snapNorthTick,
@@ -946,6 +953,8 @@ fun MapScreen(
             } else null,
             panTarget = panTarget,
             panTargetTick = panTargetTick,
+            frameBounds = frameBounds,
+            frameBoundsTick = frameBoundsTick,
             followMeActive = followMeActive,
             useMilStdSelfSymbol = userPrefs.useMilStdSelfSymbol,
             selfTeamColor = userPrefs.team,
@@ -2430,13 +2439,14 @@ fun MapScreen(
                     geofenceSheetOpen = false
                 },
                 onShowOnMap = { geofence ->
-                    val at = geofence.labelPoint
+                    val bounds = GeofenceFraming.boundsOf(geofence)
                     geofenceSheetOpen = false
-                    if (at != null) {
+                    if (bounds != null) {
                         // An operator's own camera move: the first fix of a first run must not undo it.
                         RetainedMapView.firstFix.operatorMovedCamera()
-                        panTarget = LatLng(at.lat, at.lon)
-                        panTargetTick += 1
+                        // The whole zone, not just its middle.
+                        frameBounds = bounds
+                        frameBoundsTick += 1
                         if (followMeActive) mutatePref { it.copy(followMeActive = false) }
                     }
                 },
