@@ -23,6 +23,11 @@ enum class MapProvider { OSM_RASTER, SATELLITE_HINT, TOPO_HINT, WMTS_CUSTOM }
  *  mesh screen + CoT bridge + broadcaster route through. */
 enum class MeshFramework { MESHTASTIC, MESHCORE }
 
+/** #261 - the address the Mesh screen's TCP pane always started from. It is
+ *  still what the pane shows until the operator connects to something else. */
+const val DEFAULT_MESH_TCP_HOST = "192.168.1.100"
+const val DEFAULT_MESH_TCP_PORT = 4403
+
 /**
  * Operator preferences — callsign, units, coord format, tile choice.
  * All string-backed in DataStore so the schema stays trivial; enum
@@ -137,6 +142,16 @@ data class UserPrefs(
      *  runs Meshtastic. Selecting MeshCore switches the mesh screen, CoT
      *  bridge, and broadcaster onto the MeshCore companion BLE path. */
     val selectedMeshFramework: MeshFramework = MeshFramework.MESHTASTIC,
+    /** #261 - the Meshtastic TCP gateway the operator last connected to, shown
+     *  in the Mesh screen's TCP pane. Saved when Connect is pressed. Until then
+     *  it is the address the pane always started from. */
+    val meshTcpHost: String = DEFAULT_MESH_TCP_HOST,
+    val meshTcpPort: Int = DEFAULT_MESH_TCP_PORT,
+    /** #261 - the operator wants the Meshtastic TCP link up. Connect sets it.
+     *  Disconnect clears it, and so does picking a Bluetooth or MeshCore radio.
+     *  A link that drops leaves it set. The app reads it once at start to bring
+     *  the link back ([MeshTcpRestore]). */
+    val meshTcpWanted: Boolean = false,
     /** 3D terrain map mode — tilts the camera and renders DEM relief
      *  (AWS Terrarium tiles). Parity with the iOS Cesium 3D globe
      *  toggle. Default off — 2D top-down is the tactical default. */
@@ -176,6 +191,11 @@ data class UserPrefs(
      *  foreground. Fixes the bug where the setting was present but
      *  FLAG_KEEP_SCREEN_ON was never actually applied. Default off. */
     val keepScreenOn: Boolean = false,
+    /** #214 - hold the screen in portrait or landscape whatever the phone's own
+     *  rotation setting is, or follow the phone (the default, and how the app
+     *  always behaved). Stored as the string `auto`, `portrait` or `landscape`
+     *  under `screen_rotation`; anything else reads as [ScreenRotation.AUTO]. */
+    val screenRotation: ScreenRotation = ScreenRotation.DEFAULT,
     /** When true, render the self-marker as a triangle pointing in heading
      *  direction instead of the MIL-STD disc / puck. Rotates with compass. */
     val selfMarkerTriangle: Boolean = false,
@@ -183,6 +203,16 @@ data class UserPrefs(
      *  the point goes stale (fresh <1m full opacity, aging 1–5m, stale >5m). Off
      *  by default — opt-in so the default map look is unchanged. */
     val stalenessOverlayEnabled: Boolean = false,
+    /** #215: hide a teammate's marker when no position report has arrived for this many
+     *  minutes, and remove the contact at twice that (see [ContactMaxAge]). 0 = Never, which
+     *  keeps the old behaviour of leaving a quiet contact on the map forever. Whole minutes;
+     *  Settings offers 5, 10, 15, 30, 60, 120 and Never. */
+    val contactMaxAgeMinutes: Int = ContactMaxAge.DEFAULT_MINUTES,
+    /** #213 - how big the names under map markers and the position box are
+     *  drawn, as a whole percent. One of [LabelSize.CHOICES]; any other stored
+     *  value reads as the nearest choice. 100 is the size the app has always
+     *  drawn, so an upgrade changes nothing until the operator picks another. */
+    val labelScalePercent: Int = LabelSize.DEFAULT_PERCENT,
     /** #212: relay mesh → server: what the mesh hears is also sent up to the TAK
      *  server(s) while a server AND a mesh are both connected. Off by default.
      *  Until the operator first changes a pref it takes the legacy
@@ -246,6 +276,10 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
     private val KEY_MESH_BROADCAST_INTERVAL = intPreferencesKey("mesh_broadcast_interval_secs")
     private val KEY_VERBOSE_BLE_LOGGING = booleanPreferencesKey("verbose_ble_logging")
     private val KEY_MESH_FRAMEWORK = stringPreferencesKey("selected_mesh_framework")
+    // #261: the Mesh screen's TCP gateway, and whether the operator wants that link up.
+    private val KEY_MESH_TCP_HOST = stringPreferencesKey("mesh_tcp_host")
+    private val KEY_MESH_TCP_PORT = intPreferencesKey("mesh_tcp_port")
+    private val KEY_MESH_TCP_WANTED = booleanPreferencesKey("mesh_tcp_wanted")
     private val KEY_MAP_3D = booleanPreferencesKey("map_3d_enabled")
     private val KEY_CESIUM_GLOBE = booleanPreferencesKey("cesium_globe_enabled")
     private val KEY_TOOLBAR_ITEMS = stringPreferencesKey("toolbar_item_ids")
@@ -259,8 +293,13 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
     // Issue #95 — north-up lock; #97 — keep-screen-on
     private val KEY_NORTH_UP_LOCKED = booleanPreferencesKey("north_up_locked")
     private val KEY_KEEP_SCREEN_ON  = booleanPreferencesKey("keep_screen_on")
+    // #214 - screen rotation mode, stored as auto | portrait | landscape.
+    private val KEY_SCREEN_ROTATION = stringPreferencesKey("screen_rotation")
     private val KEY_SELF_MARKER_TRIANGLE = booleanPreferencesKey("selfMarkerTriangle")
     private val KEY_STALENESS_OVERLAY = booleanPreferencesKey("staleness_overlay_enabled")
+    private val KEY_CONTACT_MAX_AGE = intPreferencesKey("contact_max_age_minutes")
+    // #213 - Label size, stored as a whole percent.
+    private val KEY_LABEL_SCALE = intPreferencesKey("label_scale_percent")
     // #212: one switch per relay direction. KEY_RELAY_GATEWAY below is the
     // pre-split single switch: the fallback for these two, kept for one release.
     private val KEY_RELAY_TO_SERVER = booleanPreferencesKey("relay_to_server_enabled")
@@ -303,6 +342,9 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
             p[KEY_MESH_BROADCAST_INTERVAL] = next.meshBroadcastIntervalSecs.coerceIn(30, 60)
             p[KEY_VERBOSE_BLE_LOGGING] = next.verboseBleLogging
             p[KEY_MESH_FRAMEWORK] = next.selectedMeshFramework.name
+            p[KEY_MESH_TCP_HOST] = next.meshTcpHost
+            p[KEY_MESH_TCP_PORT] = next.meshTcpPort
+            p[KEY_MESH_TCP_WANTED] = next.meshTcpWanted
             p[KEY_MAP_3D] = next.map3dEnabled
             p[KEY_CESIUM_GLOBE] = next.cesiumGlobeEnabled
             p[KEY_TOOLBAR_ITEMS] = next.toolbarItemIds.joinToString(",")
@@ -316,8 +358,11 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
             if (next.lastCameraZoom != null) p[KEY_CAMERA_ZOOM] = next.lastCameraZoom.toString()
             p[KEY_NORTH_UP_LOCKED] = next.northUpLocked
             p[KEY_KEEP_SCREEN_ON]  = next.keepScreenOn
+            p[KEY_SCREEN_ROTATION] = next.screenRotation.stored
             p[KEY_SELF_MARKER_TRIANGLE] = next.selfMarkerTriangle
             p[KEY_STALENESS_OVERLAY] = next.stalenessOverlayEnabled
+            p[KEY_CONTACT_MAX_AGE] = next.contactMaxAgeMinutes.coerceAtLeast(0)
+            p[KEY_LABEL_SCALE] = LabelSize.nearestChoice(next.labelScalePercent)
             p[KEY_RELAY_TO_SERVER] = next.relayToServerEnabled
             p[KEY_RELAY_TO_MESH] = next.relayToMeshEnabled
             p[KEY_RELAY_GATEWAY] = next.relayGatewayEnabled
@@ -376,6 +421,20 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
         update { it.copy(positionReportingEnabled = value) }
     }
 
+    /**
+     * #214 - move to the next screen rotation mode (Auto, Portrait, Landscape, Auto) and
+     * return the mode now stored. The current mode is read and the next one written in a
+     * single edit, so two quick taps on the shortcut cannot both start from the same mode.
+     */
+    suspend fun cycleScreenRotation(): ScreenRotation {
+        var now = ScreenRotation.DEFAULT
+        update { cur ->
+            now = cur.screenRotation.next()
+            cur.copy(screenRotation = now)
+        }
+        return now
+    }
+
     /** Persist the mesh PPLI broadcast interval (coerced to 30..60 seconds). */
     suspend fun setMeshBroadcastIntervalSecs(value: Int) {
         update { it.copy(meshBroadcastIntervalSecs = value.coerceIn(30, 60)) }
@@ -389,6 +448,23 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
     /** Persist the operator's chosen mesh framework (Meshtastic | MeshCore). */
     suspend fun setSelectedMeshFramework(value: MeshFramework) {
         update { it.copy(selectedMeshFramework = value) }
+    }
+
+    /** #261 - Connect was pressed on the Mesh screen's TCP pane: keep the
+     *  gateway and mark the link wanted, in one edit so the flag is never stored
+     *  without its host. The host is saved without the spaces around it; a blank
+     *  host is not saved at all. */
+    suspend fun rememberMeshTcpGateway(host: String, port: Int) {
+        val trimmed = host.trim()
+        if (trimmed.isEmpty()) return
+        update { it.copy(meshTcpHost = trimmed, meshTcpPort = port, meshTcpWanted = true) }
+    }
+
+    /** #261 - set or clear the wanted flag. Disconnect clears it, and so does
+     *  picking a Bluetooth or MeshCore radio. The saved gateway stays, so the
+     *  TCP pane keeps its text. */
+    suspend fun setMeshTcpWanted(wanted: Boolean) {
+        update { it.copy(meshTcpWanted = wanted) }
     }
 
     /** #212: persist the mesh → server relay switch (default off). */
@@ -470,6 +546,9 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
         selectedMeshFramework = p[KEY_MESH_FRAMEWORK]
             ?.let { runCatching { MeshFramework.valueOf(it) }.getOrNull() }
             ?: MeshFramework.MESHTASTIC,
+        meshTcpHost = p[KEY_MESH_TCP_HOST] ?: DEFAULT_MESH_TCP_HOST,
+        meshTcpPort = p[KEY_MESH_TCP_PORT] ?: DEFAULT_MESH_TCP_PORT,
+        meshTcpWanted = p[KEY_MESH_TCP_WANTED] ?: false,
         map3dEnabled = p[KEY_MAP_3D] ?: false,
         cesiumGlobeEnabled = p[KEY_CESIUM_GLOBE] ?: false,
         toolbarItemIds = p[KEY_TOOLBAR_ITEMS]?.split(",")?.filter { it.isNotBlank() } ?: emptyList(),
@@ -481,8 +560,11 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
         lastCameraZoom = p[KEY_CAMERA_ZOOM]?.toDoubleOrNull(),
         northUpLocked  = p[KEY_NORTH_UP_LOCKED] ?: false,
         keepScreenOn   = p[KEY_KEEP_SCREEN_ON]  ?: false,
+        screenRotation = ScreenRotation.fromStored(p[KEY_SCREEN_ROTATION]),
         selfMarkerTriangle = p[KEY_SELF_MARKER_TRIANGLE] ?: false,
         stalenessOverlayEnabled = p[KEY_STALENESS_OVERLAY] ?: false,
+        contactMaxAgeMinutes = (p[KEY_CONTACT_MAX_AGE] ?: ContactMaxAge.DEFAULT_MINUTES).coerceAtLeast(0),
+        labelScalePercent = LabelSize.nearestChoice(p[KEY_LABEL_SCALE] ?: LabelSize.DEFAULT_PERCENT),
         relayToServerEnabled = resolveRelayDirection(p[KEY_RELAY_TO_SERVER], p[KEY_RELAY_GATEWAY]),
         relayToMeshEnabled = resolveRelayDirection(p[KEY_RELAY_TO_MESH], p[KEY_RELAY_GATEWAY]),
         relayGatewayEnabled = p[KEY_RELAY_GATEWAY] ?: false,

@@ -54,6 +54,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -62,10 +63,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.OmniTAKApp
 import soy.engindearing.omnitak.mobile.i18n.Loc
+import soy.engindearing.omnitak.mobile.data.ContactMaxAge
 import soy.engindearing.omnitak.mobile.data.CoordFormat
 import soy.engindearing.omnitak.mobile.data.Echelon
 import soy.engindearing.omnitak.mobile.data.DistanceUnit
+import soy.engindearing.omnitak.mobile.data.LabelSize
 import soy.engindearing.omnitak.mobile.data.MapProvider
+import soy.engindearing.omnitak.mobile.data.ScreenRotation
 import soy.engindearing.omnitak.mobile.data.UserPrefs
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
 import soy.engindearing.omnitak.mobile.domain.IconPackImporter
@@ -81,6 +85,7 @@ import soy.engindearing.omnitak.mobile.ui.components.ToolbarEditBus
 @Composable
 fun SettingsScreen(
     onOpenAbout: () -> Unit = {},
+    onOpenDiagnostics: () -> Unit = {},
     onOpenPlugins: (pluginId: String) -> Unit = {},
     onOpenPluginsList: () -> Unit = {},
     onOpenProfiles: () -> Unit = {},
@@ -705,6 +710,41 @@ fun SettingsScreen(
                     onCheckedChange = { v -> mutate { it.copy(keepScreenOn = v) } },
                 )
             }
+            // #214: Screen rotation. Same stored value as the Rotate shortcut on the bottom bar.
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Screen rotation",
+                    color = MaterialTheme.colorScheme.onBackground,
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text(
+                    "Auto follows the phone. Portrait and Landscape hold the screen that way " +
+                        "whatever the phone's rotation setting is; Landscape turns either way up. " +
+                        "For a one-tap Rotate shortcut, press and hold the bottom bar, then tap +.",
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                SegmentedRow(
+                    options = ScreenRotation.entries.map { it to it.label },
+                    selected = prefs.screenRotation,
+                    onSelect = { v -> mutate { it.copy(screenRotation = v) } },
+                )
+                // Where Android ignores a held orientation (a tablet, an unfolded foldable), say so
+                // under the choices. The mode is still saved and still requested. The screen size
+                // comes from the current configuration, so folding or unfolding updates the note.
+                val holdIgnored = ScreenRotation.requestIgnored(
+                    Build.VERSION.SDK_INT,
+                    LocalContext.current.applicationInfo.targetSdkVersion,
+                    LocalConfiguration.current.smallestScreenWidthDp,
+                )
+                if (holdIgnored) {
+                    Text(
+                        ScreenRotation.HOLD_IGNORED_NOTE,
+                        color = Color(0xFFFFCC00),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
             // Auto-hide toolbar — map tab only
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -774,11 +814,59 @@ fun SettingsScreen(
                     onCheckedChange = { v -> mutate { it.copy(stalenessOverlayEnabled = v) } },
                 )
             }
+            // #215: hide a teammate that has stopped reporting, then remove it
+            ContactMaxAgeDropdown(
+                value = prefs.contactMaxAgeMinutes,
+                onSelect = { v -> mutate { it.copy(contactMaxAgeMinutes = v) } },
+            )
+            Text(
+                "Their marker leaves the map after this time without a report, and they are " +
+                    "removed after twice this time. A new report brings them back.",
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            // #213: Label size: names under markers and the position box on the map
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Label size",
+                    color = MaterialTheme.colorScheme.onBackground,
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text(
+                    "Names under markers and the position box on the map. " +
+                        "For all other text, use your phone's font size setting.",
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                SegmentedRow(
+                    options = LabelSize.CHOICES.map { it to "$it%" },
+                    selected = prefs.labelScalePercent,
+                    onSelect = { v -> mutate { it.copy(labelScalePercent = v) } },
+                )
+            }
 
             // About — the route was registered in AppNav since 0.1 but
             // nothing navigated to it after the bottom-bar rework dropped
             // the About tab. This row is the entry point.
             SectionHeader("About")
+            // The app's own log since launch, with share (iOS #169 parity).
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onOpenDiagnostics() }
+                    .padding(vertical = 10.dp, horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Diagnostics Log", color = MaterialTheme.colorScheme.onBackground)
+                    Text(
+                        "Read or share the app log for a bug report",
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -945,6 +1033,54 @@ private fun TeamColorDropdown(value: String, onSelect: (String) -> Unit) {
                     },
                     onClick = {
                         onSelect(label)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * #215: how long a teammate can go without a position report before their marker leaves the
+ * map. The choices are [ContactMaxAge.CHOICES]; the last one, Never, keeps the old behaviour.
+ * A saved value that is not one of them (a profile from another build) still shows as itself.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ContactMaxAgeDropdown(value: Int, onSelect: (Int) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded },
+    ) {
+        OutlinedTextField(
+            value = ContactMaxAge.minutesLabel(value),
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Hide teammates not heard from for") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            colors = settingsFieldColors(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(),
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.background(TacticalSurface),
+        ) {
+            ContactMaxAge.CHOICES.forEach { minutes ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            ContactMaxAge.minutesLabel(minutes),
+                            color = MaterialTheme.colorScheme.onBackground,
+                            fontWeight = if (minutes == value) FontWeight.SemiBold else FontWeight.Normal,
+                        )
+                    },
+                    onClick = {
+                        onSelect(minutes)
                         expanded = false
                     },
                 )

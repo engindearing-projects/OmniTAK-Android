@@ -2,17 +2,22 @@ package soy.engindearing.omnitak.mobile.ui.components
 
 import android.annotation.SuppressLint
 import android.util.Log
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.LifecycleEventObserver
 import org.maplibre.android.MapLibre
@@ -271,6 +276,11 @@ fun TacticalMap(
                     isCompassEnabled = true
                     isLogoEnabled = false
                     isAttributionEnabled = true
+                    // #266 - the view has the application context, and MapLibre's
+                    // own attribution dialog cannot be shown from it
+                    // (BadTokenException). This one finds the hosting Activity at
+                    // the tap.
+                    setAttributionDialogManager(HostActivityAttributionDialogManager(ctx, map))
                     // Issue #81 — push the compass below the ATAKStatusBar.
                     // setCompassMargins(left, top, right, bottom) takes raw
                     // pixels; 4 dp matches MapLibre's built-in side defaults
@@ -981,6 +991,19 @@ fun TacticalMap(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    // #214: when the map comes back at a different size than it left with (the screen turned
+    // while it was on another tab), MapLibre's restarted render thread can keep drawing at the
+    // old size and leave part of the screen black. One real resize of the live surface repairs
+    // it, so for a moment the view is made 1 dp shorter and then given its size back. See
+    // [ReturnSizeWatch].
+    var resizeNudge by remember { mutableStateOf(false) }
+    LaunchedEffect(resizeNudge) {
+        if (resizeNudge) {
+            kotlinx.coroutines.delay(RESIZE_NUDGE_MS)
+            resizeNudge = false
+        }
+    }
+
     // Issue #77 — push contact updates on every recomposition that delivers a new
     // contacts list, mirroring the Cesium engine's AndroidView.update pattern.
     // Two deliberate changes vs the removed DisposableEffect(mapView, contacts):
@@ -1007,9 +1030,21 @@ fun TacticalMap(
                 }
             }
         },
-        modifier = modifier,
+        modifier = modifier
+            .onSizeChanged { size ->
+                if (RetainedMapView.isHeldBy(holder) &&
+                    RetainedMapView.returnSize.sized(size.width, size.height)
+                ) {
+                    resizeNudge = true
+                }
+            }
+            .padding(bottom = if (resizeNudge) 1.dp else 0.dp),
     )
 }
+
+/** How long the map stays 1 dp short while it is nudged. Long enough for the render
+ *  thread to take the first resize before the second one arrives. */
+private const val RESIZE_NUDGE_MS = 200L
 
 /**
  * Issue #81 — top margin for the MapLibre built-in compass so it clears
@@ -1754,7 +1789,10 @@ private const val TACTICAL_STYLE_OVERLAYS = """,
 """
 
 // Per-provider tactical styles. All wrap the same operational overlays
-// around different XYZ raster basemaps. License notes:
+// around different XYZ raster basemaps. The attribution of each is an HTML
+// link (single-quoted, so the style JSON needs no escaping): MapLibre's
+// attribution dialog lists only linked credits, and plain text showed none
+// (#266). License notes:
 //  - OSM: Standard Tile Layer; usage policy applies, fine for low-volume
 //  - Topo: OpenTopoMap CC-BY-SA, fine for non-commercial
 //  - Satellite: ESRI World Imagery, fine for non-commercial
@@ -1762,25 +1800,25 @@ private const val TACTICAL_STYLE_OVERLAYS = """,
 val TACTICAL_STYLE_OSM = buildTacticalStyle(
     "OmniTAK OSM",
     "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-    "© OpenStreetMap contributors",
+    "<a href='https://www.openstreetmap.org/copyright'>© OpenStreetMap contributors</a>",
     maxZoom = BASEMAP_MAXZOOM_OSM,
 )
 val TACTICAL_STYLE_TOPO = buildTacticalStyle(
     "OmniTAK Topo",
     "https://a.tile.opentopomap.org/{z}/{x}/{y}.png",
-    "© OpenTopoMap (CC-BY-SA), © OpenStreetMap contributors",
+    "<a href='https://opentopomap.org/about'>© OpenTopoMap (CC-BY-SA)</a> <a href='https://www.openstreetmap.org/copyright'>© OpenStreetMap contributors</a>",
     maxZoom = BASEMAP_MAXZOOM_TOPO,
 )
 val TACTICAL_STYLE_SATELLITE = buildTacticalStyle(
     "OmniTAK Satellite",
     "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-    "Imagery © Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+    "<a href='https://www.esri.com/en-us/legal/copyright-trademarks'>Imagery © Esri, Maxar, Earthstar Geographics, and the GIS User Community</a>",
     maxZoom = BASEMAP_MAXZOOM_SATELLITE,
 )
 val TACTICAL_STYLE_DARK_MATTER = buildTacticalStyle(
     "OmniTAK Tactical Dark",
     "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
-    "© OpenStreetMap contributors © CARTO",
+    "<a href='https://www.openstreetmap.org/copyright'>© OpenStreetMap contributors</a> <a href='https://carto.com/attributions'>© CARTO</a>",
     maxZoom = BASEMAP_MAXZOOM_DARK_MATTER,
 )
 
@@ -1860,7 +1898,7 @@ internal fun injectTerrain(styleJson: String): String {
       "tileSize": 256,
       "encoding": "terrarium",
       "maxzoom": 14,
-      "attribution": "Terrain: AWS / Mapzen"
+      "attribution": "<a href='https://registry.opendata.aws/terrain-tiles/'>Terrain: Mapzen, AWS Open Data</a>"
     },"""
     val terrainProp = """  "terrain": {"source": "terrain-dem", "exaggeration": 1.3},
 """

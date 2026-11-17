@@ -57,12 +57,12 @@ import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.OmniTAKApp
 import soy.engindearing.omnitak.mobile.data.ChatConversation
 import soy.engindearing.omnitak.mobile.data.ChatMessage
-import soy.engindearing.omnitak.mobile.data.ChatParticipant
 import soy.engindearing.omnitak.mobile.data.ChatRoom
 import soy.engindearing.omnitak.mobile.data.ChatStatus
 import soy.engindearing.omnitak.mobile.data.ChatXml
 import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.UserPrefs
+import soy.engindearing.omnitak.mobile.domain.ChatConversationList
 import soy.engindearing.omnitak.mobile.domain.ChatStore
 import soy.engindearing.omnitak.mobile.domain.ServerManager
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
@@ -112,46 +112,10 @@ fun ChatScreen(initialConversationId: String? = null) {
     // already have a DM thread appear as "No messages yet" entries so the
     // user can initiate a message — matching Civtak / iTak behavior.
     // Own UID is excluded (don't show yourself as a contact to chat with).
+    // The conversations come from the chat log, which is restored after a
+    // restart (#260), so a DM thread is listed before its contact is seen again.
     val mergedConversations = remember(conversations, contacts, prefs.selfUid) {
-        val selfUid = prefs.selfUid
-        val existing = conversations.values.toList()
-
-        // Collect UIDs that already have a direct-message thread so stubs
-        // aren't created for contacts you've already chatted with.
-        val coveredUids = existing
-            .filter { !it.isGroup }
-            .flatMap { it.participants }
-            .map { it.uid }
-            .toSet()
-
-        val contactStubs = contacts.values
-            .filter { contact ->
-                contact.uid != selfUid &&
-                    contact.uid !in coveredUids &&
-                    soy.engindearing.omnitak.mobile.domain.ContactStore.isEndpoint(contact)
-            }
-            .map { contact ->
-                // Use the same deterministic conversation-id formula as
-                // ChatRoom.directConversationId so that when a real GeoChat
-                // arrives later the stub seamlessly promotes to a real thread.
-                val convoId = ChatRoom.directConversationId(selfUid, contact.uid)
-                ChatConversation(
-                    id = convoId,
-                    title = contact.callsign ?: contact.uid,
-                    isGroup = false,
-                    participants = listOf(
-                        ChatParticipant(
-                            uid = contact.uid,
-                            callsign = contact.callsign ?: contact.uid,
-                        ),
-                    ),
-                )
-            }
-
-        // Real threads (with activity) sorted newest-first; contact stubs
-        // sorted alphabetically below them.
-        existing.sortedByDescending { it.lastActivityIso ?: "" } +
-            contactStubs.sortedBy { it.title.lowercase() }
+        ChatConversationList.merged(conversations.values, contacts.values, prefs.selfUid)
     }
 
     if (selectedConversation == null) {

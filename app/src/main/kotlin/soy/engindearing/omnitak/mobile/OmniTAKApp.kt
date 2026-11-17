@@ -17,6 +17,7 @@ import soy.engindearing.omnitak.mobile.domain.LocalMarkerStore
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.data.AdminResponse
 import soy.engindearing.omnitak.mobile.data.CertVault
+import soy.engindearing.omnitak.mobile.data.ChatHistoryFile
 import soy.engindearing.omnitak.mobile.data.ConfigProfileStore
 import soy.engindearing.omnitak.mobile.data.LocationProvider
 import soy.engindearing.omnitak.mobile.data.MeshDeviceConfigStore
@@ -24,6 +25,7 @@ import soy.engindearing.omnitak.mobile.data.SelfFixPersistence
 import soy.engindearing.omnitak.mobile.data.TAKServerStore
 import soy.engindearing.omnitak.mobile.data.UserPrefsStore
 import soy.engindearing.omnitak.mobile.domain.ChatStore
+import soy.engindearing.omnitak.mobile.domain.ContactAging
 import soy.engindearing.omnitak.mobile.domain.ContactStore
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
 import soy.engindearing.omnitak.mobile.domain.DataPackageBootstrap
@@ -39,12 +41,19 @@ import soy.engindearing.omnitak.mobile.domain.MeshCoreManager
 import soy.engindearing.omnitak.mobile.data.MeshFramework
 import soy.engindearing.omnitak.mobile.data.MeshtasticCoTConverter
 import soy.engindearing.omnitak.mobile.data.MeshCoreCoTConverter
+import soy.engindearing.omnitak.mobile.data.MeshTcpRestore
 import soy.engindearing.omnitak.mobile.domain.ServerManager
 
 class OmniTAKApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+
+        // #260 - read the saved chat log now, on a background thread, so it is ready by
+        // the time the first chat message or the Chat tab needs it. The store is built
+        // on first use under the lazy lock, so whoever asks first waits for the read
+        // and nobody ever sees a half-restored store.
+        appScope.launch(Dispatchers.IO) { chatStore }
 
         // #139 — give MapLibre an HTTP client that sends an app-identifying
         // User-Agent. OSM/OpenTopoMap serve a "403 Access blocked" tile to
@@ -92,6 +101,10 @@ class OmniTAKApp : Application() {
                 localMarkerStore.persist(localMarkers)
             }
         }
+
+        // #215: hide a teammate that has stopped reporting, then remove it. One
+        // collector decides; the map and the Teams list both read its State.
+        appScope.launch { contactAging.run() }
 
         // Issue #5 — start a foreground service while we're holding a
         // connection so Doze doesn't kill the read loop within ~10s of
@@ -269,6 +282,20 @@ class OmniTAKApp : Application() {
                     if (enabled) gybManager.start() else gybManager.stop()
                 }
         }
+
+        // #261 - bring the Meshtastic TCP gateway back when the operator left it
+        // up. onCreate runs once per process, so this is one attempt per start:
+        // a gateway that is down now is not retried, the same as a link that
+        // drops while the app runs. The operator presses Connect.
+        appScope.launch {
+            val target = MeshTcpRestore.targetAtStart(userPrefsStore.prefs.first())
+                ?: return@launch
+            // Nothing starts the node-to-map bridge until the Mesh screen opens.
+            // Without this a restored link would fill the node table and put no
+            // marker on the map. start() does nothing if it is already running.
+            meshtasticCoTBridge.start()
+            meshtastic.connectTcp(target.host, target.port)
+        }
     }
 
     // Application-scoped singletons. Screens reach these via
@@ -347,6 +374,18 @@ class OmniTAKApp : Application() {
 
     val contactStore: ContactStore by lazy { ContactStore() }
 
+    /** #215: the max-age rule on [contactStore]: which contacts the map and the Teams list
+     *  treat as not heard from, and the removal of those at twice the max age. Started in
+     *  [onCreate]. The setting comes straight from the preferences flow (not [cachedPrefs]),
+     *  so nothing is hidden or removed before the saved value has been read. */
+    val contactAging: ContactAging by lazy {
+        ContactAging(
+            store = contactStore,
+            maxAgeMinutes = userPrefsStore.prefs.map { it.contactMaxAgeMinutes }.distinctUntilChanged(),
+            selfUid = { cachedPrefs.value.selfUid },
+        )
+    }
+
     /** #119 — Persists locally-dropped point markers across process death. */
     val localMarkerStore: LocalMarkerStore by lazy { LocalMarkerStore(this) }
     /** External gyb_detect sensor over BLE GATT (Phase 3 of the gy6 plan).
@@ -386,7 +425,14 @@ class OmniTAKApp : Application() {
     val pendingChatConversation = MutableStateFlow<String?>(null)
 
     val chatStore: ChatStore by lazy {
-        ChatStore().also { store ->
+        // #260 - conversations and messages come back from <filesDir>/chat/history.json
+        // here, on first use (onCreate starts that on a background thread), so they are in
+        // the store before the Chat screen or any ingest path can touch it. Changes are
+        // written back off the main thread.
+        ChatStore(
+            history = ChatHistoryFile.inFilesDir(filesDir),
+            scope = appScope,
+        ).also { store ->
             // GAP-122 — Mesh primary channel always visible so users can
             // open it before any text traffic has arrived.
             store.upsertConversationIfMissing(
@@ -713,7 +759,7 @@ class OmniTAKApp : Application() {
         ServerManager(
             store = TAKServerStore(this),
             contactStore = contactStore,
-            chatStore = chatStore,
+            chatStoreProvider = { chatStore },
             certVault = certVault,
             userPrefsStore = userPrefsStore,
             locationProvider = locationProvider,

@@ -59,14 +59,22 @@ object KmlOverlayEvents {
 /** The image id registered once in the MapLibre style for the KML pushpin icon. */
 private const val KML_PUSHPIN_IMAGE_ID = "kml-pushpin"
 
+/** The pushpin picture's size in px, and the row of its tip (4 px above the bottom edge). */
+internal const val PUSHPIN_WIDTH = 64
+internal const val PUSHPIN_HEIGHT = 96
+internal const val PUSHPIN_TIP_Y = PUSHPIN_HEIGHT - 4
+
 /**
  * Generates a classic teardrop pushpin bitmap programmatically:
- * yellow fill (#FFD400), dark outline, white center dot, ~96px tall.
- * The pin's visual anchor point is at the bottom-center of the bitmap.
+ * yellow fill (#FFD400), dark outline, white center dot, [PUSHPIN_HEIGHT] px tall.
+ * The pin's tip is [PUSHPIN_TIP_Y] rows down, near the bottom of this picture. The
+ * picture alone is not what goes on the map: MapLibre anchors a marker at the CENTRE
+ * of its bitmap, so [buildBarePushpin] and [buildLabeledPin] pad it until the tip is
+ * the centre (#273).
  */
 private fun buildPushpinBitmap(): Bitmap {
-    val w = 64
-    val h = 96
+    val w = PUSHPIN_WIDTH
+    val h = PUSHPIN_HEIGHT
     val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bmp)
 
@@ -90,7 +98,7 @@ private fun buildPushpinBitmap(): Bitmap {
 
     // Teardrop path: arc for the balloon + two lines meeting at the tip.
     val path = Path()
-    val tipY = (h - 4).toFloat()
+    val tipY = PUSHPIN_TIP_Y.toFloat()
     // Start at the left tangent of the circle where the tail begins
     // Use a RectF arc for the balloon portion (roughly 270° of circle)
     val oval = android.graphics.RectF(
@@ -117,31 +125,48 @@ private fun buildPushpinBitmap(): Bitmap {
 }
 
 /**
+ * The pushpin with no name, padded underneath so that its TIP is the centre of the
+ * bitmap, which is where MapLibre puts the coordinate (#273). Unpadded, the middle of
+ * the picture was on the coordinate and the tip was drawn well below it.
+ */
+private fun buildBarePushpin(): Bitmap {
+    val pin = buildPushpinBitmap()
+    val pads = MapLabelGeometry.forBareKmlPin()
+    val bmp = Bitmap.createBitmap(pin.width, pads.top + pin.height + pads.bottom, Bitmap.Config.ARGB_8888)
+    Canvas(bmp).drawBitmap(pin, 0f, pads.top.toFloat(), null)
+    return bmp
+}
+
+/**
  * Composes the yellow pushpin with the placemark name baked in below it so the
  * label is always-on (marker titles are otherwise tap-only). One bitmap per
  * unique name, cached by KmlMarkerRenderer. Typeface.DEFAULT_BOLD renders CJK
  * (Gavin's names) from the system font.
  */
-private fun buildLabeledPin(name: String): Bitmap {
+private fun buildLabeledPin(name: String, labelFactor: Float = 1f): Bitmap {
+    if (name.isBlank()) return buildBarePushpin()
     val pin = buildPushpinBitmap()
-    if (name.isBlank()) return pin
     val text = if (name.length > 28) name.take(27) + "…" else name
+    // #213: the name follows the label size; the pushpin keeps its size.
+    val g = MapLabelGeometry.forKmlPin(labelFactor)
     val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE; textSize = 30f; textAlign = Paint.Align.CENTER
+        color = Color.WHITE; textSize = g.textSize; textAlign = Paint.Align.CENTER
         typeface = Typeface.DEFAULT_BOLD
     }
     val halo = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#CC000000"); textSize = 30f; textAlign = Paint.Align.CENTER
-        typeface = Typeface.DEFAULT_BOLD; style = Paint.Style.STROKE; strokeWidth = 6f
+        color = Color.parseColor("#CC000000"); textSize = g.textSize; textAlign = Paint.Align.CENTER
+        typeface = Typeface.DEFAULT_BOLD; style = Paint.Style.STROKE; strokeWidth = g.haloStroke
     }
-    val pad = 12f
+    val pad = g.padding
     val textW = fill.measureText(text)
     val w = maxOf(pin.width.toFloat(), textW + pad * 2).toInt()
-    val labelH = 46
-    val bmp = Bitmap.createBitmap(w, pin.height + labelH, Bitmap.Config.ARGB_8888)
+    val labelH = g.bandPx
+    // #273: transparent rows so that the pushpin's tip is the bitmap's centre, at every
+    // label size: MapLibre anchors the bitmap at its centre (see MapLabelGeometry).
+    val bmp = Bitmap.createBitmap(w, g.topPad + pin.height + labelH + g.bottomPad, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bmp)
-    canvas.drawBitmap(pin, (w - pin.width) / 2f, 0f, null)
-    val ty = pin.height + 34f
+    canvas.drawBitmap(pin, (w - pin.width) / 2f, g.topPad.toFloat(), null)
+    val ty = g.topPad + pin.height + g.baseline
     canvas.drawText(text, w / 2f, ty, halo)
     canvas.drawText(text, w / 2f, ty, fill)
     return bmp
@@ -338,6 +363,26 @@ object KmlMarkerRenderer {
     private var pinIcon: Icon? = null
     private val clusterIconCache = mutableMapOf<Int, Icon>()
 
+    // #213: the phone's font size x the Label size setting, set by MapScreen.
+    // Held here, like ContactMarkerRenderer's, so a re-render from anywhere uses it.
+    private var labelFactor: Float = 1f
+
+    /** #213: the cache key for a labeled pin: the name AND the size it was drawn
+     *  at, so a pin cached at one size is not reused after the size changes. */
+    internal fun labelKey(name: String, labelFactor: Float): String = "$labelFactor|$name"
+
+    /**
+     * #213: set the label size multiplier ([soy.engindearing.omnitak.mobile.data.LabelSize.factor])
+     * and redraw the pins at once if it changed. Safe to call before the map is
+     * bound: the next [render] uses it.
+     */
+    fun setLabelFactor(factor: Float) {
+        if (factor == labelFactor) return
+        labelFactor = factor
+        labelIconCache.clear()
+        render()
+    }
+
     private var boundMap: MapLibreMap? = null
     private var ctx: Context? = null
     private var overlays: List<KmlVectorOverlay> = emptyList()
@@ -386,6 +431,7 @@ object KmlMarkerRenderer {
         val bounds = runCatching { proj.visibleRegion.latLngBounds }.getOrNull() ?: return
         val showLabels = map.cameraPosition.zoom >= LABEL_MIN_ZOOM
         val factory = IconFactory.getInstance(context)
+        val factor = labelFactor
         var budget = MAX_MARKERS
 
         for (overlay in overlays) {
@@ -406,8 +452,10 @@ object KmlMarkerRenderer {
                 val marker = if (cell.size == 1) {
                     val (lat, lon, name) = cell[0]
                     val icon = if (showLabels && name.isNotBlank())
-                        labelIconCache.getOrPut(name) { factory.fromBitmap(buildLabeledPin(name)) }
-                    else (pinIcon ?: factory.fromBitmap(buildPushpinBitmap()).also { pinIcon = it })
+                        labelIconCache.getOrPut(labelKey(name, factor)) {
+                            factory.fromBitmap(buildLabeledPin(name, factor))
+                        }
+                    else (pinIcon ?: factory.fromBitmap(buildBarePushpin()).also { pinIcon = it })
                     runCatching {
                         map.addMarker(MarkerOptions().position(LatLng(lat, lon)).title(name).icon(icon))
                     }.getOrNull()

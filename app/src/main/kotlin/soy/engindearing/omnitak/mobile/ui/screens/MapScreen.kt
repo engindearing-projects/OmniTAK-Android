@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -70,6 +71,7 @@ import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.Drawing
 import soy.engindearing.omnitak.mobile.data.DrawingKind
 import soy.engindearing.omnitak.mobile.data.GeoMath
+import soy.engindearing.omnitak.mobile.data.LabelSize
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
 import soy.engindearing.omnitak.mobile.domain.ServerHealthProjection
 import soy.engindearing.omnitak.mobile.i18n.Loc
@@ -82,6 +84,7 @@ import soy.engindearing.omnitak.mobile.ui.components.OnRequest
 import soy.engindearing.omnitak.mobile.ui.components.RadialAction
 import soy.engindearing.omnitak.mobile.ui.components.RadialMenu
 import soy.engindearing.omnitak.mobile.ui.components.SelfPositionCard
+import soy.engindearing.omnitak.mobile.ui.components.positionCardMaxWidthDp
 import soy.engindearing.omnitak.mobile.ui.components.TacticalMap
 import soy.engindearing.omnitak.mobile.ui.components.styleJsonForProvider
 import soy.engindearing.omnitak.mobile.ui.components.ToolEntry
@@ -133,6 +136,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     val msgReceived by app.serverManager.messagesReceived.collectAsState()
     val msgSent by app.serverManager.messagesSent.collectAsState()
     val contacts by app.contactStore.contacts.collectAsState()
+    // #215: which contacts have gone quiet. Decided once in ContactAging; the map below and the
+    // Teams list further down both read this, so they cannot disagree.
+    val agingState by app.contactAging.state.collectAsState()
     // Start from the preferences the app already has, not from the defaults.
     // This screen is composed again on every return to the map tab, onto a map
     // view that is already running: one pass with the default basemap, marker
@@ -485,6 +491,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             // the operator opts back in.
             contacts.values.filter { c ->
                 when {
+                    // #215: not heard from for the max age: off the map (still in the store).
+                    agingState.isHidden(c.uid) -> false
                     !c.uid.startsWith("MESHTASTIC-") -> true
                     !meshNodesVisible -> false
                     c.uid in pairedMeshUids -> meshPairedVisible
@@ -505,15 +513,32 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     val stalenessOverlay = userPrefs.stalenessOverlayEnabled
     var stalenessTick by remember { mutableStateOf(0) }
     LaunchedEffect(stalenessOverlay) {
+        // #274: the renderer holds the flag (like the label size below) and redraws at
+        // once when it changes, so the TacticalMap calls that redraw the pins cannot
+        // switch the age suffix off again after the map is shown.
+        soy.engindearing.omnitak.mobile.ui.components.ContactMarkerRenderer.setStalenessOverlay(stalenessOverlay)
         while (stalenessOverlay) {
             kotlinx.coroutines.delay(30_000L)
             stalenessTick++
         }
     }
-    LaunchedEffect(visibleContacts, mapboxMap, stalenessOverlay, stalenessTick) {
+    // #213: Label size x the phone's font size, for the names baked into marker
+    // bitmaps (contact / placed / mesh pins and KML pins). The renderers hold the
+    // value, so every redraw uses it, and redraw at once when it changes; the
+    // position box reads the percent directly below. A font size change rebuilds
+    // the Activity, so this composition always sees the current scale.
+    val labelFactor = LabelSize.factor(
+        LocalConfiguration.current.fontScale,
+        userPrefs.labelScalePercent,
+    )
+    LaunchedEffect(labelFactor) {
+        soy.engindearing.omnitak.mobile.ui.components.ContactMarkerRenderer.setLabelFactor(labelFactor)
+        soy.engindearing.omnitak.mobile.ui.components.KmlMarkerRenderer.setLabelFactor(labelFactor)
+    }
+    LaunchedEffect(visibleContacts, mapboxMap, stalenessTick) {
         mapboxMap?.let { m ->
             soy.engindearing.omnitak.mobile.ui.components.ContactMarkerRenderer
-                .update(m, appContext, visibleContacts, stalenessOverlay)
+                .update(m, appContext, visibleContacts)
         }
     }
     // #152 — render user drawings AND the transient range rings through the
@@ -969,6 +994,20 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         // -------- UAS HUD: cruise altitude pill + Follow-Me toggle --------
         val cruiseAlt by uas.cruiseAlt.collectAsState()
         val followActive by uas.followMeActive.collectAsState()
+        val followHealth by uas.followHealth.collectAsState()
+        val followingWhat by uas.followingWhat.collectAsState()
+        // #249 - the follow stream gave up on its own (GPS fix too old, a pursued
+        // contact's position lost, or no altitude reference) and parked the
+        // drone. Say so once, then clear it so coming back to the map does not
+        // repeat it. If the map was not on screen when it happened, this runs
+        // when it comes back.
+        LaunchedEffect(uas, followHealth) {
+            val stopped = followHealth as? soy.engindearing.omnitak.mobile.domain.FollowHealth.Stopped
+                ?: return@LaunchedEffect
+            // The subject comes with the stop: the follow state is already cleared.
+            toast(soy.engindearing.omnitak.mobile.ui.components.followStoppedMessage(stopped.reason, stopped.subject))
+            uas.acknowledgeFollowStop()
+        }
         var altSheetOpen by remember { mutableStateOf(false) }
         if (droneState.isConnected()) {
             androidx.compose.foundation.layout.Box(
@@ -1042,6 +1081,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     )
                     soy.engindearing.omnitak.mobile.ui.components.UasFollowMePill(
                         active = followActive,
+                        health = followHealth,
+                        subject = followingWhat,
                         onToggle = {
                             scope.launch {
                                 if (followActive) {
@@ -1058,6 +1099,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                                             "UAS link down"
                                         is soy.engindearing.omnitak.mobile.domain.UASManager.FollowMeResult.AutopilotNotSupported ->
                                             "Follow-Me requires PX4 (autopilot=${r.autopilot ?: "unknown"})"
+                                        soy.engindearing.omnitak.mobile.domain.UASManager.FollowMeResult.NoAltitudeReference ->
+                                            "No altitude reference — Follow-Me needs your GPS altitude or terrain data"
                                     }
                                     toast(msg)
                                 }
@@ -1211,7 +1254,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         soy.engindearing.omnitak.mobile.ui.components.LassoOverlay(
             active = lassoMode,
             mapboxMap = mapboxMap,
-            markers = (contacts.values).map { c ->
+            // #215: a contact hidden as not heard from is not on screen, so the lasso must not catch it.
+            markers = (contacts.values).filterNot { agingState.isHidden(it.uid) }.map { c ->
                 soy.engindearing.omnitak.mobile.domain.LassoMarker(
                     id = c.uid,
                     coordinate = soy.engindearing.omnitak.mobile.domain.LassoLatLng(
@@ -1512,7 +1556,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 } ?: "—",
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(end = 12.dp, bottom = 96.dp),
+                    .padding(end = 12.dp, bottom = 96.dp)
+                    // #213 - wrap rather than run under the map buttons at the left
+                    // when the label size and the phone font are both large.
+                    .widthIn(max = positionCardMaxWidthDp(LocalConfiguration.current.screenWidthDp).dp),
+                labelScalePercent = userPrefs.labelScalePercent,
             )
         }
 
@@ -1957,7 +2005,16 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         val r = uas.startPursueContact(uid, callsign) {
                             // Re-read each tick so we track the contact as it moves.
                             val live = app.contactStore.contacts.value[uid] ?: return@startPursueContact null
-                            live.lat to live.lon
+                            // #249 - no time, on purpose: a contact has no age rule.
+                            // Its position is its last report and a dropped marker is
+                            // never repeated, so pursuing one keeps going to that point.
+                            // The contact max-age setting is what removes a silent
+                            // teammate.
+                            soy.engindearing.omnitak.mobile.domain.FollowTargetPoint(
+                                lat = live.lat,
+                                lon = live.lon,
+                                timeMs = null,
+                            )
                         }
                         val msg = when (r) {
                             soy.engindearing.omnitak.mobile.domain.UASManager.FollowMeResult.Started ->
@@ -1968,6 +2025,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                                 "UAS link down"
                             is soy.engindearing.omnitak.mobile.domain.UASManager.FollowMeResult.AutopilotNotSupported ->
                                 "Pursue requires PX4 (autopilot=${r.autopilot ?: "unknown"})"
+                            soy.engindearing.omnitak.mobile.domain.UASManager.FollowMeResult.NoAltitudeReference ->
+                                "No altitude reference — pursue needs your GPS altitude or terrain data at the contact"
                         }
                         toast(msg)
                     }
@@ -2318,8 +2377,13 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         }
 
         if (teamsPanelOpen) {
+            val agingNowMs by app.contactAging.nowMs.collectAsState()
             ContactsPanel(
-                contacts = contacts.values.toList(),
+                contacts = contacts.values.filterNot { agingState.isHidden(it.uid) },
+                // #215: the contacts the map is not showing, with the setting they were decided with.
+                notHeardFrom = contacts.values.filter { agingState.isHidden(it.uid) },
+                maxAgeMinutes = agingState.maxAgeMinutes,
+                nowMs = agingNowMs,
                 onSelect = { c ->
                     panTarget = LatLng(c.lat, c.lon)
                     panTargetTick += 1

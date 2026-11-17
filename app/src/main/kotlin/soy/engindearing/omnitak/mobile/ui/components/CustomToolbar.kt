@@ -310,7 +310,7 @@ private fun BarCell(
             ) {
                 Icon(
                     imageVector = item.icon,
-                    contentDescription = item.label,
+                    contentDescription = item.contentDescription,
                     tint = if (selected) item.tint else Color.White.copy(alpha = 0.85f),
                     modifier = Modifier.size(22.dp),
                 )

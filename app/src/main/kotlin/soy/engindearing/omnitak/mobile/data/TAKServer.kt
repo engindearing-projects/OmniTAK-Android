@@ -44,8 +44,19 @@ data class TAKServer(
     // pin or the system trust store unless the operator flips this.
     // Decodes as false from pre-0.36 JSON blobs (kotlinx default).
     val allowUntrustedTls: Boolean = false,
+    // iOS #169 parity — the enrollment/OAuth port (TAK default 8446). It is
+    // the Marti API's second route: when the certificate port refuses the
+    // handshake and credentials are stored, the REST client signs in here.
+    // Decodes as 8446 from older JSON blobs (kotlinx default).
+    val enrollmentPort: Int = 8446,
+    // Marti REST port when it is not the conventional 8443 (iOS #114 parity);
+    // null means 8443. Decodes as null from older JSON blobs.
+    val secureApiPort: Int? = null,
 ) {
     val displayName: String get() = "$name ($host:$port)"
+
+    /** A username and password are stored: the second route to the Marti API. */
+    val hasStoredCredentials: Boolean get() = !username.isNullOrBlank() && !password.isNullOrBlank()
 
     val protocolEnum: ConnectionProtocol get() = ConnectionProtocol.fromWire(protocol)
 
