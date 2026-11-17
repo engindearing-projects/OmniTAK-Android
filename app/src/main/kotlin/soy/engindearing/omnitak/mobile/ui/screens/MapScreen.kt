@@ -2540,6 +2540,9 @@ private fun DrawingOverlay(
             color = TacticalAccent,
             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
             style = MaterialTheme.typography.bodyMedium,
+            // The readout gets the width the buttons leave, never the other way round: on a narrow
+            // phone with a large font Save was pushed off the end of the banner.
+            modifier = Modifier.weight(1f, fill = false),
         )
         androidx.compose.foundation.layout.Spacer(Modifier.width(12.dp))
         androidx.compose.material3.TextButton(onClick = onUndo, enabled = pointCount > 0) {
