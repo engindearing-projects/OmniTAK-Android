@@ -524,6 +524,11 @@ fun AppNav() {
                 navigateTo("map")
                 LassoSelectionService.shared.requestActivate()
             },
+            onGeofences = {
+                showToolsLauncher = false
+                navigateTo("map")
+                soy.engindearing.omnitak.mobile.ui.components.GeofenceSheetEvents.requestOpen()
+            },
             onUAS = {
                 showToolsLauncher = false
                 nav.navigate("uas") {

@@ -57,7 +57,8 @@ class CesiumFarSideTest {
     }
 
     @Test fun markers_still_skip_the_depth_test_so_nothing_near_sinks_into_terrain_or_buildings() {
-        // The billboard and the label of an entity.
-        assertEquals(2, Regex(Regex.escape("disableDepthTestDistance:Number.POSITIVE_INFINITY")).findAll(page).count())
+        // The billboard and the label of an entity, and the name a shape carries (a geofence's, #155), which
+        // is hidden with the horizon like the others (CesiumGeofencePageTest).
+        assertEquals(3, Regex(Regex.escape("disableDepthTestDistance:Number.POSITIVE_INFINITY")).findAll(page).count())
     }
 }

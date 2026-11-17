@@ -2,14 +2,16 @@ package soy.engindearing.omnitak.mobile.data.geofence
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import soy.engindearing.omnitak.mobile.data.GeoMath
 
 /**
- * #155 — General geofencing (ported from iOS GeofenceService): circle + polygon
- * zones with entry/exit/dwell transitions. Pure, so it unit-tests directly; the
- * Android layer feeds contact position updates in and surfaces the events as
- * notifications + map highlights.
+ * #155 - circle and polygon containment, the geometry under the geofences. Pure, so it unit-tests
+ * directly. What a zone is called, who it watches and what it alerts on is [Geofence]
+ * ([GeofenceModelTest]); what happens when someone crosses its edge is [GeofenceMonitorTest].
  */
 class GeofencingTest {
 
@@ -25,8 +27,17 @@ class GeofencingTest {
     }
 
     @Test fun circle_radius_boundary() {
-        assertTrue(circle.contains(47.0 + 0.008, -122.0))  // ~890 m — inside
-        assertFalse(circle.contains(47.0 + 0.010, -122.0)) // ~1113 m — outside
+        assertTrue(circle.contains(47.0 + 0.008, -122.0))  // ~890 m: inside
+        assertFalse(circle.contains(47.0 + 0.010, -122.0)) // ~1113 m: outside
+    }
+
+    @Test fun a_point_exactly_on_the_radius_is_inside() {
+        // The radius is the distance to that very point, measured the way the zone measures: on the edge.
+        val edgeLat = 47.0 + 0.006
+        val onTheEdge = GeoMath.haversineMeters(47.0, -122.0, edgeLat, -122.0)
+        assertTrue(CircleZone("edge", 47.0, -122.0, onTheEdge).contains(edgeLat, -122.0))
+        // A hair inside the radius is not enough to hold it.
+        assertFalse(CircleZone("edge", 47.0, -122.0, onTheEdge - 0.01).contains(edgeLat, -122.0))
     }
 
     @Test fun polygon_contains_via_ray_casting() {
@@ -36,35 +47,53 @@ class GeofencingTest {
         assertTrue(square.contains(0.9, 0.9))    // inside near corner
     }
 
-    @Test fun monitor_emits_entry_then_exit_then_reentry() {
-        val m = GeofenceMonitor(listOf(circle))
-        assertEquals(listOf(GeofenceEventType.ENTRY), m.update("A", 47.0, -122.0, 1000L).map { it.type })
-        assertTrue("staying inside emits nothing", m.update("A", 47.0, -122.0, 2000L).isEmpty())
-        assertEquals(listOf(GeofenceEventType.EXIT), m.update("A", 48.0, -122.0, 3000L).map { it.type })
-        assertTrue("staying outside emits nothing", m.update("A", 49.0, -122.0, 3500L).isEmpty())
-        assertEquals(listOf(GeofenceEventType.ENTRY), m.update("A", 47.0, -122.0, 4000L).map { it.type })
+    @Test fun polygon_edges_just_inside_and_just_outside() {
+        val e = 1e-7
+        assertTrue(square.contains(1.0 - e, 0.0))
+        assertFalse(square.contains(1.0 + e, 0.0))
+        assertTrue(square.contains(0.0, -1.0 + e))
+        assertFalse(square.contains(0.0, -1.0 - e))
     }
 
-    @Test fun monitor_tracks_contacts_independently() {
-        val m = GeofenceMonitor(listOf(circle))
-        assertEquals(listOf(GeofenceEventType.ENTRY), m.update("A", 47.0, -122.0, 1L).map { it.type })
-        assertEquals(listOf(GeofenceEventType.ENTRY), m.update("B", 47.0, -122.0, 2L).map { it.type })
-        assertTrue(m.update("A", 47.0, -122.0, 3L).isEmpty())
+    @Test fun a_polygon_with_fewer_than_three_corners_contains_nothing() {
+        assertFalse(PolygonZone("two", listOf(LatLon(0.0, 0.0), LatLon(1.0, 1.0))).contains(0.5, 0.5))
+        assertFalse(PolygonZone("none", emptyList()).contains(0.0, 0.0))
     }
 
-    @Test fun monitor_dwell_fires_once_after_threshold() {
-        val m = GeofenceMonitor(listOf(circle), dwellThresholdMs = 5000L)
-        assertEquals(listOf(GeofenceEventType.ENTRY), m.update("A", 47.0, -122.0, 0L).map { it.type })
-        assertTrue("before threshold", m.update("A", 47.0, -122.0, 3000L).isEmpty())
-        assertEquals(listOf(GeofenceEventType.DWELL), m.update("A", 47.0, -122.0, 6000L).map { it.type })
-        assertTrue("dwell fires only once", m.update("A", 47.0, -122.0, 9000L).isEmpty())
+    @Test fun a_geofence_hands_its_shape_to_the_zone_it_tests_with() {
+        val round = Geofence(
+            id = "g", name = "North gate", type = GeofenceType.CIRCLE,
+            centerLat = 47.0, centerLon = -122.0, radiusMeters = 1000.0,
+        )
+        assertEquals(CircleZone("g", 47.0, -122.0, 1000.0), round.zone)
+        assertTrue(round.contains(47.0, -122.0))
+        assertFalse(round.contains(48.0, -122.0))
+
+        val yard = Geofence(
+            id = "y", name = "Yard", type = GeofenceType.POLYGON,
+            points = listOf(LatLon(-1.0, -1.0), LatLon(-1.0, 1.0), LatLon(1.0, 1.0)),
+        )
+        assertNotNull(yard.zone)
+        assertTrue(yard.contains(-0.5, 0.5))
     }
 
-    @Test fun monitor_reports_only_the_zone_entered() {
-        val far = CircleZone("c2", 10.0, 10.0, 1000.0)
-        val m = GeofenceMonitor(listOf(circle, far))
-        val events = m.update("A", 47.0, -122.0, 1L)
-        assertEquals(1, events.size)
-        assertEquals("c", events[0].zoneId)
+    @Test fun a_geofence_without_a_usable_shape_has_no_zone_and_contains_nothing() {
+        val noRadius = Geofence(id = "a", name = "A", type = GeofenceType.CIRCLE, centerLat = 1.0, centerLon = 1.0, radiusMeters = 0.0)
+        val noCenter = Geofence(id = "b", name = "B", type = GeofenceType.CIRCLE, radiusMeters = 100.0)
+        val twoCorners = Geofence(id = "c", name = "C", type = GeofenceType.POLYGON, points = listOf(LatLon(0.0, 0.0), LatLon(1.0, 1.0)))
+        val noShape = Geofence(id = "d", name = "D", type = GeofenceType.POLYGON)
+        for (g in listOf(noRadius, noCenter, twoCorners, noShape)) {
+            assertFalse("${g.name} has a usable shape", g.hasUsableShape)
+            assertNull("${g.name} has a zone", g.zone)
+            assertFalse(g.contains(1.0, 1.0))
+            assertFalse(g.contains(0.5, 0.5))
+        }
+    }
+
+    @Test fun a_position_that_is_not_a_coordinate_is_never_inside() {
+        val round = Geofence(id = "g", name = "G", type = GeofenceType.CIRCLE, centerLat = 0.0, centerLon = 0.0, radiusMeters = 1e9)
+        assertFalse(round.contains(Double.NaN, 0.0))
+        assertFalse(round.contains(0.0, Double.POSITIVE_INFINITY))
+        assertFalse(round.contains(91.0, 0.0))
     }
 }

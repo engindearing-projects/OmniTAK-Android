@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.Fence
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.LocationOn
@@ -68,12 +69,21 @@ import soy.engindearing.omnitak.mobile.data.Drawing
 import soy.engindearing.omnitak.mobile.data.DrawingKind
 import soy.engindearing.omnitak.mobile.data.GeoMath
 import soy.engindearing.omnitak.mobile.data.LabelSize
+import soy.engindearing.omnitak.mobile.data.geofence.GeofenceDrawings
+import soy.engindearing.omnitak.mobile.data.geofence.LatLon
+import soy.engindearing.omnitak.mobile.domain.GeofenceNotificationPermission
+import soy.engindearing.omnitak.mobile.domain.GeofenceNotifier
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
 import soy.engindearing.omnitak.mobile.domain.ServerHealthProjection
 import soy.engindearing.omnitak.mobile.i18n.Loc
 import soy.engindearing.omnitak.mobile.ui.components.ATAKStatusBar
 import soy.engindearing.omnitak.mobile.ui.components.CompassOverlay
 import soy.engindearing.omnitak.mobile.ui.components.ContactsPanel
+import soy.engindearing.omnitak.mobile.ui.components.GeofenceBannerHost
+import soy.engindearing.omnitak.mobile.ui.components.GeofenceLabelOverlay
+import soy.engindearing.omnitak.mobile.ui.components.GeofenceLabels
+import soy.engindearing.omnitak.mobile.ui.components.GeofenceSheet
+import soy.engindearing.omnitak.mobile.ui.components.GeofenceSheetEvents
 import soy.engindearing.omnitak.mobile.ui.components.LayersDialog
 import soy.engindearing.omnitak.mobile.ui.components.MapOrnamentLayout
 import soy.engindearing.omnitak.mobile.ui.components.MapScaleBar
@@ -328,6 +338,38 @@ fun MapScreen(
     OnRequest(soy.engindearing.omnitak.mobile.ui.components.CoordinateEntryEvents.open) {
         coordEntryOpen = true
     }
+    var geofenceSheetOpen by remember { mutableStateOf(false) }
+    // The middle of the map when the sheet opened: where a circle at the map center goes.
+    var geofenceMapCenter by remember { mutableStateOf<LatLon?>(null) }
+    // The geofence sheet opens from the tools dial here and from the Tools popup through a request;
+    // the middle of the map is taken at that moment (the camera the map last reported, else where
+    // the operator is), so a circle made at the map center goes where the map was centered.
+    fun openGeofences() {
+        val lat = app.mapCameraStore.lastTargetLat
+        val lon = app.mapCameraStore.lastTargetLon
+        geofenceMapCenter = when {
+            lat != null && lon != null -> LatLon(lat, lon)
+            else -> effectiveSelfFix?.let { LatLon(it.lat, it.lon) }
+        }
+        geofenceSheetOpen = true
+    }
+    OnRequest(GeofenceSheetEvents.open) { openGeofences() }
+    // Android 13 and later ask before a notification can show. A geofence's alert is one, so the
+    // question is asked when the first geofence is saved, and never at launch.
+    val notificationPermission = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { }
+    fun askForNotificationsIfNeeded() {
+        val shouldAsk = GeofenceNotificationPermission.shouldAsk(
+            sdkInt = android.os.Build.VERSION.SDK_INT,
+            granted = GeofenceNotificationPermission.isGranted(app),
+            alreadyAsked = GeofenceNotificationPermission.wasAsked(app),
+        )
+        if (shouldAsk) {
+            GeofenceNotificationPermission.markAsked(app)
+            notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
     // ADS-B is now a plugin (:plugins:example-adsb). The plugin owns its
     // AdsbService, its map overlay (which paints via AircraftLayer on the live
     // MapLibre handle) and its on/off settings toggle. MapScreen no longer
@@ -346,6 +388,10 @@ fun MapScreen(
     // as a distinct cyan ring + callsign label, above the aircraft circle.
     val droneForMap = if (droneState.hasFix()) droneState else null
     val drawings by app.drawingStore.drawings.collectAsState()
+    // The operator's geofences (#155). What they draw on the map is the same list for both engines:
+    // transient drawings with reserved ids, never in the drawing store.
+    val geofences by app.geofenceStore.geofences.collectAsState()
+    val geofenceDrawings = remember(geofences) { GeofenceDrawings.from(geofences) }
     // KML vector overlays (imported KML/KMZ rendered as GeoJSON sources).
     val kmlOverlays by app.kmlOverlayStore.overlays.collectAsState()
     // MBTiles raster tile overlays (served by the in-app tile server).
@@ -589,11 +635,11 @@ fun MapScreen(
     // #152 — render user drawings AND the transient range rings through the
     // single native renderer. apply() clears and redraws the whole set, so the
     // rings must ride in the SAME list; a separate call would wipe the drawings.
-    LaunchedEffect(drawings, drawingsVisible, mapboxMap, rangeRingCenter) {
+    LaunchedEffect(drawings, drawingsVisible, mapboxMap, rangeRingCenter, geofenceDrawings) {
         mapboxMap?.let { m ->
             val base = if (drawingsVisible) drawings else emptyList()
             soy.engindearing.omnitak.mobile.ui.components.DrawingShapeRenderer
-                .apply(m, base + buildRangeRingDrawings(rangeRingCenter))
+                .apply(m, base + buildRangeRingDrawings(rangeRingCenter) + geofenceDrawings)
         }
     }
     val handleMapLongPress: (LatLng, Offset) -> Unit = { latLng, offset ->
@@ -721,7 +767,7 @@ fun MapScreen(
             // Issue #79 — render saved drawings on the globe too (parity with
             // the 2D engine). The in-progress draft lives only during 2D
             // drawing input, so the globe just shows committed shapes.
-            drawings = if (drawingsVisible) drawings else emptyList(),
+            drawings = (if (drawingsVisible) drawings else emptyList()) + geofenceDrawings,
             initialCamera = cesiumSeed,
             // Same control ticks the 2D map uses — make +/- and "center on
             // me" drive the globe (VC 77: buttons did nothing on 3D).
@@ -883,7 +929,7 @@ fun MapScreen(
                 drawings + buildInProgressDrawing(drawingKind, drawingPoints)
             } else {
                 emptyList()
-            }) + buildRangeRingDrawings(rangeRingCenter),
+            }) + buildRangeRingDrawings(rangeRingCenter) + geofenceDrawings,
             // Graticule follows the viewport (was hardcoded to Mountain
             // View — invisible for any user outside ±2° of the
             // Googleplex). Quantized to 0.5° so micro-pans don't re-push
@@ -931,6 +977,13 @@ fun MapScreen(
             // run does not slide it away while one is active.
             mapToolActive = measurementActive || rangeRingsActive || drawingKind != null || lassoMode,
             toolbarClearanceDp = toolbarClearance,
+        )
+        // The names of the geofences (#155), written under the middle of each zone. Over the map, under
+        // every control, and they take no touches.
+        GeofenceLabelOverlay(
+            map = mapboxMap,
+            labels = remember(geofenceDrawings) { GeofenceLabels.of(geofenceDrawings) },
+            labelFactor = labelFactor,
         )
         // Plugin map overlays on the MAPLIBRE engine. The handle is the live
         // MapLibreMap (captured via onMapReady above; null briefly until the
@@ -1664,6 +1717,7 @@ fun MapScreen(
                 ToolEntry("draw", Icons.Filled.Brush, "Drawing"),
                 ToolEntry("measure", Icons.Filled.Straighten, "Measure"),
                 ToolEntry("rangerings", Icons.Filled.TrackChanges, "Range rings"),
+                ToolEntry("geofences", Icons.Filled.Fence, Loc.t("tools.geofence")),
                 ToolEntry("reports", Icons.Filled.Description, "Reports"),
                 ToolEntry("layers", Icons.Filled.Layers, "Layers"),
                 // ADS-B moved to the ADS-B plugin — its on/off control now
@@ -1693,6 +1747,7 @@ fun MapScreen(
                         rangeRingCenter = null
                         toast("Range rings — tap map to set center")
                     }
+                    "geofences" -> openGeofences()
                     "reports" -> reportsSheetOpen = true
                     // The drawing starts when its kind is picked (below), not when the picker opens:
                     // backing out of the picker leaves the tool that is on as it was.
@@ -2282,6 +2337,10 @@ fun MapScreen(
                 .mapSafeAreaPadding()
                 .padding(top = MapOrnamentLayout.TOP_CHROME_DP.dp),
         ) {
+            // A geofence alert (#155) takes the top of the corner while it shows, and everything under
+            // it moves down by its height, so it never covers a tool banner or the compass.
+            GeofenceBannerHost(service = app.geofenceService, onOpen = ::openGeofences)
+
             if (drawingKind != null) {
                 DrawingOverlay(
                     kind = drawingKind!!,
@@ -2351,6 +2410,37 @@ fun MapScreen(
                     start = 12.dp,
                     top = MapOrnamentLayout.compassTopGapDp(bannerShowing).dp,
                 ),
+            )
+        }
+
+        if (geofenceSheetOpen) {
+            GeofenceSheetHost(
+                app = app,
+                drawings = drawings,
+                mapCenter = geofenceMapCenter,
+                distanceUnit = userPrefs.distanceUnit,
+                coordFormat = userPrefs.coordFormat,
+                onSave = { geofence ->
+                    app.geofenceStore.add(geofence)
+                    // The channel the alerts go through exists from now on, so the operator can see it
+                    // (and silence it) in the system settings before the first alert comes.
+                    GeofenceNotifier.ensureChannel(app)
+                    askForNotificationsIfNeeded()
+                    // Saving closes the sheet, so the new geofence is the first thing seen on the map.
+                    geofenceSheetOpen = false
+                },
+                onShowOnMap = { geofence ->
+                    val at = geofence.labelPoint
+                    geofenceSheetOpen = false
+                    if (at != null) {
+                        // An operator's own camera move: the first fix of a first run must not undo it.
+                        RetainedMapView.firstFix.operatorMovedCamera()
+                        panTarget = LatLng(at.lat, at.lon)
+                        panTargetTick += 1
+                        if (followMeActive) mutatePref { it.copy(followMeActive = false) }
+                    }
+                },
+                onDismiss = { geofenceSheetOpen = false },
             )
         }
 
@@ -2682,6 +2772,41 @@ private fun RangeRingsOverlay(
             androidx.compose.material3.Text("Done", color = TacticalAccent)
         }
     }
+}
+
+/**
+ * The geofence sheet with what it reads from the app. Its own composable, so the alerts and the
+ * positions that change the "who is inside" lines recompose the sheet and not the map screen.
+ */
+@Composable
+private fun GeofenceSheetHost(
+    app: OmniTAKApp,
+    drawings: List<Drawing>,
+    mapCenter: LatLon?,
+    distanceUnit: DistanceUnit,
+    coordFormat: soy.engindearing.omnitak.mobile.data.CoordFormat,
+    onSave: (soy.engindearing.omnitak.mobile.data.geofence.Geofence) -> Unit,
+    onShowOnMap: (soy.engindearing.omnitak.mobile.data.geofence.Geofence) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val geofences by app.geofenceStore.geofences.collectAsState()
+    val events by app.geofenceStore.events.collectAsState()
+    val occupancy by app.geofenceService.occupancy.collectAsState()
+    GeofenceSheet(
+        geofences = geofences,
+        occupancy = occupancy,
+        events = events,
+        drawings = drawings,
+        mapCenter = mapCenter,
+        distanceUnit = distanceUnit,
+        coordFormat = coordFormat,
+        onSave = onSave,
+        onSetActive = { id, active -> app.geofenceStore.setActive(id, active) },
+        onDelete = { id -> app.geofenceStore.remove(id) },
+        onShowOnMap = onShowOnMap,
+        onClearEvents = { app.geofenceStore.clearEvents() },
+        onDismiss = onDismiss,
+    )
 }
 
 private fun timeLabel(): String =

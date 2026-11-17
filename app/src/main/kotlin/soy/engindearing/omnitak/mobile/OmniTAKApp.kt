@@ -1,10 +1,15 @@
 package soy.engindearing.omnitak.mobile
 
+import android.app.Activity
 import android.app.Application
 import android.content.Context
 import android.os.BatteryManager
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
@@ -18,6 +23,7 @@ import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.data.AdminResponse
 import soy.engindearing.omnitak.mobile.data.CertVault
 import soy.engindearing.omnitak.mobile.data.ChatHistoryFile
+import soy.engindearing.omnitak.mobile.data.geofence.GeofenceFile
 import soy.engindearing.omnitak.mobile.data.ConfigProfileStore
 import soy.engindearing.omnitak.mobile.data.LocationProvider
 import soy.engindearing.omnitak.mobile.data.MeshDeviceConfigStore
@@ -30,7 +36,12 @@ import soy.engindearing.omnitak.mobile.domain.ContactStore
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
 import soy.engindearing.omnitak.mobile.domain.DataPackageBootstrap
 import soy.engindearing.omnitak.mobile.domain.DrawingStore
+import soy.engindearing.omnitak.mobile.domain.ForegroundTracker
+import soy.engindearing.omnitak.mobile.domain.GeofenceNotifier
+import soy.engindearing.omnitak.mobile.domain.GeofenceService
+import soy.engindearing.omnitak.mobile.domain.GeofenceStore
 import soy.engindearing.omnitak.mobile.domain.MapCameraStore
+import soy.engindearing.omnitak.mobile.domain.operatorPositionOf
 import soy.engindearing.omnitak.mobile.domain.MeshCoTBridge
 import soy.engindearing.omnitak.mobile.domain.MeshCoTRouter
 import soy.engindearing.omnitak.mobile.domain.MeshFrameworkManager
@@ -54,6 +65,14 @@ class OmniTAKApp : Application() {
         // on first use under the lazy lock, so whoever asks first waits for the read
         // and nobody ever sees a half-restored store.
         appScope.launch(Dispatchers.IO) { chatStore }
+
+        // Geofences: the saved ones are read on a background thread (the store is built on first
+        // use under the lazy lock, so whoever asks first waits for the read), and are watched for
+        // the life of the process from here, not by any screen, so they keep working on another tab
+        // and while only the connection service keeps the app alive. It does nothing until a
+        // geofence is switched on.
+        trackForeground()
+        startGeofences()
 
         // #139 — give MapLibre an HTTP client that sends an app-identifying
         // User-Agent. OSM/OpenTopoMap serve a "403 Access blocked" tile to
@@ -410,6 +429,70 @@ class OmniTAKApp : Application() {
         )
     }
     val drawingStore: DrawingStore by lazy { DrawingStore() }
+
+    /** Whether any screen of the app is showing: with none, a geofence alert is a notification too. */
+    val foregroundTracker = ForegroundTracker()
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun startGeofences() {
+        appScope.launch(Dispatchers.IO) { geofenceStore }
+        // One thread at a time: the service keeps its state in plain fields.
+        appScope.launch(Dispatchers.Default.limitedParallelism(1)) { geofenceService.run() }
+    }
+
+    private fun trackForeground() {
+        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
+            override fun onActivityStarted(activity: Activity) = foregroundTracker.activityStarted()
+            override fun onActivityStopped(activity: Activity) = foregroundTracker.activityStopped()
+            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+            override fun onActivityResumed(activity: Activity) = Unit
+            override fun onActivityPaused(activity: Activity) = Unit
+            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+            override fun onActivityDestroyed(activity: Activity) = Unit
+        })
+    }
+
+    /**
+     * The operator's geofences and what they have reported (#155). Saved in
+     * `<filesDir>/geofences/geofences.json`, loaded off the main thread at launch, written back off it.
+     */
+    val geofenceStore: GeofenceStore by lazy {
+        GeofenceStore(storage = GeofenceFile.inFilesDir(filesDir), scope = appScope)
+    }
+
+    val geofenceNotifier: GeofenceNotifier by lazy { GeofenceNotifier(this) }
+
+    /**
+     * Watches the geofences against the operator's position (what the position card shows: the
+     * manual position when there is one, else a live fix; never one kept from the last run) and
+     * the contact store (which also holds the contacts heard over a mesh radio). Started in [onCreate].
+     */
+    val geofenceService: GeofenceService by lazy {
+        val mainHandler = Handler(Looper.getMainLooper())
+        GeofenceService(
+            store = geofenceStore,
+            operatorPosition = combine(locationProvider.manualFix, locationProvider.fix, ::operatorPositionOf)
+                .distinctUntilChanged(),
+            contacts = contactStore.contacts,
+            goneContacts = { contactAging.state.value.hiddenUids },
+            ignoredContacts = ::pairedRadioUids,
+            selfUid = { cachedPrefs.value.selfUid },
+            selfCallsign = { cachedPrefs.value.callsign },
+            // The map starts the phone's location when it is shown; a geofence must not depend on that.
+            keepLocationOn = { mainHandler.post { locationProvider.start() } },
+            inBackground = { !foregroundTracker.inForeground },
+            notify = { geofenceNotifier.notify(it) },
+        )
+    }
+
+    /**
+     * The uids of the operator's own radios (Meshtastic role TAK): their position duplicates the
+     * phone's, which the map hides for the same reason, so a geofence does not count them as teammates.
+     */
+    private fun pairedRadioUids(): Set<String> =
+        activeMeshManager.nodes.value.values
+            .filter { it.isTakPaired }
+            .mapTo(HashSet()) { MeshtasticCoTConverter.takUid(it.id) }
     val mapCameraStore: MapCameraStore by lazy { MapCameraStore(userPrefsStore) }
 
     /** #173 — raises an Android notification for incoming mesh GeoChat. Wired

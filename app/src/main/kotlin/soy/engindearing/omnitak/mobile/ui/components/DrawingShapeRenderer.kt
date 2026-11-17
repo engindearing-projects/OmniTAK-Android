@@ -28,7 +28,9 @@ import kotlin.math.sin
  * so it also covers the repaint-on-reload reading of the bug. See
  * project_omnitak_android_marker_gpu_bug; mirrors KmlShapeRenderer.
  *
- * Polygons/circles get a translucent fill plus a full-opacity outline ring.
+ * Polygons/circles get a translucent fill plus a full-opacity outline ring. The fill is the
+ * drawing's own [Drawing.fillAlpha]: the operator's drawings keep the 30 percent they always had, the
+ * geofences the app draws for the operator (#155) a lighter one.
  */
 object DrawingShapeRenderer {
     private var polylines: List<Polyline> = emptyList()
@@ -51,12 +53,12 @@ object DrawingShapeRenderer {
                 DrawingKind.POLYGON -> {
                     val ring = closedRing(d.points)
                     if (ring.size < 3) continue
-                    addPolygon(map, ring, color, width, newLines)?.let { newPolys.add(it) }
+                    addPolygon(map, ring, color, width, d.fillAlpha, newLines)?.let { newPolys.add(it) }
                 }
                 DrawingKind.CIRCLE -> {
                     val ring = circlePolygon(d.points)
                     if (ring.size < 3) continue
-                    addPolygon(map, ring, color, width, newLines)?.let { newPolys.add(it) }
+                    addPolygon(map, ring, color, width, d.fillAlpha, newLines)?.let { newPolys.add(it) }
                 }
             }
         }
@@ -81,12 +83,12 @@ object DrawingShapeRenderer {
         }.getOrNull()
 
     private fun addPolygon(
-        map: MapLibreMap, ring: List<Pair<Double, Double>>, color: Int, width: Float,
+        map: MapLibreMap, ring: List<Pair<Double, Double>>, color: Int, width: Float, fillAlpha: Float,
         outlineSink: MutableList<Polyline>,
     ): Polygon? {
         val pts = ring.map { LatLng(it.first, it.second) }
         val poly = runCatching {
-            map.addPolygon(PolygonOptions().addAll(pts).fillColor(color).alpha(0.3f))
+            map.addPolygon(PolygonOptions().addAll(pts).fillColor(color).alpha(fillAlpha))
         }.getOrNull()
         // Crisp outline — fill alone reads weakly against the basemap.
         runCatching {
