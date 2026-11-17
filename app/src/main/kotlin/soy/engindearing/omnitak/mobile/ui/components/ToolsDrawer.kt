@@ -182,7 +182,12 @@ fun ToolsDrawer(
                 spacingDp = spacing,
             )
             Column(
-                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp, top = 12.dp),
+                modifier = Modifier.padding(
+                    start = 16.dp,
+                    end = 16.dp,
+                    bottom = MapOrnamentLayout.toolsButtonBottomDp(true).dp,
+                    top = 12.dp,
+                ),
                 horizontalAlignment = Alignment.End,
                 verticalArrangement = Arrangement.spacedBy(spacing.dp),
             ) {
@@ -212,7 +217,12 @@ fun ToolsDrawer(
             // FAB end, so the tools nearest the button are the ones in view first.
             val maxDialDp = ToolsDrawerLayout.dialMaxHeightDp(availableHeightDp, fabSize, spacing)
             Column(
-                modifier = Modifier.padding(16.dp),
+                modifier = Modifier.padding(
+                    start = 16.dp,
+                    end = 16.dp,
+                    bottom = MapOrnamentLayout.toolsButtonBottomDp(false).dp,
+                    top = 16.dp,
+                ),
                 horizontalAlignment = Alignment.End,
                 verticalArrangement = Arrangement.spacedBy(spacing.dp),
             ) {
