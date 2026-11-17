@@ -263,6 +263,7 @@ class MainActivity : ComponentActivity() {
                         // back to the system trust store and fails CertPathValidator.
                         // Matches EnrollServerScreen / ServerQrScanScreen.
                         caCertificateName = enrolled.caCertificateName,
+                        enrollmentPort = cfg.enrollmentPort,
                     ),
                 )
                 Log.i("OmniTAK", "Enrolled + added server '${cfg.name}' from $uri")
