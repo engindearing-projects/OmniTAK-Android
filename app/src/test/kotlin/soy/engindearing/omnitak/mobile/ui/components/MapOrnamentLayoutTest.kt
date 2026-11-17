@@ -97,13 +97,23 @@ class MapOrnamentLayoutTest {
         val gestureBar = 63 / density.toDouble()
         assertEquals(
             "the status bar, the 40 dp strip, 8 dp of air and the room for the name",
-            statusBar + MapOrnamentLayout.STATUS_STRIP_DP + MapOrnamentLayout.FRAMED_ZONE_AIR_DP + 28.0,
+            statusBar + MapOrnamentLayout.STATUS_STRIP_DP + MapOrnamentLayout.UNDER_STRIP_AIR_DP + 28.0,
             room.topDp,
             1e-9,
         )
         assertEquals(gestureBar + 64.0, room.bottomDp, 1e-9)
         assertEquals(64.0, room.leftDp, 1e-9)
         assertEquals(64.0, room.rightDp, 1e-9)
+    }
+
+    @Test fun the_room_at_the_top_is_where_names_may_start_and_the_room_for_the_name() {
+        val room = MapOrnamentLayout.frameInsets(gestureSafeArea, density)
+        assertEquals(
+            MapOrnamentLayout.belowStripDp(gestureSafeArea, density) + soy.engindearing.omnitak.mobile.data.geofence.GeofenceFraming.LABEL_ROOM_DP,
+            room.topDp,
+            1e-9,
+        )
+        assertEquals(114 / density.toDouble() + 40 + 8, MapOrnamentLayout.belowStripDp(gestureSafeArea, density), 1e-9)
     }
 
     @Test fun held_sideways_the_navigation_bar_on_the_side_is_kept_clear_too() {

@@ -53,10 +53,20 @@ internal object MapOrnamentLayout {
         bottom = px(SIDE_MARGIN_DP, density),
     )
 
-    // MARK: the room a framed zone keeps
+    // MARK: the names of the zones
 
-    /** Air between the status strip and the name written above a framed zone's north edge. */
-    const val FRAMED_ZONE_AIR_DP = 8
+    /** Air between the status strip and the first thing written on the map under it: the name of a zone. */
+    const val UNDER_STRIP_AIR_DP = 8
+
+    private fun densityOrOne(density: Float): Double = if (density.isFinite() && density > 0f) density.toDouble() else 1.0
+
+    /**
+     * Where, in dp from the top of the window, the map is clear of the status bar, the status strip and a
+     * little air: the highest the top of a name written on the map can be. A name stays under this when its
+     * zone's edge is above it, and "Show on map" keeps the zone under it (with room for the name itself).
+     */
+    fun belowStripDp(safe: EdgePx, density: Float): Double =
+        safe.top / densityOrOne(density) + STATUS_STRIP_DP + UNDER_STRIP_AIR_DP
 
     /**
      * The room "Show on map" keeps clear of the window's edges, for a window whose safe area is [safe]: the
@@ -64,13 +74,13 @@ internal object MapOrnamentLayout {
      * name is not hidden under the strip when the north edge is the closest to the top (held sideways).
      */
     fun frameInsets(safe: EdgePx, density: Float): FrameInsets {
-        val d = if (density.isFinite() && density > 0f) density.toDouble() else 1.0
+        val d = densityOrOne(density)
         return GeofenceFraming.insetsFor(
             safeLeftDp = safe.left / d,
             safeTopDp = safe.top / d,
             safeRightDp = safe.right / d,
             safeBottomDp = safe.bottom / d,
-            topChromeDp = (STATUS_STRIP_DP + FRAMED_ZONE_AIR_DP).toDouble(),
+            topChromeDp = (STATUS_STRIP_DP + UNDER_STRIP_AIR_DP).toDouble(),
         )
     }
 

@@ -13,12 +13,26 @@ import androidx.compose.ui.platform.LocalDensity
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.maps.MapLibreMap
 import soy.engindearing.omnitak.mobile.data.Drawing
+import kotlin.math.max
+import kotlin.math.min
 
-/** A name to write on the 2D map: [text] above the point ([lat], [lon]), in [colorHex]. */
-internal data class GeofenceLabel(val text: String, val lat: Double, val lon: Double, val colorHex: String)
+/**
+ * A name to write on the 2D map: [text] above the point ([lat], [lon]), in [colorHex]. [outline] is a few
+ * ([lat], [lon]) points round the zone it names, to tell which part of the zone is on the screen.
+ */
+internal data class GeofenceLabel(
+    val text: String,
+    val lat: Double,
+    val lon: Double,
+    val colorHex: String,
+    val outline: List<Pair<Double, Double>> = emptyList(),
+)
 
-/** Where a name goes on the screen, in px. */
-internal data class ScreenLabel(val text: String, val x: Float, val y: Float, val colorHex: String)
+/** The part of the screen a zone covers, in px: the box round its outline. */
+internal data class ScreenBox(val left: Float, val top: Float, val right: Float, val bottom: Float)
+
+/** Where a name goes on the screen, in px, and the part of the screen its zone covers when that is known. */
+internal data class ScreenLabel(val text: String, val x: Float, val y: Float, val colorHex: String, val zone: ScreenBox? = null)
 
 /**
  * The rules for the names of the geofences on the 2D map, free of Android types so they are tested
@@ -28,6 +42,9 @@ internal object GeofenceLabels {
 
     /** A very long name is cut: one label must not cover the map. */
     const val MAX_CHARS = 28
+
+    /** How many points round a zone are kept to tell which part of it is on the screen. */
+    const val OUTLINE_POINTS = 16
 
     /** The name's text size, in dp, before the phone's font size and the Label size setting. */
     const val TEXT_DP = 11.5f
@@ -51,24 +68,65 @@ internal object GeofenceLabels {
         if (label.text.isBlank() || !label.lat.isFinite() || !label.lon.isFinite()) {
             null
         } else {
-            GeofenceLabel(label.text, label.lat, label.lon, d.colorHex)
+            GeofenceLabel(label.text, label.lat, label.lon, d.colorHex, thin(d.points))
         }
+    }
+
+    /** [points] with at most [most] of them, evenly spread, the first and the last kept. */
+    fun thin(points: List<Pair<Double, Double>>, most: Int = OUTLINE_POINTS): List<Pair<Double, Double>> {
+        if (points.size <= most || most < 2) return points
+        return List(most) { i -> points[(i.toLong() * (points.size - 1) / (most - 1)).toInt()] }
+    }
+
+    /** The box round the finite points ([x], [y]) in px, or null when there are none. */
+    fun boxOf(points: List<Pair<Float, Float>>): ScreenBox? {
+        val finite = points.filter { it.first.isFinite() && it.second.isFinite() }
+        if (finite.isEmpty()) return null
+        return ScreenBox(finite.minOf { it.first }, finite.minOf { it.second }, finite.maxOf { it.first }, finite.maxOf { it.second })
+    }
+
+    /**
+     * The names to draw, and where, for a view of [widthPx] x [heightPx]. A name belongs to its zone, so it is
+     * drawn for as long as any of the zone is on the screen, even when the point it is written on (the north
+     * edge of a circle, the middle of a polygon) is not:
+     *  - above the top it is kept at the top, under the first [topPx] (the status bar and the status strip), the
+     *    whole name clear of them: [nameHeightPx] tall, [gapPx] over its point;
+     *  - below the bottom it is kept at the bottom;
+     *  - past a side it is moved to the middle of the part of the zone that is on the screen.
+     * A name whose point is on the screen (or within [marginPx] of a side: a name is wide, so one just off the
+     * edge still reaches in) stays where it is, but is moved down off the strip. When nothing is known about the
+     * zone ([ScreenLabel.zone] is null) the name stays with its point and is dropped when that is off the screen.
+     * Drawn in order, so a later one is over an earlier one.
+     */
+    fun placed(
+        labels: List<ScreenLabel>,
+        widthPx: Float,
+        heightPx: Float,
+        marginPx: Float,
+        topPx: Float = 0f,
+        nameHeightPx: Float = 0f,
+        gapPx: Float = 0f,
+    ): List<ScreenLabel> = labels.mapNotNull { label ->
+        if (!label.x.isFinite() || !label.y.isFinite()) return@mapNotNull null
+        val zone = label.zone
+        if (zone == null || !(zone.left.isFinite() && zone.top.isFinite() && zone.right.isFinite() && zone.bottom.isFinite())) {
+            val kept = label.x >= -marginPx && label.x <= widthPx + marginPx && label.y >= -marginPx && label.y <= heightPx + marginPx
+            return@mapNotNull if (kept) label else null
+        }
+        // What part of the zone is where a name can be: on the screen and under the strip.
+        val left = max(zone.left, 0f)
+        val right = min(zone.right, widthPx)
+        val top = max(zone.top, topPx)
+        val bottom = min(zone.bottom, heightPx)
+        if (left > right || top > bottom) return@mapNotNull null
+        val lowest = topPx + gapPx + nameHeightPx
+        val x = if (label.x >= -marginPx && label.x <= widthPx + marginPx) label.x else (left + right) / 2f
+        val y = label.y.coerceIn(lowest, max(lowest, heightPx))
+        if (x == label.x && y == label.y) label else label.copy(x = x, y = y)
     }
 
     /** [text] cut to [MAX_CHARS] with an ellipsis. */
     fun shown(text: String): String = if (text.length > MAX_CHARS) text.take(MAX_CHARS - 1) + "…" else text
-
-    /**
-     * The names that are on the screen: those whose point is inside a view of [widthPx] x [heightPx]
-     * with [marginPx] to spare (a name is wide, so one whose point is just off the edge can still
-     * reach into the view). Drawn in order, so a later one is over an earlier one.
-     */
-    fun onScreen(points: List<ScreenLabel>, widthPx: Float, heightPx: Float, marginPx: Float): List<ScreenLabel> =
-        points.filter {
-            it.x.isFinite() && it.y.isFinite() &&
-                it.x >= -marginPx && it.x <= widthPx + marginPx &&
-                it.y >= -marginPx && it.y <= heightPx + marginPx
-        }
 }
 
 /**
@@ -96,11 +154,14 @@ internal fun GeofenceLabelOverlay(
     val projected = rememberScreenProjection(live, labels, periodMs = 50) { projection ->
         labels.map { label ->
             val at = projection.toScreenLocation(LatLng(label.lat, label.lon))
-            ScreenLabel(GeofenceLabels.shown(label.text), at.x, at.y, label.colorHex)
+            // Where the zone is on the screen: its outline, and the point its name is on, so the box always holds that.
+            val outline = label.outline.map { (lat, lon) -> projection.toScreenLocation(LatLng(lat, lon)).let { it.x to it.y } }
+            ScreenLabel(GeofenceLabels.shown(label.text), at.x, at.y, label.colorHex, GeofenceLabels.boxOf(outline + (at.x to at.y)))
         }
     } ?: return
 
     val density = LocalDensity.current.density
+    val safeArea = mapSafeAreaPx()
     val fill = remember { Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD } }
     val halo = remember {
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -117,13 +178,23 @@ internal fun GeofenceLabelOverlay(
         halo.textSize = size
         halo.strokeWidth = size * 0.2f
         val gap = GeofenceLabels.GAP_DP * density
-        val visible = GeofenceLabels.onScreen(projected, this.size.width, this.size.height, marginPx = size * GeofenceLabels.MAX_CHARS / 2)
+        val metrics = fill.fontMetrics
+        val visible = GeofenceLabels.placed(
+            projected,
+            this.size.width,
+            this.size.height,
+            marginPx = size * GeofenceLabels.MAX_CHARS / 2,
+            // A name stays under the status bar and the status strip, whatever the zone's edge does.
+            topPx = (MapOrnamentLayout.belowStripDp(safeArea, density) * density).toFloat(),
+            nameHeightPx = metrics.descent - metrics.ascent,
+            gapPx = gap,
+        )
         drawIntoCanvas { canvas ->
             val native = canvas.nativeCanvas
             for (label in visible) {
                 fill.color = runCatching { android.graphics.Color.parseColor(label.colorHex) }.getOrDefault(android.graphics.Color.WHITE)
                 // The point is on the zone's edge; the bottom of the text is [gap] over it.
-                val baseline = GeofenceLabels.baselineY(label.y, fill.fontMetrics.descent, gap)
+                val baseline = GeofenceLabels.baselineY(label.y, metrics.descent, gap)
                 native.drawText(label.text, label.x, baseline, halo)
                 native.drawText(label.text, label.x, baseline, fill)
             }
