@@ -11,7 +11,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.Block
@@ -51,7 +53,10 @@ fun ToolbarAddPalette(
     val tools = available.filter { it.kind is BarKind.Command }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet, containerColor = Color(0xFF0F1115)) {
-        Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+        // #222: up to nine shortcut rows, two section headers and the Reset row
+        // are taller than a landscape phone; only three rows could be reached
+        // there and Reset not at all.
+        Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
             Text(
                 "Add Shortcut",
                 color = Color.White,
