@@ -23,6 +23,11 @@ enum class MapProvider { OSM_RASTER, SATELLITE_HINT, TOPO_HINT, WMTS_CUSTOM }
  *  mesh screen + CoT bridge + broadcaster route through. */
 enum class MeshFramework { MESHTASTIC, MESHCORE }
 
+/** #261 - the address the Mesh screen's TCP pane always started from. It is
+ *  still what the pane shows until the operator connects to something else. */
+const val DEFAULT_MESH_TCP_HOST = "192.168.1.100"
+const val DEFAULT_MESH_TCP_PORT = 4403
+
 /**
  * Operator preferences — callsign, units, coord format, tile choice.
  * All string-backed in DataStore so the schema stays trivial; enum
@@ -137,6 +142,16 @@ data class UserPrefs(
      *  runs Meshtastic. Selecting MeshCore switches the mesh screen, CoT
      *  bridge, and broadcaster onto the MeshCore companion BLE path. */
     val selectedMeshFramework: MeshFramework = MeshFramework.MESHTASTIC,
+    /** #261 - the Meshtastic TCP gateway the operator last connected to, shown
+     *  in the Mesh screen's TCP pane. Saved when Connect is pressed. Until then
+     *  it is the address the pane always started from. */
+    val meshTcpHost: String = DEFAULT_MESH_TCP_HOST,
+    val meshTcpPort: Int = DEFAULT_MESH_TCP_PORT,
+    /** #261 - the operator wants the Meshtastic TCP link up. Connect sets it.
+     *  Disconnect clears it, and so does picking a Bluetooth or MeshCore radio.
+     *  A link that drops leaves it set. The app reads it once at start to bring
+     *  the link back ([MeshTcpRestore]). */
+    val meshTcpWanted: Boolean = false,
     /** 3D terrain map mode — tilts the camera and renders DEM relief
      *  (AWS Terrarium tiles). Parity with the iOS Cesium 3D globe
      *  toggle. Default off — 2D top-down is the tactical default. */
@@ -246,6 +261,10 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
     private val KEY_MESH_BROADCAST_INTERVAL = intPreferencesKey("mesh_broadcast_interval_secs")
     private val KEY_VERBOSE_BLE_LOGGING = booleanPreferencesKey("verbose_ble_logging")
     private val KEY_MESH_FRAMEWORK = stringPreferencesKey("selected_mesh_framework")
+    // #261: the Mesh screen's TCP gateway, and whether the operator wants that link up.
+    private val KEY_MESH_TCP_HOST = stringPreferencesKey("mesh_tcp_host")
+    private val KEY_MESH_TCP_PORT = intPreferencesKey("mesh_tcp_port")
+    private val KEY_MESH_TCP_WANTED = booleanPreferencesKey("mesh_tcp_wanted")
     private val KEY_MAP_3D = booleanPreferencesKey("map_3d_enabled")
     private val KEY_CESIUM_GLOBE = booleanPreferencesKey("cesium_globe_enabled")
     private val KEY_TOOLBAR_ITEMS = stringPreferencesKey("toolbar_item_ids")
@@ -303,6 +322,9 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
             p[KEY_MESH_BROADCAST_INTERVAL] = next.meshBroadcastIntervalSecs.coerceIn(30, 60)
             p[KEY_VERBOSE_BLE_LOGGING] = next.verboseBleLogging
             p[KEY_MESH_FRAMEWORK] = next.selectedMeshFramework.name
+            p[KEY_MESH_TCP_HOST] = next.meshTcpHost
+            p[KEY_MESH_TCP_PORT] = next.meshTcpPort
+            p[KEY_MESH_TCP_WANTED] = next.meshTcpWanted
             p[KEY_MAP_3D] = next.map3dEnabled
             p[KEY_CESIUM_GLOBE] = next.cesiumGlobeEnabled
             p[KEY_TOOLBAR_ITEMS] = next.toolbarItemIds.joinToString(",")
@@ -391,6 +413,23 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
         update { it.copy(selectedMeshFramework = value) }
     }
 
+    /** #261 - Connect was pressed on the Mesh screen's TCP pane: keep the
+     *  gateway and mark the link wanted, in one edit so the flag is never stored
+     *  without its host. The host is saved without the spaces around it; a blank
+     *  host is not saved at all. */
+    suspend fun rememberMeshTcpGateway(host: String, port: Int) {
+        val trimmed = host.trim()
+        if (trimmed.isEmpty()) return
+        update { it.copy(meshTcpHost = trimmed, meshTcpPort = port, meshTcpWanted = true) }
+    }
+
+    /** #261 - set or clear the wanted flag. Disconnect clears it, and so does
+     *  picking a Bluetooth or MeshCore radio. The saved gateway stays, so the
+     *  TCP pane keeps its text. */
+    suspend fun setMeshTcpWanted(wanted: Boolean) {
+        update { it.copy(meshTcpWanted = wanted) }
+    }
+
     /** #212: persist the mesh → server relay switch (default off). */
     suspend fun setRelayToServerEnabled(value: Boolean) {
         update { it.copy(relayToServerEnabled = value) }
@@ -470,6 +509,9 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
         selectedMeshFramework = p[KEY_MESH_FRAMEWORK]
             ?.let { runCatching { MeshFramework.valueOf(it) }.getOrNull() }
             ?: MeshFramework.MESHTASTIC,
+        meshTcpHost = p[KEY_MESH_TCP_HOST] ?: DEFAULT_MESH_TCP_HOST,
+        meshTcpPort = p[KEY_MESH_TCP_PORT] ?: DEFAULT_MESH_TCP_PORT,
+        meshTcpWanted = p[KEY_MESH_TCP_WANTED] ?: false,
         map3dEnabled = p[KEY_MAP_3D] ?: false,
         cesiumGlobeEnabled = p[KEY_CESIUM_GLOBE] ?: false,
         toolbarItemIds = p[KEY_TOOLBAR_ITEMS]?.split(",")?.filter { it.isNotBlank() } ?: emptyList(),
