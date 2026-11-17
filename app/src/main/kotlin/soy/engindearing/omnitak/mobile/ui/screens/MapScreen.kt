@@ -264,6 +264,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     // callsignCardVisible, followMeActive are now read from userPrefs (above)
     // so they survive relaunch.
     var layersSheetOpen by remember { mutableStateOf(false) }
+    // The tools dial. Open, it hides the position card, which it would be drawn over.
+    var toolsOpen by remember { mutableStateOf(false) }
     // #120 — offline map download sheet.
     var offlineMapsOpen by remember { mutableStateOf(false) }
     // #154 — military report entry sheet (MEDEVAC / SALUTE / SPOTREP).
@@ -1537,7 +1539,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         // GAP-030b — coordinates pull from FusedLocationProviderClient
         // (LocationProvider). Until a fix arrives we show "Acquiring
         // fix…" so users in Germany don't see San Francisco (issue #10).
-        if (callsignCardVisible) {
+        if (callsignCardVisible && !toolsOpen) {
             val fix = effectiveSelfFix
             SelfPositionCard(
                 callsign = userPrefs.callsign,
@@ -1601,20 +1603,20 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             tools = listOf(
                 ToolEntry("draw", Icons.Filled.Brush, "Drawing"),
                 ToolEntry("measure", Icons.Filled.Straighten, "Measure"),
-                ToolEntry("rangerings", Icons.Filled.TrackChanges, "Range Rings"),
+                ToolEntry("rangerings", Icons.Filled.TrackChanges, "Range rings"),
                 ToolEntry("reports", Icons.Filled.Description, "Reports"),
                 ToolEntry("layers", Icons.Filled.Layers, "Layers"),
                 // ADS-B moved to the ADS-B plugin — its on/off control now
                 // lives in Settings → Plugins → ADS-B (the plugin's
                 // settingsContent), not the Tools drawer.
                 ToolEntry("chat", Icons.Filled.Chat, "Chat"),
-                ToolEntry("missionsync", Icons.Filled.Sync, "Mission Sync"),
+                ToolEntry("missionsync", Icons.Filled.Sync, "Mission sync"),
                 ToolEntry("fema", Icons.Filled.LocalFireDepartment, "FEMA / IC"),
                 ToolEntry("teams", Icons.Filled.Groups, "Teams"),
                 ToolEntry(
                     "nav",
                     Icons.Filled.Navigation,
-                    if (followMeActive) "Follow on" else "Follow",
+                    if (followMeActive) "Following" else "Follow me",
                 ),
             ),
             onSelect = { tool ->
@@ -1658,6 +1660,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     }
                 }
             },
+            expanded = toolsOpen,
+            onExpandedChange = { toolsOpen = it },
             modifier = Modifier.align(Alignment.BottomEnd).mapSafeAreaPadding(),
         )
 
