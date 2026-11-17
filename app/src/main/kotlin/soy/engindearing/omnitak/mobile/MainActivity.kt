@@ -5,7 +5,6 @@ import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.Lifecycle
@@ -19,7 +18,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -37,16 +35,16 @@ import soy.engindearing.omnitak.mobile.data.TAKServer
 import soy.engindearing.omnitak.mobile.ui.navigation.AppNav
 import soy.engindearing.omnitak.mobile.ui.onboarding.OnboardingFlow
 import soy.engindearing.omnitak.mobile.ui.onboarding.OnboardingManager
+import soy.engindearing.omnitak.mobile.ui.theme.AppSystemBars
 import soy.engindearing.omnitak.mobile.ui.theme.OmniTAKTheme
-import soy.engindearing.omnitak.mobile.ui.theme.TacticalBackground
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         holdScreenRotation()
         enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(TacticalBackground.toArgb()),
-            navigationBarStyle = SystemBarStyle.dark(TacticalBackground.toArgb()),
+            statusBarStyle = AppSystemBars.style,
+            navigationBarStyle = AppSystemBars.style,
         )
         setContent {
             OmniTAKTheme {
