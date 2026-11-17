@@ -9,8 +9,13 @@ import java.io.File
 
 /**
  * The 3D globe's half of the scale bar: the page measures the ground scale on the bar's own row and
- * posts it with every camera event (`mpp`), native tells the page where the row is
- * (`setScaleAnchor`). The iOS page has the same function and the same field.
+ * posts it with every camera event (`mpp`) and, when the surface under the bar changes without the
+ * camera moving (tiles arriving), as an event of its own (`scalechanged`). Native tells the page where
+ * the row is (`setScaleAnchor`). The iOS page has the same functions and the same fields.
+ *
+ * The page's behaviour (the median rule, the change threshold) is run against a stand-in for Cesium by
+ * `cesium_scale_harness.js`, which takes the page's own functions out of the file by name; the tests
+ * below pin the contract those functions and native rely on.
  */
 class CesiumScaleEventTest {
 
@@ -47,22 +52,75 @@ class CesiumScaleEventTest {
     }
 
     @Test fun the_page_posts_the_scale_with_every_camera_event() {
-        assertTrue(page.contains("mpp:_scaleMpp(v)"))
+        assertTrue(page.contains("const mpp=_scaleMpp(v)"))
+        assertTrue(page.contains("zoom:_zoomFromHeight(carto.height,carto.latitude),mpp:mpp"))
     }
 
-    @Test fun the_page_measures_between_two_globe_points_50_px_either_side_of_the_row() {
-        assertTrue(page.contains("new Cesium.Cartesian2(x-50,y)"))
-        assertTrue(page.contains("new Cesium.Cartesian2(x+50,y)"))
+    @Test fun the_page_measures_five_points_along_the_row_from_50_px_left_to_50_px_right() {
+        assertTrue(page.contains("_SCALE_OFFSETS=[-50,-25,0,25,50]"))
+        assertTrue("on the bar's row, one pick per offset", page.contains("new Cesium.Cartesian2(x,y)"))
+    }
+
+    @Test fun each_neighbouring_pair_is_a_ground_distance_per_pixel_between_its_points() {
         assertTrue("the ground distance, not the straight line", page.contains("Cesium.EllipsoidGeodesic"))
-        assertTrue("the distance between the two points, per px", page.contains("surfaceDistance"))
-        assertTrue(page.contains("d/100"))
+        assertTrue(page.contains("surfaceDistance"))
+        assertTrue("the pixels between the two points, not a fixed 100", page.contains("px:xs[i+1]-xs[i]"))
+        assertTrue(page.contains("m.push(p.d/p.px)"))
+    }
+
+    @Test fun the_scale_is_the_median_of_the_four_pairs_so_one_roof_cannot_move_the_bar() {
+        assertTrue(page.contains("function _median("))
+        assertTrue(page.contains("return m.length<3?null:_median(m)"))
+    }
+
+    @Test fun a_point_is_clamped_to_the_canvas() {
+        assertTrue(page.contains("Math.min(Math.max(x0+o,0),c.clientWidth)"))
     }
 
     @Test fun the_page_measures_the_middle_of_the_screen_only_until_it_is_told_the_row() {
-        assertTrue(page.contains("x=a?a.x:c.clientWidth/2,y=a?a.y:c.clientHeight/2"))
+        assertTrue(page.contains("x0=a?a.x:c.clientWidth/2,y=a?a.y:c.clientHeight/2"))
     }
 
-    @Test fun a_point_off_the_globe_is_no_scale_on_the_page_too() {
-        assertTrue(page.contains("if(!l||!r)return null"))
+    @Test fun a_pair_with_a_point_off_the_globe_is_not_used_and_too_few_pairs_are_no_scale() {
+        assertTrue(page.contains("ps[i]&&ps[i+1]?"))
+        assertTrue(page.contains("m.length<3?null"))
+    }
+
+    // MARK: the page measures again when the surface under the bar changes
+
+    @Test fun the_page_measures_again_when_the_tiles_for_the_view_have_loaded() {
+        assertTrue(page.contains("t.allTilesLoaded.addEventListener"))
+    }
+
+    @Test fun the_page_measures_again_once_a_second_while_it_is_visible() {
+        assertTrue(page.contains("setInterval(function(){if(!document.hidden)_scaleRefresh(v)},1000)"))
+    }
+
+    @Test fun a_changed_scale_is_posted_as_an_event_of_its_own_not_as_a_camera_event() {
+        assertTrue(page.contains("_postMapEvent({event:'scalechanged',mpp:m})"))
+    }
+
+    @Test fun the_scale_is_posted_again_only_when_it_moved_by_more_than_one_percent() {
+        assertTrue(page.contains("Math.abs(next-prev)/prev>0.01"))
+        assertTrue("a camera event counts as posted", page.contains("_state.scalePosted=mpp"))
+    }
+
+    // MARK: native: a scale-only event has no position
+
+    @Test fun a_scale_event_is_read_without_a_camera_position() {
+        val report = scaleChangeFromEvent(JSONObject("""{"event":"scalechanged","mpp":2.389}"""))!!
+        assertEquals(2.389, report.metersPerDp!!, 1e-9)
+    }
+
+    @Test fun a_scale_event_with_no_scale_clears_it() {
+        assertNull(scaleChangeFromEvent(JSONObject("""{"event":"scalechanged","mpp":null}"""))!!.metersPerDp)
+        assertNull(scaleChangeFromEvent(JSONObject("""{"event":"scalechanged"}"""))!!.metersPerDp)
+        assertNull(scaleChangeFromEvent(JSONObject("""{"event":"scalechanged","mpp":-1}"""))!!.metersPerDp)
+    }
+
+    @Test fun other_events_are_not_scale_events() {
+        assertNull(scaleChangeFromEvent(JSONObject("""{"event":"camerachanged","lat":1,"lon":2,"mpp":2.389}""")))
+        assertNull(scaleChangeFromEvent(JSONObject("""{"event":"tap","lat":1,"lon":2}""")))
+        assertNull(scaleChangeFromEvent(JSONObject("""{"lat":1,"lon":2}""")))
     }
 }

@@ -204,6 +204,12 @@ fun CesiumMapView(
                         @JavascriptInterface
                         fun onMapEvent(json: String) {
                             val o = runCatching { JSONObject(json) }.getOrNull() ?: return
+                            // The scale changed under the bar without the camera moving (tiles arrived):
+                            // it has no position, so it is read before the position is required.
+                            scaleChangeFromEvent(o)?.let { change ->
+                                mainHandler.post { scaleSourceState.value?.reportGlobe(change.metersPerDp) }
+                                return
+                            }
                             val event = o.optString("event")
                             val lat = o.optDouble("lat")
                             val lon = o.optDouble("lon")
@@ -343,12 +349,24 @@ fun CesiumMapView(
 }
 
 /**
- * The `mpp` of a `camerachanged` event: ground metres per CSS px (= dp) along the scale bar's row,
- * measured by the page. Null when it is absent, JSON null (a point missed the globe), not finite or
- * not positive.
+ * The `mpp` of a `camerachanged` or `scalechanged` event: ground metres per CSS px (= dp) along the
+ * scale bar's row, measured by the page. Null when it is absent, JSON null (too few points on the
+ * globe), not finite or not positive.
  */
 internal fun metersPerDpFromCameraEvent(event: JSONObject): Double? {
     if (!event.has("mpp") || event.isNull("mpp")) return null
     val value = event.optDouble("mpp", Double.NaN)
     return if (value.isFinite() && value > 0.0) value else null
 }
+
+/** What a `scalechanged` event tells the scale bar: the new ground scale, or none. */
+internal data class ScaleChange(val metersPerDp: Double?)
+
+/**
+ * The page posts `{event:"scalechanged", mpp}` when the surface under the bar changed without a
+ * camera move (the 3D tiles for the view finished loading) and the scale it measures there moved by
+ * more than 1 percent. It carries no position, so it is not a camera event and does not touch the
+ * saved camera. Null for any other event.
+ */
+internal fun scaleChangeFromEvent(event: JSONObject): ScaleChange? =
+    if (event.optString("event") == "scalechanged") ScaleChange(metersPerDpFromCameraEvent(event)) else null
