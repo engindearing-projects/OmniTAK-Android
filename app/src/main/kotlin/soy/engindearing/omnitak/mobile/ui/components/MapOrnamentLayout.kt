@@ -1,5 +1,7 @@
 package soy.engindearing.omnitak.mobile.ui.components
 
+import soy.engindearing.omnitak.mobile.data.geofence.FrameInsets
+import soy.engindearing.omnitak.mobile.data.geofence.GeofenceFraming
 import kotlin.math.ceil
 import kotlin.math.max
 
@@ -50,6 +52,27 @@ internal object MapOrnamentLayout {
         right = safe.right + px(SIDE_MARGIN_DP, density),
         bottom = px(SIDE_MARGIN_DP, density),
     )
+
+    // MARK: the room a framed zone keeps
+
+    /** Air between the status strip and the name written above a framed zone's north edge. */
+    const val FRAMED_ZONE_AIR_DP = 8
+
+    /**
+     * The room "Show on map" keeps clear of the window's edges, for a window whose safe area is [safe]: the
+     * safe area itself, the padding around a zone, and at the top the status strip and the zone's name, so the
+     * name is not hidden under the strip when the north edge is the closest to the top (held sideways).
+     */
+    fun frameInsets(safe: EdgePx, density: Float): FrameInsets {
+        val d = if (density.isFinite() && density > 0f) density.toDouble() else 1.0
+        return GeofenceFraming.insetsFor(
+            safeLeftDp = safe.left / d,
+            safeTopDp = safe.top / d,
+            safeRightDp = safe.right / d,
+            safeBottomDp = safe.bottom / d,
+            topChromeDp = (STATUS_STRIP_DP + FRAMED_ZONE_AIR_DP).toDouble(),
+        )
+    }
 
     // MARK: the top left: the compass and the tool banners
 

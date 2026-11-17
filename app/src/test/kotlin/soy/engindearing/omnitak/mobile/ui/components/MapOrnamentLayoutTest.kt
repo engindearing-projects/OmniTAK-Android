@@ -87,4 +87,34 @@ class MapOrnamentLayoutTest {
         assertEquals(MapOrnamentLayout.ATTRIBUTION_LEFT_DP * 3, b.left)
         assertEquals(MapOrnamentLayout.SIDE_MARGIN_DP * 3, b.right)
     }
+
+    // MARK: the room "Show on map" keeps
+
+    @Test fun a_framed_zone_keeps_clear_of_the_status_bar_the_strip_and_its_own_name() {
+        val room = MapOrnamentLayout.frameInsets(gestureSafeArea, density)
+        // 114 px = 43.4 dp of status bar, 63 px = 24 dp of gesture bar.
+        val statusBar = 114 / density.toDouble()
+        val gestureBar = 63 / density.toDouble()
+        assertEquals(
+            "the status bar, the 40 dp strip, 8 dp of air and the room for the name",
+            statusBar + MapOrnamentLayout.STATUS_STRIP_DP + MapOrnamentLayout.FRAMED_ZONE_AIR_DP + 28.0,
+            room.topDp,
+            1e-9,
+        )
+        assertEquals(gestureBar + 64.0, room.bottomDp, 1e-9)
+        assertEquals(64.0, room.leftDp, 1e-9)
+        assertEquals(64.0, room.rightDp, 1e-9)
+    }
+
+    @Test fun held_sideways_the_navigation_bar_on_the_side_is_kept_clear_too() {
+        val room = MapOrnamentLayout.frameInsets(EdgePx(left = 0, top = 63, right = 126, bottom = 0), density)
+        assertEquals(64.0 + 126 / density.toDouble(), room.rightDp, 1e-9)
+        assertEquals(64.0, room.leftDp, 1e-9)
+        assertEquals(64.0, room.bottomDp, 1e-9)
+    }
+
+    @Test fun an_unknown_density_does_not_break_the_room() {
+        val room = MapOrnamentLayout.frameInsets(EdgePx(top = 24), 0f)
+        assertTrue(room.topDp.isFinite() && room.topDp >= 24.0)
+    }
 }

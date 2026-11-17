@@ -926,6 +926,7 @@ fun TacticalMap(
                     bounds,
                     viewWidthDp = mapView.width / density.toDouble(),
                     viewHeightDp = mapView.height / density.toDouble(),
+                    insets = MapOrnamentLayout.frameInsets(safeArea, density),
                 )
                 map.animateCamera(
                     CameraUpdateFactory.newCameraPosition(

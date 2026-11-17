@@ -21,6 +21,16 @@ import kotlin.math.tan
 data class GeoBounds(val south: Double, val west: Double, val north: Double, val east: Double)
 
 /**
+ * How much room to keep clear on each side of the zone, in dp from the edge of the view. It is not the same
+ * on every side: the status bar, the status strip and the zone's name are all at the top.
+ */
+data class FrameInsets(val leftDp: Double, val topDp: Double, val rightDp: Double, val bottomDp: Double) {
+    companion object {
+        fun uniform(dp: Double) = FrameInsets(dp, dp, dp, dp)
+    }
+}
+
+/**
  * Where the camera goes to show a box: the middle of it, a web-mercator [zoom] (the zoom the 2D map
  * uses, a world 512 dp across at zoom 0), and the ground the width of the view then spans, for the
  * globe, which is told how much ground to show rather than a zoom.
@@ -46,8 +56,35 @@ object GeofenceFraming {
     /** The sphere the zone's edge is measured on: the one [soy.engindearing.omnitak.mobile.data.rangebearing.RangeBearing] and the monitor use. */
     private const val EARTH_RADIUS_M = 6_371_008.8
 
-    /** Room kept clear on each side of the zone, in dp: under the status strip and clear of the controls. */
+    /** Room kept clear on each side of the zone's edge, past the safe area, in dp: clear of the controls. */
     const val PADDING_DP = 64.0
+
+    /**
+     * Room kept above the zone's north edge for its name, which is written there: the text and the gap under
+     * it (about 16 dp), and some air between it and whatever is above.
+     */
+    const val LABEL_ROOM_DP = 28.0
+
+    /**
+     * The room to keep for a window whose safe area is [safeLeftDp], [safeTopDp], [safeRightDp] and [safeBottomDp]
+     * (the system bars and a cutout), with [topChromeDp] of status strip, and the air under it, below the top of
+     * the safe area. The sides and the bottom keep [PADDING_DP] past the safe area; the top keeps the strip and the
+     * zone's name ([LABEL_ROOM_DP]), so the name is never under the strip.
+     */
+    fun insetsFor(
+        safeLeftDp: Double,
+        safeTopDp: Double,
+        safeRightDp: Double,
+        safeBottomDp: Double,
+        topChromeDp: Double,
+    ): FrameInsets = FrameInsets(
+        leftDp = safeLeftDp.atLeastZero() + PADDING_DP,
+        topDp = safeTopDp.atLeastZero() + topChromeDp.atLeastZero() + LABEL_ROOM_DP,
+        rightDp = safeRightDp.atLeastZero() + PADDING_DP,
+        bottomDp = safeBottomDp.atLeastZero() + PADDING_DP,
+    )
+
+    private fun Double.atLeastZero(): Double = if (isFinite()) coerceAtLeast(0.0) else 0.0
 
     /** Never closer than this many metres across the width of the view, so a small zone still shows the streets around it. */
     const val MIN_VIEW_METERS = 600.0
@@ -108,41 +145,59 @@ object GeofenceFraming {
     }
 
     /**
-     * The camera that shows all of [bounds] in a view [viewWidthDp] x [viewHeightDp] dp, with [paddingDp]
-     * of room on every side (less on a very small view: never more than a quarter of its shorter side).
-     * The zoom is the closest at which the bounds fit across and down, and no closer than [minViewMeters]
-     * across the view or [maxZoom]. It is centred on the middle of the bounds, so a zone with its corners
-     * off to one side is still all in view.
+     * The camera that shows all of [bounds] in a view [viewWidthDp] x [viewHeightDp] dp, inside the room [insets]
+     * leave (on a very small view the insets are scaled down together, so they never take more than half of it
+     * on either axis). The zoom is the closest at which the bounds fit across and down that room, and no closer
+     * than [minViewMeters] across the view or [maxZoom]. The zone is centred in the room, which is not the middle
+     * of the view when more is kept clear on one side (the top, under the status strip): the camera is aimed past
+     * the zone by half the difference, so the zone, and its name above it, sit where they can be seen.
      */
     fun cameraFor(
         bounds: GeoBounds,
         viewWidthDp: Double,
         viewHeightDp: Double,
-        paddingDp: Double = PADDING_DP,
+        insets: FrameInsets = FrameInsets.uniform(PADDING_DP),
         minViewMeters: Double = MIN_VIEW_METERS,
         maxZoom: Double = MAX_ZOOM,
     ): FramedCamera {
         val width = if (viewWidthDp.isFinite() && viewWidthDp > 0.0) viewWidthDp else NOMINAL_VIEW_WIDTH_DP
         val height = if (viewHeightDp.isFinite() && viewHeightDp > 0.0) viewHeightDp else NOMINAL_VIEW_HEIGHT_DP
-        val padding = min(paddingDp.coerceAtLeast(0.0), min(width, height) / 4.0)
+        val (left, right) = clearAtEnds(insets.leftDp, insets.rightDp, width)
+        val (top, bottom) = clearAtEnds(insets.topDp, insets.bottomDp, height)
 
         val northY = mercatorY(bounds.north)
         val southY = mercatorY(bounds.south)
-        val centerLat = inverseMercatorY((northY + southY) / 2)
-        val centerLon = wrapLongitude((bounds.west + bounds.east) / 2)
+        val centerY = (northY + southY) / 2
+        val centerLat = inverseMercatorY(centerY)
+        val centerLon = (bounds.west + bounds.east) / 2
 
         // What fraction of the world's width and height the bounds take, and so what zoom makes that
         // fraction as large as the room there is.
         val lonFraction = ((bounds.east - bounds.west) / 360.0).coerceAtLeast(TINY_FRACTION)
         val latFraction = ((northY - southY) / (2 * PI)).coerceAtLeast(TINY_FRACTION)
-        val fitsAcross = log2((width - 2 * padding).coerceAtLeast(MIN_FIT_DP) / (WORLD_DP_AT_ZOOM_0 * lonFraction))
-        val fitsDown = log2((height - 2 * padding).coerceAtLeast(MIN_FIT_DP) / (WORLD_DP_AT_ZOOM_0 * latFraction))
+        val fitsAcross = log2((width - left - right).coerceAtLeast(MIN_FIT_DP) / (WORLD_DP_AT_ZOOM_0 * lonFraction))
+        val fitsDown = log2((height - top - bottom).coerceAtLeast(MIN_FIT_DP) / (WORLD_DP_AT_ZOOM_0 * latFraction))
 
         val metersPerDpAtZoom0 = EARTH_CIRCUMFERENCE_M * max(cos(Math.toRadians(centerLat)), MIN_COS_LAT) / WORLD_DP_AT_ZOOM_0
         val closestForStreets = if (minViewMeters > 0.0) log2(width * metersPerDpAtZoom0 / minViewMeters) else Double.POSITIVE_INFINITY
 
         val zoom = minOf(fitsAcross, fitsDown, closestForStreets, maxZoom).coerceAtLeast(0.0)
-        return FramedCamera(centerLat, centerLon, zoom, width * metersPerDpAtZoom0 / 2.0.pow(zoom))
+
+        // The middle of the room is (left - right) / 2 dp right of, and (top - bottom) / 2 dp below, the middle of
+        // the view, so the camera looks that far west of and north of the zone's centre.
+        val worldDp = WORLD_DP_AT_ZOOM_0 * 2.0.pow(zoom)
+        val aimLat = inverseMercatorY(centerY + (top - bottom) / 2.0 / worldDp * (2 * PI))
+        val aimLon = wrapLongitude(centerLon - (left - right) / 2.0 / worldDp * 360.0)
+        return FramedCamera(aimLat, aimLon, zoom, width * metersPerDpAtZoom0 / 2.0.pow(zoom))
+    }
+
+    /** The room kept clear at the two ends of one axis, scaled down together when it would leave less than half of [extentDp]. */
+    private fun clearAtEnds(startDp: Double, endDp: Double, extentDp: Double): Pair<Double, Double> {
+        val start = startDp.atLeastZero()
+        val end = endDp.atLeastZero()
+        val most = extentDp / 2.0
+        val total = start + end
+        return if (total <= most) start to end else (start * most / total) to (end * most / total)
     }
 
     private fun mercatorY(latDeg: Double): Double =

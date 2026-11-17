@@ -321,6 +321,7 @@ fun CesiumMapView(
     // Show a whole box (a geofence's zone, #155). The framing says how much ground to see across the screen;
     // the page works the camera height out from its own field of view, over the ground there, and flies to it
     // looking straight down with north up.
+    val frameSafeArea = mapSafeAreaPx()
     DisposableEffect(frameBoundsTick) {
         val bounds = frameBounds
         val wv = webViewRef.value
@@ -329,6 +330,7 @@ fun CesiumMapView(
                 bounds,
                 viewWidthDp = wv.width / density.toDouble(),
                 viewHeightDp = wv.height / density.toDouble(),
+                insets = MapOrnamentLayout.frameInsets(frameSafeArea, density),
             )
             wv.evaluateJavascript(
                 "window.OmniBridge.lookDown({lat:${camera.lat},lon:${camera.lon},width:${camera.groundWidthMeters}});",

@@ -48,8 +48,14 @@ class GeofenceFramingTest {
         GeofenceType.POLYGON -> zone.points!!.map { it.lat to it.lon }
     }
 
-    private fun frame(zone: Geofence, widthDp: Double = 411.0, heightDp: Double = 914.0, paddingDp: Double = 64.0): FramedCamera =
-        GeofenceFraming.cameraFor(checkNotNull(GeofenceFraming.boundsOf(zone)), widthDp, heightDp, paddingDp)
+    private fun frame(zone: Geofence, widthDp: Double = 411.0, heightDp: Double = 914.0, insets: FrameInsets = FrameInsets.uniform(64.0)): FramedCamera =
+        GeofenceFraming.cameraFor(checkNotNull(GeofenceFraming.boundsOf(zone)), widthDp, heightDp, insets)
+
+    /** Where a ground point lands in the view, in dp from its top left corner. */
+    private fun inView(lat: Double, lon: Double, camera: FramedCamera, widthDp: Double, heightDp: Double): Pair<Double, Double> {
+        val (x, y) = onScreen(lat, lon, camera)
+        return widthDp / 2 + x to heightDp / 2 + y
+    }
 
     // -------------------------------------------------------------------------------- bounds
 
@@ -123,6 +129,64 @@ class GeofenceFramingTest {
         val camera = frame(zone)
         assertTrue("on the antimeridian, not on the far side of the world", abs(camera.lon) > 179.9)
         assertTrue("and close in, not the whole world (zoom ${camera.zoom})", camera.zoom > 8.0)
+    }
+
+    // -------------------------------------------------------------------------------- the room a window leaves
+
+    @Test fun the_room_is_the_safe_area_and_the_padding_with_the_strip_and_the_name_on_top() {
+        val insets = GeofenceFraming.insetsFor(safeLeftDp = 8.0, safeTopDp = 24.0, safeRightDp = 8.0, safeBottomDp = 16.0, topChromeDp = 48.0)
+        assertEquals(8.0 + GeofenceFraming.PADDING_DP, insets.leftDp, 0.0)
+        assertEquals(8.0 + GeofenceFraming.PADDING_DP, insets.rightDp, 0.0)
+        assertEquals(16.0 + GeofenceFraming.PADDING_DP, insets.bottomDp, 0.0)
+        assertEquals("under the status bar, the strip and the name above the north edge", 24.0 + 48.0 + GeofenceFraming.LABEL_ROOM_DP, insets.topDp, 0.0)
+    }
+
+    @Test fun held_sideways_the_zone_and_its_name_are_clear_of_the_status_strip() {
+        // 914 x 411 dp: the height limits a circle, so its north edge is as close to the top as the room lets it. It used to be
+        // 64 dp down, under the strip (the status bar 24 dp and the 48 dp strip), and its name, written above that edge, under the strip too.
+        val room = GeofenceFraming.insetsFor(0.0, 24.0, 0.0, 0.0, topChromeDp = 48.0)
+        val zone = circle(5_000.0)
+        val camera = frame(zone, widthDp = 914.0, heightDp = 411.0, insets = room)
+        val northEdge = edge(zone).minOf { inView(it.first, it.second, camera, 914.0, 411.0).second }
+        assertTrue("the north edge is at $northEdge dp, the strip ends at ${24.0 + 48.0}", northEdge >= 24.0 + 48.0 + GeofenceFraming.LABEL_ROOM_DP - 0.5)
+    }
+
+    @Test fun held_upright_a_tall_zone_is_clear_of_the_status_strip_too() {
+        val room = GeofenceFraming.insetsFor(0.0, 43.0, 0.0, 24.0, topChromeDp = 48.0)
+        val zone = polygon(LatLon(47.640, -117.4266), LatLon(47.640, -117.4254), LatLon(47.676, -117.4254), LatLon(47.676, -117.4266))
+        val camera = frame(zone, insets = room)
+        val top = zone.points!!.minOf { inView(it.lat, it.lon, camera, 411.0, 914.0).second }
+        val bottom = zone.points!!.maxOf { inView(it.lat, it.lon, camera, 411.0, 914.0).second }
+        assertTrue("top at $top dp", top >= 43.0 + 48.0 + GeofenceFraming.LABEL_ROOM_DP - 0.5)
+        assertTrue("bottom at $bottom dp", bottom <= 914.0 - (24.0 + GeofenceFraming.PADDING_DP) + 0.5)
+    }
+
+    @Test fun the_zone_is_centred_in_the_room_that_is_left_not_in_the_whole_view() {
+        val insets = FrameInsets(leftDp = 10.0, topDp = 120.0, rightDp = 50.0, bottomDp = 30.0)
+        val zone = circle(1_000.0)
+        val camera = frame(zone, insets = insets)
+        val (x, y) = inView(spokane.lat, spokane.lon, camera, 411.0, 914.0)
+        assertEquals("middle of the room across: ${10.0 + (411.0 - 10.0 - 50.0) / 2}", 10.0 + (411.0 - 10.0 - 50.0) / 2, x, 0.5)
+        assertEquals("middle of the room down: ${120.0 + (914.0 - 120.0 - 30.0) / 2}", 120.0 + (914.0 - 120.0 - 30.0) / 2, y, 0.5)
+    }
+
+    @Test fun every_edge_of_the_zone_stays_inside_its_own_inset() {
+        val insets = FrameInsets(leftDp = 10.0, topDp = 120.0, rightDp = 50.0, bottomDp = 30.0)
+        for (radius in listOf(200.0, 5_000.0)) {
+            val zone = circle(radius)
+            val camera = frame(zone, insets = insets)
+            for ((lat, lon) in edge(zone)) {
+                val (x, y) = inView(lat, lon, camera, 411.0, 914.0)
+                assertTrue("r=$radius x=$x", x >= 10.0 - 0.5 && x <= 411.0 - 50.0 + 0.5)
+                assertTrue("r=$radius y=$y", y >= 120.0 - 0.5 && y <= 914.0 - 30.0 + 0.5)
+            }
+        }
+    }
+
+    @Test fun room_that_takes_more_than_half_the_view_is_scaled_down_and_still_gives_a_camera() {
+        val camera = frame(circle(1_000.0), widthDp = 100.0, heightDp = 100.0, insets = FrameInsets(90.0, 90.0, 90.0, 90.0))
+        assertTrue(camera.zoom.isFinite() && camera.zoom >= 0.0)
+        assertTrue(camera.groundWidthMeters.isFinite())
     }
 
     // -------------------------------------------------------------------------------- the camera
@@ -219,7 +283,7 @@ class GeofenceFramingTest {
 
     @Test fun it_never_goes_closer_than_the_cap_whatever_the_zone() {
         val tiny = checkNotNull(GeofenceFraming.boundsOf(circle(1.0)))
-        val camera = GeofenceFraming.cameraFor(tiny, 411.0, 914.0, paddingDp = 64.0, minViewMeters = 0.0, maxZoom = 18.0)
+        val camera = GeofenceFraming.cameraFor(tiny, 411.0, 914.0, FrameInsets.uniform(64.0), minViewMeters = 0.0, maxZoom = 18.0)
         assertEquals(18.0, camera.zoom, 0.0)
     }
 
