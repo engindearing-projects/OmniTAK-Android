@@ -63,6 +63,7 @@ import org.maplibre.android.geometry.LatLng
 import soy.engindearing.omnitak.mobile.OmniTAKApp
 import soy.engindearing.omnitak.mobile.data.CoTAffiliation
 import soy.engindearing.omnitak.mobile.data.CoTEvent
+import soy.engindearing.omnitak.mobile.data.DistanceUnit
 import soy.engindearing.omnitak.mobile.data.Drawing
 import soy.engindearing.omnitak.mobile.data.DrawingKind
 import soy.engindearing.omnitak.mobile.data.GeoMath
@@ -2296,6 +2297,7 @@ fun MapScreen(
             if (measurementActive) {
                 MeasurementOverlay(
                     points = measurementPoints,
+                    unit = userPrefs.distanceUnit,
                     onUndo = {
                         if (measurementPoints.isNotEmpty()) {
                             measurementPoints = measurementPoints.dropLast(1)
@@ -2560,6 +2562,7 @@ private fun DrawingOverlay(
 @Composable
 private fun MeasurementOverlay(
     points: List<LatLng>,
+    unit: DistanceUnit,
     onUndo: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
@@ -2588,7 +2591,7 @@ private fun MeasurementOverlay(
         androidx.compose.material3.Text(
             buildString {
                 append("${points.size} pt · ")
-                append(GeoMath.formatDistance(totalMeters))
+                append(GeoMath.formatDistance(totalMeters, unit))
                 if (bearing != null) append(" · ${GeoMath.formatBearing(bearing)}")
             },
             color = TacticalAccent,

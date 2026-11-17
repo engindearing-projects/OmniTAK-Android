@@ -37,10 +37,25 @@ object GeoMath {
     }
 
     /** "1,234 m" / "12.3 km" formatting for human readouts. */
-    fun formatDistance(meters: Double): String = when {
-        meters < 1000.0 -> "%.0f m".format(meters)
-        meters < 10_000.0 -> "%.2f km".format(meters / 1000.0)
-        else -> "%.1f km".format(meters / 1000.0)
+    fun formatDistance(meters: Double): String = formatDistance(meters, DistanceUnit.METRIC)
+
+    /**
+     * The same readout in the operator's unit (Settings > Units). Metric: metres below a
+     * kilometre, then kilometres (two decimals below 10 km, one from 10 km). Imperial: feet below
+     * a mile, then miles (two decimals below 10 mi, one from 10 mi), the same point where the
+     * scale bar changes from feet to miles ([MapScale]).
+     */
+    fun formatDistance(meters: Double, unit: DistanceUnit): String = when (unit) {
+        DistanceUnit.METRIC -> when {
+            meters < 1000.0 -> "%.0f m".format(meters)
+            meters < 10_000.0 -> "%.2f km".format(meters / 1000.0)
+            else -> "%.1f km".format(meters / 1000.0)
+        }
+        DistanceUnit.IMPERIAL -> when {
+            meters < MapScale.METERS_PER_MILE -> "%.0f ft".format(meters / MapScale.METERS_PER_FOOT)
+            meters < 10 * MapScale.METERS_PER_MILE -> "%.2f mi".format(meters / MapScale.METERS_PER_MILE)
+            else -> "%.1f mi".format(meters / MapScale.METERS_PER_MILE)
+        }
     }
 
     /** "045°" / "123°" — three-digit magnetic-style readout. */

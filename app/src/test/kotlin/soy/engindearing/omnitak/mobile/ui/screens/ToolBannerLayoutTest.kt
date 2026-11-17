@@ -46,6 +46,13 @@ class ToolBannerLayoutTest {
         assertTrue(banner("RangeRingsOverlay").contains(readoutWeight))
     }
 
+    @Test fun the_measure_banner_shows_the_distance_in_the_operators_unit() {
+        val measure = banner("MeasurementOverlay")
+        assertTrue("it is told the unit", measure.contains("unit: DistanceUnit"))
+        assertTrue("and uses it", measure.contains("GeoMath.formatDistance(totalMeters, unit)"))
+        assertTrue("MapScreen passes Settings > Units", source.contains("unit = userPrefs.distanceUnit"))
+    }
+
     @Test fun the_drawing_banner_still_has_undo_cancel_and_save() {
         val drawing = banner("DrawingOverlay")
         for (button in listOf("\"Undo\"", "\"Cancel\"", "\"Save\"")) {
