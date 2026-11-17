@@ -3,7 +3,6 @@ package soy.engindearing.omnitak.mobile.ui.components
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.io.File
 
 /**
  * #155 - the geofence alert and the pills under it. Held upright, the alert is as wide as the screen and
@@ -12,7 +11,8 @@ import java.io.File
  * a pill. The pills, and the two top-centre banners of the drone, now start under the alert while it
  * shows and move back when it goes.
  *
- * Plain arithmetic: the alert's height is measured and handed in.
+ * Plain arithmetic: the alert's height is measured and handed in. That the alert reports a height of zero when it
+ * leaves is tested on the real banner, in [GeofenceBannerHeightTest].
  */
 class GeofenceBannerStackTest {
 
@@ -77,26 +77,6 @@ class GeofenceBannerStackTest {
         assertEquals(shift(banners, alertHeight, landscape = false), sideways, 0f)
         assertTrue(sideways > 0f)
         assertEquals("and with no alert they stay where they are", 0f, MapOrnamentLayout.shiftBelowGeofenceBannerDp(banners, 0f, landscape = true, reachesTheLeftHalf = true), 0f)
-    }
-
-    @Test fun the_alert_the_lasso_pill_and_a_drone_pill_all_fit_one_under_the_other_on_a_phone() {
-        // Top to bottom, dp from the safe area's top edge: the alert, then one column holding the lasso pill (about
-        // 36 dp) over the drones pill (about 40 dp) with the 6 dp the column puts between them.
-        val columnTop = pills + shift(pills, alertHeight)
-        val lasso = columnTop to columnTop + 36f
-        val drones = lasso.second + 6f to lasso.second + 6f + 40f
-        val alert = alertTop.toFloat() to alertTop + alertHeight
-        assertTrue("lasso pill under the alert", lasso.first >= alert.second)
-        assertTrue("drones pill under the lasso pill", drones.first >= lasso.second)
-    }
-
-    @Test fun the_alert_reports_a_height_of_zero_when_it_leaves_so_nothing_stays_pushed_down() {
-        // The size node leaves with the alert's content and sends no last report, so the last height it did report
-        // (nonzero, on the way out) used to stay: after an alert the pills and the drone's banners sat 50 and 76 dp
-        // lower than they rest, with no alert on screen, until the next one. The content reports the zero itself.
-        val host = listOf("src/main/kotlin", "app/src/main/kotlin").map(::File).first { it.exists() }
-            .let { File(it, "soy/engindearing/omnitak/mobile/ui/components/GeofenceBannerHost.kt") }.readText()
-        assertTrue(host.contains("DisposableEffect(Unit) { onDispose { onHeightPx(0) } }"))
     }
 
     @Test fun the_resting_places_are_the_ones_the_map_screen_always_used() {

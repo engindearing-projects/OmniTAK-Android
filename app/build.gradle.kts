@@ -135,6 +135,8 @@ android {
     // RuntimeExceptions. Default values mean Log.* returns 0 / "" / false.
     testOptions {
         unitTests.isReturnDefaultValues = true
+        // Robolectric reads the merged manifest and resources (the Compose test activity is declared in ui-test-manifest).
+        unitTests.isIncludeAndroidResources = true
     }
 }
 
@@ -264,6 +266,13 @@ dependencies {
     // exercise the production CoTParser/ChatXml path — the mockable
     // android.jar makes XmlPullParserFactory.newInstance() return null.
     testImplementation("net.sf.kxml:kxml2:2.3.0")
+    // Compose and the Android framework on the JVM (Robolectric supplies the framework): a composable is composed,
+    // its effects run and what it reports is asserted, as for the geofence alert's height and the notification
+    // question. Only tests that ask for it (@RunWith(AndroidJUnit4::class)) use it; the rest stay plain JUnit.
+    testImplementation("org.robolectric:robolectric:4.16.1")
+    testImplementation(composeBom)
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("androidx.test.ext:junit:1.2.1")
 
     // Instrumented tests — symbology validation runs on a real device or
     // emulator because MapLibre's SurfaceView renders through native GL
