@@ -42,6 +42,13 @@ class CesiumGeofencePageTest {
         assertTrue(cull.contains("_state.drawings.forEach("))
     }
 
+    @Test fun a_shape_without_a_name_is_left_to_the_planet_so_a_wide_circle_keeps_its_near_part() {
+        // An operator's own circle has a position too (its middle). Hiding the whole shape when the middle
+        // goes over the horizon would take away the part of a wide circle that is still on the near side.
+        val cull = page.substring(page.indexOf("function _cullFarSide("), page.indexOf("function _installInputHandlers("))
+        assertTrue(cull.contains("_state.drawings.forEach(function(e){if(!e.label)return;"))
+    }
+
     @Test fun adding_a_shape_makes_the_horizon_check_run_again_even_if_the_camera_is_still() {
         assertTrue(upsertDrawing.contains("_state.horizonDirty=true"))
     }

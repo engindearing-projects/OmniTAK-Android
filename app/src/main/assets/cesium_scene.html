@@ -179,8 +179,9 @@
     if(!_state.occluder)_state.occluder=new Cesium.EllipsoidalOccluder(Cesium.Ellipsoid.WGS84,cam);
     const o=_state.occluder,t=v.clock.currentTime;o.cameraPosition=cam;
     _state.entities.forEach(function(e){const p=e.position&&e.position.getValue(t);if(!p)return;const vis=o.isPointVisible(p);if(e.show!==vis)e.show=vis});
-    // A shape that carries a name (a geofence's) has a position, and its name skips the depth test like a marker's does.
-    _state.drawings.forEach(function(e){const p=e.position&&e.position.getValue(t);if(!p)return;const vis=o.isPointVisible(p);if(e.show!==vis)e.show=vis})}
+    // Only a shape that carries a name (a geofence's) is checked: its name skips the depth test like a marker's does. A shape without a
+    // name is clamped to the ground, so the planet hides it by itself, and a wide circle whose middle is over the horizon keeps the part that is not.
+    _state.drawings.forEach(function(e){if(!e.label)return;const p=e.position&&e.position.getValue(t);if(!p)return;const vis=o.isPointVisible(p);if(e.show!==vis)e.show=vis})}
   function _installInputHandlers(viewer){
     viewer.camera.moveEnd.addEventListener(function(){_postCameraChanged(viewer)});
     const h=new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
