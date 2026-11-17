@@ -40,6 +40,7 @@ import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.OmniTAKApp
+import soy.engindearing.omnitak.mobile.data.ScreenRotation
 import soy.engindearing.omnitak.mobile.data.UserPrefs
 import soy.engindearing.omnitak.mobile.domain.LassoSelectionService
 import soy.engindearing.omnitak.mobile.ui.components.BarCommand
@@ -223,11 +224,32 @@ fun AppNav() {
                         }
                     }
                 }
+                BarCommand.ROTATION -> {
+                    // #214: Auto, Portrait, Landscape, Auto. The store reads the current mode and
+                    // writes the next in one edit, so two quick taps cannot both start from the
+                    // same mode. MainActivity turns the screen as soon as the mode is stored.
+                    scope.launch {
+                        val mode = app.userPrefsStore.cycleScreenRotation()
+                        // Read the screen size now, not from an earlier composition: a foldable may
+                        // have been folded or unfolded since. On a screen where Android ignores a
+                        // held orientation, Portrait and Landscape say so instead of promising it.
+                        val ignored = ScreenRotation.requestIgnored(
+                            android.os.Build.VERSION.SDK_INT,
+                            appNavContext.applicationInfo.targetSdkVersion,
+                            appNavContext.resources.configuration.smallestScreenWidthDp,
+                        )
+                        android.widget.Toast.makeText(
+                            appNavContext, mode.messageFor(ignored), android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                }
             }
         }
     }
 
-    val barItems = ToolbarCatalog.resolve(workingIds)
+    // #214: the screen rotation shortcut is drawn with the icon and the description of the mode
+    // the screen is in now; every other item is untouched.
+    val barItems = ToolbarCatalog.resolve(workingIds).map { ToolbarCatalog.showing(it, prefs.screenRotation) }
     val coachmarkVisible = !prefs.toolbarCoachmarkSeen && currentRoute == "map" && !editing
 
     // Field feedback (PatoG, 2026-08) — the Mesh tab icon carries an

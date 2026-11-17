@@ -191,6 +191,11 @@ data class UserPrefs(
      *  foreground. Fixes the bug where the setting was present but
      *  FLAG_KEEP_SCREEN_ON was never actually applied. Default off. */
     val keepScreenOn: Boolean = false,
+    /** #214 - hold the screen in portrait or landscape whatever the phone's own
+     *  rotation setting is, or follow the phone (the default, and how the app
+     *  always behaved). Stored as the string `auto`, `portrait` or `landscape`
+     *  under `screen_rotation`; anything else reads as [ScreenRotation.AUTO]. */
+    val screenRotation: ScreenRotation = ScreenRotation.DEFAULT,
     /** When true, render the self-marker as a triangle pointing in heading
      *  direction instead of the MIL-STD disc / puck. Rotates with compass. */
     val selfMarkerTriangle: Boolean = false,
@@ -288,6 +293,8 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
     // Issue #95 — north-up lock; #97 — keep-screen-on
     private val KEY_NORTH_UP_LOCKED = booleanPreferencesKey("north_up_locked")
     private val KEY_KEEP_SCREEN_ON  = booleanPreferencesKey("keep_screen_on")
+    // #214 - screen rotation mode, stored as auto | portrait | landscape.
+    private val KEY_SCREEN_ROTATION = stringPreferencesKey("screen_rotation")
     private val KEY_SELF_MARKER_TRIANGLE = booleanPreferencesKey("selfMarkerTriangle")
     private val KEY_STALENESS_OVERLAY = booleanPreferencesKey("staleness_overlay_enabled")
     private val KEY_CONTACT_MAX_AGE = intPreferencesKey("contact_max_age_minutes")
@@ -351,6 +358,7 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
             if (next.lastCameraZoom != null) p[KEY_CAMERA_ZOOM] = next.lastCameraZoom.toString()
             p[KEY_NORTH_UP_LOCKED] = next.northUpLocked
             p[KEY_KEEP_SCREEN_ON]  = next.keepScreenOn
+            p[KEY_SCREEN_ROTATION] = next.screenRotation.stored
             p[KEY_SELF_MARKER_TRIANGLE] = next.selfMarkerTriangle
             p[KEY_STALENESS_OVERLAY] = next.stalenessOverlayEnabled
             p[KEY_CONTACT_MAX_AGE] = next.contactMaxAgeMinutes.coerceAtLeast(0)
@@ -411,6 +419,20 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
     /** #211 - persist the master "Report my position" switch. */
     suspend fun setPositionReportingEnabled(value: Boolean) {
         update { it.copy(positionReportingEnabled = value) }
+    }
+
+    /**
+     * #214 - move to the next screen rotation mode (Auto, Portrait, Landscape, Auto) and
+     * return the mode now stored. The current mode is read and the next one written in a
+     * single edit, so two quick taps on the shortcut cannot both start from the same mode.
+     */
+    suspend fun cycleScreenRotation(): ScreenRotation {
+        var now = ScreenRotation.DEFAULT
+        update { cur ->
+            now = cur.screenRotation.next()
+            cur.copy(screenRotation = now)
+        }
+        return now
     }
 
     /** Persist the mesh PPLI broadcast interval (coerced to 30..60 seconds). */
@@ -538,6 +560,7 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
         lastCameraZoom = p[KEY_CAMERA_ZOOM]?.toDoubleOrNull(),
         northUpLocked  = p[KEY_NORTH_UP_LOCKED] ?: false,
         keepScreenOn   = p[KEY_KEEP_SCREEN_ON]  ?: false,
+        screenRotation = ScreenRotation.fromStored(p[KEY_SCREEN_ROTATION]),
         selfMarkerTriangle = p[KEY_SELF_MARKER_TRIANGLE] ?: false,
         stalenessOverlayEnabled = p[KEY_STALENESS_OVERLAY] ?: false,
         contactMaxAgeMinutes = (p[KEY_CONTACT_MAX_AGE] ?: ContactMaxAge.DEFAULT_MINUTES).coerceAtLeast(0),
