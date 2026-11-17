@@ -126,6 +126,14 @@ internal object RetainedMapView {
 
     val bindings = Bindings()
 
+    /**
+     * What decides whether the first fix of a first run moves the camera. It has to outlive
+     * every composition of the map (a tab switch composes it again, an Activity rebuild
+     * composes it in a new Activity), so it is kept here with the view and never in a
+     * composition's own state. See [FirstFixState].
+     */
+    val firstFix = FirstFixState()
+
     private val slot = RetainedSlot<MapView>()
 
     /** #214: has the view come back at a different size than it left with? See [ReturnSizeWatch]. */
@@ -287,5 +295,117 @@ internal object RetainedMapRules {
         trigger != triggerAtComposition -> Recenter.PRESSED
         builtViewHere -> Recenter.OPENING
         else -> Recenter.NO
+    }
+
+    /** From further out than this, going to the operator also zooms in on them. */
+    const val OPERATOR_FAR_OUT_ZOOM = 12.0
+
+    /** Street level: the zoom a camera that was far out goes to. */
+    const val OPERATOR_ZOOM = 15.0
+
+    /**
+     * The zoom the camera goes to when it is sent to the operator ("Center on me", opening the
+     * map on them, the first fix of a first run), or null to keep the zoom it has. From far out
+     * (below [OPERATOR_FAR_OUT_ZOOM]) it is [OPERATOR_ZOOM]. At [OPERATOR_FAR_OUT_ZOOM] or closer
+     * the operator chose that zoom and keeps it: this never answers with a smaller one.
+     *
+     * The caller puts it in the same camera move as the pan. Asked for after the pan has started,
+     * MapLibre's LocationComponent ignores a zoom while the camera is still turning to the
+     * location, which is what left the map at the world zoom.
+     */
+    fun zoomForOperator(currentZoom: Double): Double? =
+        if (currentZoom < OPERATOR_FAR_OUT_ZOOM) OPERATOR_ZOOM else null
+
+    /**
+     * Whether a fix is the operator's position now, as far as the camera is concerned: not one
+     * kept from the last session ([restored]) and not older than
+     * [soy.engindearing.omnitak.mobile.data.SelfFixPersistence.STALE_AFTER_MS]. A fix kept from
+     * the last session is where the operator was; it is drawn, but it is not the first fix of
+     * this one.
+     */
+    fun isLiveFix(restored: Boolean, fixTimeMs: Long, nowMs: Long): Boolean =
+        !restored && !soy.engindearing.omnitak.mobile.data.SelfFixPersistence.isStale(fixTimeMs, nowMs)
+
+    /**
+     * Whether the first fix that arrives after the map was opened should move the camera to the
+     * operator. On a first run the map is composed before the permission is answered and before
+     * the first fix, so it opens on the world and would stay there. The move happens once and
+     * only for a map nobody has taken over:
+     *
+     *  - [wentToOperatorAtOpen]: the map already opened on the operator.
+     *  - [userMovedCamera]: the operator has moved it by hand in this session (a drag, a pinch,
+     *    the zoom buttons, the compass, a pan to a contact or coordinate).
+     *  - [toolActive]: a drawing, measure, range ring or lasso tool is active, or Follow is on.
+     *    A tool needs the map to stay where the operator put it, and Follow already owns the
+     *    camera. ([FirstFixState.onFreshFix] makes this final: a map in use when the first fix
+     *    arrives is left alone for the rest of the session.)
+     *  - [alreadyDone]: it has happened once, or "Center on me" has already been pressed.
+     *    Never more than once per process.
+     */
+    fun firstFixMove(
+        wentToOperatorAtOpen: Boolean,
+        userMovedCamera: Boolean,
+        toolActive: Boolean,
+        alreadyDone: Boolean,
+    ): Boolean = !wentToOperatorAtOpen && !userMovedCamera && !toolActive && !alreadyDone
+}
+
+/**
+ * The state behind [RetainedMapRules.firstFixMove]: what has happened to the camera in this
+ * process. Plain Kotlin so the rules can be tested on the JVM; kept on [RetainedMapView]
+ * because it must survive every composition of the map.
+ *
+ * Main thread only, like the rest of the retained view.
+ */
+internal class FirstFixState {
+    private var wentToOperatorAtOpen = false
+    private var userMovedCamera = false
+    private var done = false
+
+    /** The map opened on the operator's position. */
+    fun openedOnOperator() {
+        wentToOperatorAtOpen = true
+    }
+
+    /** The operator moved the camera by hand, or asked for a move of their own. */
+    fun operatorMovedCamera() {
+        userMovedCamera = true
+    }
+
+    /** The camera was sent to the operator: by the first fix, or by "Center on me". */
+    fun movedToOperator() {
+        done = true
+    }
+
+    /** True when a fresh fix arriving now should move the camera. [toolActive] as in [RetainedMapRules.firstFixMove]. */
+    fun shouldMoveOnFix(toolActive: Boolean): Boolean =
+        RetainedMapRules.firstFixMove(wentToOperatorAtOpen, userMovedCamera, toolActive, done)
+
+    /** What a fresh fix arriving now asks of the camera. */
+    enum class Action {
+        /** Send the camera to the operator, then call [movedToOperator]. */
+        MOVE,
+
+        /** The map is in use (a tool is active, or Follow is on): leave it alone, now and later. */
+        LEAVE,
+
+        /** Nothing to do: the map already opened on the operator, was moved by hand, or this has happened. */
+        NOTHING,
+    }
+
+    /**
+     * The decision for a fresh fix, with its consequence. If a tool is active or Follow is on at
+     * the moment the first fix arrives, the camera is not moved, and the wait is over for good
+     * ([operatorMovedCamera]): the map is in use, and moving it afterwards (when the tool is
+     * closed, or the map tab is opened again) would be the map moving by itself, which is
+     * what this exists to stop. The operator presses "Center on me" when they want it.
+     */
+    fun onFreshFix(toolActive: Boolean): Action = when {
+        shouldMoveOnFix(toolActive = false).not() -> Action.NOTHING
+        shouldMoveOnFix(toolActive) -> Action.MOVE
+        else -> {
+            operatorMovedCamera()
+            Action.LEAVE
+        }
     }
 }

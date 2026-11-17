@@ -871,6 +871,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             // Issue #95 — north-up lock + tap-to-reset support.
             northUpLocked = userPrefs.northUpLocked,
             snapNorthTrigger = snapNorthTick,
+            // These need the map to stay where the operator put it: the first fix of a first
+            // run does not slide it away while one is active.
+            mapToolActive = measurementActive || rangeRingsActive || drawingKind != null || lassoMode,
         )
         // Plugin map overlays on the MAPLIBRE engine. The handle is the live
         // MapLibreMap (captured via onMapReady above; null briefly until the
