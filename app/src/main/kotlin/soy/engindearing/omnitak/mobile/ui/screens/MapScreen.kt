@@ -275,6 +275,31 @@ fun MapScreen(
     var drawingKind by remember { mutableStateOf<DrawingKind?>(null) }
     var drawingPoints by remember { mutableStateOf<List<LatLng>>(emptyList()) }
     var drawingPickerOpen by remember { mutableStateOf(false) }
+    // The three tools that read taps on the map are never on together: starting one ends the others, as
+    // the others' own Cancel / Done buttons would (MapToolRules). Each end is the same code its banner runs.
+    fun endDrawing() {
+        drawingKind = null
+        drawingPoints = emptyList()
+    }
+    fun endMeasure() {
+        measurementActive = false
+        measurementPoints = emptyList()
+    }
+    fun endRangeRings() {
+        rangeRingsActive = false
+        rangeRingCenter = null
+    }
+    fun startTool(tool: MapTool) {
+        val on = buildSet {
+            if (drawingKind != null) add(MapTool.DRAWING)
+            if (measurementActive) add(MapTool.MEASURE)
+            if (rangeRingsActive) add(MapTool.RANGE_RINGS)
+        }
+        val ending = MapToolRules.toEnd(tool, on)
+        if (MapTool.DRAWING in ending) endDrawing()
+        if (MapTool.MEASURE in ending) endMeasure()
+        if (MapTool.RANGE_RINGS in ending) endRangeRings()
+    }
     // Issue #76 — tap-to-select a placed drawing for edit/move/delete.
     // selectedDrawingId holds the tapped shape (drives the DrawingEditSheet);
     // movingDrawingId, when set, flips the map into drag-to-reposition mode.
@@ -1657,23 +1682,21 @@ fun MapScreen(
             onSelect = { tool ->
                 when (tool.id) {
                     "measure" -> {
-                        rangeRingsActive = false
+                        startTool(MapTool.MEASURE)
                         measurementActive = true
                         measurementPoints = emptyList()
                         toast("Measure mode — tap map to add points")
                     }
                     "rangerings" -> {
-                        measurementActive = false
-                        drawingKind = null
+                        startTool(MapTool.RANGE_RINGS)
                         rangeRingsActive = true
                         rangeRingCenter = null
                         toast("Range rings — tap map to set center")
                     }
                     "reports" -> reportsSheetOpen = true
-                    "draw" -> {
-                        rangeRingsActive = false
-                        drawingPickerOpen = true
-                    }
+                    // The drawing starts when its kind is picked (below), not when the picker opens:
+                    // backing out of the picker leaves the tool that is on as it was.
+                    "draw" -> drawingPickerOpen = true
                     "layers" -> layersSheetOpen = true
                     "chat" -> onOpenTab("chat")
                     "missionsync" -> onOpenTab("missionsync")
@@ -1839,6 +1862,7 @@ fun MapScreen(
                     "measure" -> {
                         // Enter measure mode seeded with the long-press
                         // point — matches iOS executeMeasure.
+                        startTool(MapTool.MEASURE)
                         measurementActive = true
                         measurementPoints = ll?.let { listOf(it) } ?: emptyList()
                         toast(Loc.t("map.toast.measure"))
@@ -2212,6 +2236,7 @@ fun MapScreen(
             DrawingKindPicker(
                 onPick = { kind ->
                     drawingPickerOpen = false
+                    startTool(MapTool.DRAWING)
                     drawingKind = kind
                     drawingPoints = emptyList()
                     toast("Drawing ${kind.name.lowercase()} — tap to add points")
@@ -2266,10 +2291,7 @@ fun MapScreen(
                             drawingPoints = drawingPoints.dropLast(1)
                         }
                     },
-                    onCancel = {
-                        drawingKind = null
-                        drawingPoints = emptyList()
-                    },
+                    onCancel = ::endDrawing,
                     onFinish = {
                         val minPts = when (drawingKind!!) {
                             DrawingKind.LINE -> 2
@@ -2303,10 +2325,7 @@ fun MapScreen(
                             measurementPoints = measurementPoints.dropLast(1)
                         }
                     },
-                    onClose = {
-                        measurementActive = false
-                        measurementPoints = emptyList()
-                    },
+                    onClose = ::endMeasure,
                 )
             }
 
@@ -2315,10 +2334,7 @@ fun MapScreen(
                     center = rangeRingCenter,
                     distancesMeters = soy.engindearing.omnitak.mobile.data.rangebearing.RangeRings.DEFAULT_DISTANCES_M,
                     onClear = { rangeRingCenter = null },
-                    onClose = {
-                        rangeRingsActive = false
-                        rangeRingCenter = null
-                    },
+                    onClose = ::endRangeRings,
                 )
             }
 
