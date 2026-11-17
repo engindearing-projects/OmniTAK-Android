@@ -66,6 +66,14 @@ object GeofenceFraming {
     const val LABEL_ROOM_DP = 28.0
 
     /**
+     * Whether a map that was built when the request counter read [tickAtStart] frames [bounds] now that it reads
+     * [tickNow]: only for a request made after the map was built, and only when there is something to show. A map
+     * built again later (the operator went to the globe and came back) starts with the counter as it is, so it is not
+     * sent back to a zone they looked at before.
+     */
+    fun shouldFrame(tickNow: Int, tickAtStart: Int, bounds: GeoBounds?): Boolean = bounds != null && tickNow != tickAtStart
+
+    /**
      * The room to keep for a window whose safe area is [safeLeftDp], [safeTopDp], [safeRightDp] and [safeBottomDp]
      * (the system bars and a cutout), with [topChromeDp] of status strip, and the air under it, below the top of
      * the safe area. The sides and the bottom keep [PADDING_DP] past the safe area; the top keeps the strip and the

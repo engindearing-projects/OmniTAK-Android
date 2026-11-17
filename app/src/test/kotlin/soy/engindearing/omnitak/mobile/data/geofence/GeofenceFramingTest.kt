@@ -1,6 +1,7 @@
 package soy.engindearing.omnitak.mobile.data.geofence
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -129,6 +130,26 @@ class GeofenceFramingTest {
         val camera = frame(zone)
         assertTrue("on the antimeridian, not on the far side of the world", abs(camera.lon) > 179.9)
         assertTrue("and close in, not the whole world (zoom ${camera.zoom})", camera.zoom > 8.0)
+    }
+
+    // -------------------------------------------------------------------------------- which requests a map frames
+
+    private val someBounds = GeoBounds(47.0, -118.0, 48.0, -117.0)
+
+    @Test fun a_map_frames_a_request_made_after_it_was_built() {
+        assertTrue(GeofenceFraming.shouldFrame(tickNow = 1, tickAtStart = 0, bounds = someBounds))
+        assertTrue("and a later one again", GeofenceFraming.shouldFrame(tickNow = 2, tickAtStart = 1, bounds = someBounds))
+    }
+
+    @Test fun a_map_built_again_later_is_not_sent_back_to_a_zone_looked_at_before() {
+        // The operator asked for a zone (tick 1), went to the globe and came back: the new map starts with the counter
+        // at 1, and nothing has been asked since.
+        assertFalse(GeofenceFraming.shouldFrame(tickNow = 1, tickAtStart = 1, bounds = someBounds))
+        assertFalse("nor one that has never been asked", GeofenceFraming.shouldFrame(tickNow = 0, tickAtStart = 0, bounds = someBounds))
+    }
+
+    @Test fun nothing_is_framed_when_there_is_nothing_to_show() {
+        assertFalse(GeofenceFraming.shouldFrame(tickNow = 3, tickAtStart = 0, bounds = null))
     }
 
     // -------------------------------------------------------------------------------- the room a window leaves

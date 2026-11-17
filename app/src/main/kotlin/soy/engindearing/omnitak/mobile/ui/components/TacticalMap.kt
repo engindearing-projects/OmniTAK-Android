@@ -917,7 +917,7 @@ fun TacticalMap(
     val frameTickAtStart = remember { frameBoundsTick }
     DisposableEffect(mapView, frameBoundsTick) {
         val bounds = frameBounds
-        if (frameBoundsTick != frameTickAtStart && bounds != null) {
+        if (bounds != null && GeofenceFraming.shouldFrame(frameBoundsTick, frameTickAtStart, bounds)) {
             RetainedMapView.firstFix.operatorMovedCamera()
             mapView.getMapAsync { map ->
                 map.withReadyLocationComponent("frame") { it.cameraMode = CameraMode.NONE }
