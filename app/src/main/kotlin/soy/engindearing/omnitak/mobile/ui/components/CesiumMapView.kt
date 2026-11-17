@@ -340,6 +340,20 @@ fun CesiumMapView(
         onDispose { }
     }
 
+    // Where the status bar and the status strip end: the page keeps a zone's name under it (as the 2D map does)
+    // while the zone's north edge is above the top of the screen. Told once the globe is ready, and again when the
+    // safe area changes (the phone is turned).
+    val nameTopDp = MapOrnamentLayout.belowStripDp(frameSafeArea, density)
+    DisposableEffect(ready.value, nameTopDp) {
+        if (ready.value) {
+            webViewRef.value?.evaluateJavascript(
+                "if(window.OmniBridge&&window.OmniBridge.setNameTop)window.OmniBridge.setNameTop($nameTopDp);",
+                null,
+            )
+        }
+        onDispose { }
+    }
+
     // Issue #95 — north-up lock on the Cesium globe. When ready, push the
     // lock state to the JS bridge.  setNorthUpLocked(true) should disable
     // rotation gestures in the scene and fly to heading 0; false restores.

@@ -273,3 +273,12 @@ dependencies {
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
 }
+
+// The page tests read cesium_scene.html straight from the source tree and run its code under node. Declare it as
+// an input of the unit tests: otherwise a change to the page alone leaves the tests UP-TO-DATE, or restored from
+// the build cache with the result they had for the old page.
+tasks.withType<Test>().configureEach {
+    inputs.file("src/main/assets/cesium_scene.html")
+        .withPropertyName("cesiumScenePage")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}

@@ -31,7 +31,7 @@
   // Injected at WebView load time by CesiumMapView from BuildConfig.CESIUM_ION_TOKEN
   // (fed by gitignored local.properties) — never commit a literal token here.
   Cesium.Ion.defaultAccessToken='__CESIUM_ION_TOKEN__';
-  const _state={ready:false,viewer:null,entities:new Map(),drawings:new Map(),billboardCache:new Map(),northLocked:false,northEnforcer:null,scaleAnchor:null,scaleFrame:0,scalePosted:null,scaleSoon:0,occluder:null,horizonCam:null,horizonDirty:true};
+  const _state={ready:false,viewer:null,entities:new Map(),drawings:new Map(),billboardCache:new Map(),northLocked:false,northEnforcer:null,scaleAnchor:null,scaleFrame:0,scalePosted:null,scaleSoon:0,occluder:null,horizonCam:null,horizonDirty:true,nameTop:0,nameKey:'',namesDirty:true};
   function _drawColor(hex,a){try{const c=Cesium.Color.fromCssColorString(hex||'#4ADE80');return a!==undefined?c.withAlpha(a):c}catch(e){return Cesium.Color.CYAN}}
   function _havDist(a,b){const R=6371000,lat1=a[1]*Math.PI/180,lat2=b[1]*Math.PI/180,dLat=(b[1]-a[1])*Math.PI/180,dLon=(b[0]-a[0])*Math.PI/180;const s=Math.sin(dLat/2)**2+Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2)**2;return 2*R*Math.asin(Math.min(1,Math.sqrt(s)))}
   function _fitViewport(){
@@ -193,6 +193,52 @@
     // Only a shape that carries a name (a geofence's) is checked: its name skips the depth test like a marker's does. A shape without a
     // name is clamped to the ground, so the planet hides it by itself, and a wide circle whose middle is over the horizon keeps the part that is not.
     _state.drawings.forEach(function(e){if(!e.label)return;const p=e.position&&e.position.getValue(t);if(!p)return;const vis=o.isPointVisible(p);if(e.show!==vis)e.show=vis})}
+  // A zone's name belongs to the zone: it is shown for as long as any of the zone is on the screen, even when the point it is
+  // written on (the north edge of a circle, the middle of a polygon) is not. Above the top it is kept at the top, under the
+  // first `top` px (the status bar and the status strip), the whole name clear of them: `nameH` tall, `gap` over its point.
+  // Below the bottom it is kept at the bottom, and past a side it is moved to the middle of the part of the zone that is on
+  // the screen. A point on the screen (or within `margin` px of a side: a name is wide) stays where it is, but is moved down
+  // off the strip. Returns whether to show the name and how far to move it from where its point puts it, in px. The same rule
+  // as the 2D map's (GeofenceLabels.placed), and a test runs the two against each other.
+  // NAMES-BEGIN
+  const _NAME_H=20,_NAME_GAP=2,_NAME_CHAR_PX=7;
+  function _namePlace(at,box,w,h,top,nameH,gap,margin){
+    if(!at||!isFinite(at.x)||!isFinite(at.y))return{show:true,dx:0,dy:0};
+    if(!box||!isFinite(box.left)||!isFinite(box.top)||!isFinite(box.right)||!isFinite(box.bottom)){
+      return{show:at.x>=-margin&&at.x<=w+margin&&at.y>=-margin&&at.y<=h+margin,dx:0,dy:0}}
+    const left=Math.max(box.left,0),right=Math.min(box.right,w),t=Math.max(box.top,top),bottom=Math.min(box.bottom,h);
+    if(left>right||t>bottom)return{show:false,dx:0,dy:0};
+    const lowest=top+gap+nameH;
+    const x=(at.x>=-margin&&at.x<=w+margin)?at.x:(left+right)/2;
+    const y=Math.min(Math.max(at.y,lowest),Math.max(lowest,h));
+    return{show:true,dx:x-at.x,dy:y-at.y}}
+  // The box round the window points `pts` ({x,y}), or null when there are none.
+  function _boxOf(pts){if(!pts.length)return null;let l=Infinity,t=Infinity,r=-Infinity,b=-Infinity;
+    for(const p of pts){if(!isFinite(p.x)||!isFinite(p.y))continue;l=Math.min(l,p.x);r=Math.max(r,p.x);t=Math.min(t,p.y);b=Math.max(b,p.y)}
+    return l<=r?{left:l,top:t,right:r,bottom:b}:null}
+  // At most 16 points of a zone's outline ([lon, lat] pairs), evenly spread, the first and the last kept, as world positions.
+  function _thinRing(coords){const n=coords.length,most=16,out=[];
+    for(let i=0;i<Math.min(n,most);i++){const c=coords[n<=most?i:Math.floor(i*(n-1)/(most-1))];out.push(Cesium.Cartesian3.fromDegrees(c[0],c[1],0))}
+    return out}
+  // Before each frame the names of the zones are put where they are seen (_namePlace). It does nothing while the camera, the
+  // window and the shapes are still: the positions only change with those.
+  function _placeNames(v){
+    if(!_state.drawings.size)return;
+    const scene=v.scene,c=scene.canvas,cam=v.camera,w=c.clientWidth,h=c.clientHeight,top=_state.nameTop,p=cam.positionWC,d=cam.directionWC,u=cam.upWC;
+    const key=[p.x,p.y,p.z,d.x,d.y,d.z,u.x,u.y,u.z,w,h,top].join(',');
+    if(key===_state.nameKey&&!_state.namesDirty)return;
+    _state.nameKey=key;_state.namesDirty=false;
+    const t=v.clock.currentTime;
+    _state.drawings.forEach(function(e){if(!e.label||!e.zoneRing)return;
+      const pos=e.position&&e.position.getValue(t);if(!pos)return;
+      const at=Cesium.SceneTransforms.worldToWindowCoordinates(scene,pos),pts=[];
+      for(const q of e.zoneRing){const s=Cesium.SceneTransforms.worldToWindowCoordinates(scene,q);if(s)pts.push(s)}
+      if(at)pts.push(at);
+      const m=_namePlace(at,_boxOf(pts),w,h,top,_NAME_H,_NAME_GAP,_NAME_CHAR_PX*(e.zoneName||'').length/2);
+      const ox=Math.round(m.dx),oy=-_NAME_GAP+Math.round(m.dy);
+      if(e.nameShown!==m.show){e.nameShown=m.show;e.label.show=m.show}
+      if(!e.nameAt||e.nameAt.x!==ox||e.nameAt.y!==oy){e.nameAt={x:ox,y:oy};e.label.pixelOffset=new Cesium.Cartesian2(ox,oy)}})}
+  // NAMES-END
   function _installInputHandlers(viewer){
     viewer.camera.moveEnd.addEventListener(function(){_postCameraChanged(viewer)});
     const h=new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
@@ -230,6 +276,7 @@
     // as one at sea level. The ground's height is asked of the terrain service: the globe's own answer
     // (globe.getHeight) is only good where the camera already is. The service gets 2 s; with no answer the
     // ground is taken as sea level and the globe is still flown there. Same call as the iOS page.
+    // LOOKDOWN-CALL-BEGIN
     lookDown(arg){const e=_parse(arg);if(!e||typeof e.lat!=='number'||typeof e.lon!=='number')return;const v=_state.viewer;if(!v)return;
       const f=v.camera.frustum,agl=_lookDownAgl(typeof e.width==='number'?e.width:600,f.aspectRatio,f.fovy);if(agl===null)return;
       let flown=false;
@@ -240,6 +287,7 @@
         setTimeout(function(){go(null)},2000);return}
       go(null);
     },
+    // LOOKDOWN-CALL-END
     // Toolbar +/- zoom buttons (gesture pinch already works natively).
     zoomIn(){_zoomBy(0.5)},
     zoomOut(){_zoomBy(2.0)},
@@ -319,6 +367,8 @@
       const v=_state.viewer;if(!v||_state.scaleFrame)return;
       _state.scaleFrame=requestAnimationFrame(function(){_state.scaleFrame=0;_postCameraChanged(v)});
     },
+    // Where the status bar and the status strip end, in CSS px from the top of the page: a zone's name is kept under it.
+    setNameTop(px){if(typeof px!=='number'||!isFinite(px)||px<0)return;_state.nameTop=px;_state.namesDirty=true},
     ping(){return _state.ready?'pong':'loading'},
     upsertDrawing(arg){const d=_parse(arg);if(!d||!d.uid||!d.kind||!Array.isArray(d.coords)||d.coords.length===0)return;const v=_state.viewer;if(!v)return;
       const color=_drawColor(d.color,0.85),fillC=_drawColor(d.color,typeof d.fillAlpha==='number'?d.fillAlpha:0.25),width=typeof d.width==='number'?d.width:3;
@@ -337,8 +387,10 @@
       // zone they are in) never cover it. Same fields and the same look as the name on the iOS page.
       if(typeof d.label==='string'&&d.label&&Array.isArray(d.labelAt)&&d.labelAt.length>=2){opts.position=Cesium.Cartesian3.fromDegrees(d.labelAt[0],d.labelAt[1],0);
         opts.label={text:d.label,font:'bold 13px -apple-system, sans-serif',fillColor:Cesium.Color.WHITE,outlineColor:Cesium.Color.BLACK,outlineWidth:3,style:Cesium.LabelStyle.FILL_AND_OUTLINE,verticalOrigin:Cesium.VerticalOrigin.BOTTOM,pixelOffset:new Cesium.Cartesian2(0,-2),heightReference:Cesium.HeightReference.CLAMP_TO_GROUND,disableDepthTestDistance:Number.POSITIVE_INFINITY};}
-      _state.horizonDirty=true;
-      _state.drawings.set(d.uid,v.entities.add(opts));
+      _state.horizonDirty=true;_state.namesDirty=true;
+      const ent=v.entities.add(opts);
+      if(opts.label){ent.zoneName=d.label;ent.zoneRing=_thinRing(d.coords)}
+      _state.drawings.set(d.uid,ent);
     },
     setDrawings(arg){const list=_parse(arg);if(!Array.isArray(list))return;const seen=new Set();
       for(const d of list)if(d&&d.uid){seen.add(d.uid);window.OmniBridge.upsertDrawing(d);}
@@ -350,7 +402,7 @@
     _fitViewport();
     const v=new Cesium.Viewer('cesiumContainer',{terrain:Cesium.Terrain.fromWorldTerrain(),animation:false,timeline:false,baseLayerPicker:false,geocoder:false,homeButton:false,sceneModePicker:false,navigationHelpButton:false,fullscreenButton:false,infoBox:false,selectionIndicator:false,creditContainer:document.createElement('div')});
     v.scene.skyAtmosphere.show=true;v.scene.globe.enableLighting=true;_state.viewer=v;_fitViewport();_installInputHandlers(v);
-    v.scene.preRender.addEventListener(function(){_cullFarSide(v)});
+    v.scene.preRender.addEventListener(function(){_cullFarSide(v);_placeNames(v)});
     setInterval(function(){if(!document.hidden)_scaleRefresh(v)},1000);
     try{const t=await Cesium.createGooglePhotorealistic3DTileset();v.scene.primitives.add(t);t.allTilesLoaded.addEventListener(function(){_scaleSoon(v)});}catch(e){console.warn('Photoreal unavailable:',e);}
     v.camera.flyTo({destination:Cesium.Cartesian3.fromDegrees(0.0,0.0,20000000),orientation:{heading:0,pitch:Cesium.Math.toRadians(-90),roll:0},duration:1.5,complete:_hideLoading});
