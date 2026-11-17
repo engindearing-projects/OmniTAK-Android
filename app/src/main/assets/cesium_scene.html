@@ -31,7 +31,7 @@
   // Injected at WebView load time by CesiumMapView from BuildConfig.CESIUM_ION_TOKEN
   // (fed by gitignored local.properties) — never commit a literal token here.
   Cesium.Ion.defaultAccessToken='__CESIUM_ION_TOKEN__';
-  const _state={ready:false,viewer:null,entities:new Map(),drawings:new Map(),billboardCache:new Map(),northLocked:false,northEnforcer:null,scaleAnchor:null,scaleFrame:0,scalePosted:null,scaleSoon:0};
+  const _state={ready:false,viewer:null,entities:new Map(),drawings:new Map(),billboardCache:new Map(),northLocked:false,northEnforcer:null,scaleAnchor:null,scaleFrame:0,scalePosted:null,scaleSoon:0,occluder:null,horizonCam:null,horizonDirty:true};
   function _drawColor(hex,a){try{const c=Cesium.Color.fromCssColorString(hex||'#4ADE80');return a!==undefined?c.withAlpha(a):c}catch(e){return Cesium.Color.CYAN}}
   function _havDist(a,b){const R=6371000,lat1=a[1]*Math.PI/180,lat2=b[1]*Math.PI/180,dLat=(b[1]-a[1])*Math.PI/180,dLon=(b[0]-a[0])*Math.PI/180;const s=Math.sin(dLat/2)**2+Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2)**2;return 2*R*Math.asin(Math.min(1,Math.sqrt(s)))}
   function _fitViewport(){
@@ -167,6 +167,18 @@
       _postCameraChanged(v);
     }
   }
+  // Every marker skips the depth test (disableDepthTestDistance, below), so none sinks into terrain or a building. The
+  // price is that one on the far side of the planet is drawn through it. So the page hides what the planet itself hides:
+  // before each frame a marker is shown only while it is above the horizon as the camera sees it (EllipsoidalOccluder
+  // against the WGS84 ellipsoid). It does nothing while the camera and the markers are still, and sets `show` only when
+  // it changes. A depth test limited by distance cannot do this: where "behind the planet" starts depends on how high
+  // the camera is.
+  function _cullFarSide(v){const cam=v.camera.positionWC;
+    if(_state.horizonCam&&Cesium.Cartesian3.equals(_state.horizonCam,cam)&&!_state.horizonDirty)return;
+    _state.horizonCam=Cesium.Cartesian3.clone(cam,_state.horizonCam);_state.horizonDirty=false;
+    if(!_state.occluder)_state.occluder=new Cesium.EllipsoidalOccluder(Cesium.Ellipsoid.WGS84,cam);
+    const o=_state.occluder,t=v.clock.currentTime;o.cameraPosition=cam;
+    _state.entities.forEach(function(e){const p=e.position&&e.position.getValue(t);if(!p)return;const vis=o.isPointVisible(p);if(e.show!==vis)e.show=vis})}
   function _installInputHandlers(viewer){
     viewer.camera.moveEnd.addEventListener(function(){_postCameraChanged(viewer)});
     const h=new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
@@ -187,6 +199,7 @@
         label:e.callsign?{text:e.callsign,font:'12px -apple-system, sans-serif',fillColor:Cesium.Color.WHITE,outlineColor:Cesium.Color.BLACK,outlineWidth:2,style:Cesium.LabelStyle.FILL_AND_OUTLINE,pixelOffset:new Cesium.Cartesian2(0,-32),heightReference:useGround?Cesium.HeightReference.CLAMP_TO_GROUND:Cesium.HeightReference.NONE,disableDepthTestDistance:Number.POSITIVE_INFINITY}:undefined,
       });_state.entities.set(e.uid,entity);}
       else{entity.position=pos;entity.billboard.image=_billboard(e.affiliation||'u',e.kind,e.sidc,e.spot,e.icon,e.triangle);entity.billboard.heightReference=useGround?Cesium.HeightReference.CLAMP_TO_GROUND:Cesium.HeightReference.NONE;entity.billboard.rotation=rot;if(entity.label&&e.callsign)entity.label.text=e.callsign;}
+      _state.horizonDirty=true;
     },
     setEntities(arg){const list=_parse(arg);if(!Array.isArray(list))return;const seen=new Set();
       for(const e of list){if(e&&e.uid){seen.add(e.uid);window.OmniBridge.upsertEntity(e);}}
@@ -302,6 +315,7 @@
     _fitViewport();
     const v=new Cesium.Viewer('cesiumContainer',{terrain:Cesium.Terrain.fromWorldTerrain(),animation:false,timeline:false,baseLayerPicker:false,geocoder:false,homeButton:false,sceneModePicker:false,navigationHelpButton:false,fullscreenButton:false,infoBox:false,selectionIndicator:false,creditContainer:document.createElement('div')});
     v.scene.skyAtmosphere.show=true;v.scene.globe.enableLighting=true;_state.viewer=v;_fitViewport();_installInputHandlers(v);
+    v.scene.preRender.addEventListener(function(){_cullFarSide(v)});
     setInterval(function(){if(!document.hidden)_scaleRefresh(v)},1000);
     try{const t=await Cesium.createGooglePhotorealistic3DTileset();v.scene.primitives.add(t);t.allTilesLoaded.addEventListener(function(){_scaleSoon(v)});}catch(e){console.warn('Photoreal unavailable:',e);}
     v.camera.flyTo({destination:Cesium.Cartesian3.fromDegrees(0.0,0.0,20000000),orientation:{heading:0,pitch:Cesium.Math.toRadians(-90),roll:0},duration:1.5,complete:_hideLoading});
