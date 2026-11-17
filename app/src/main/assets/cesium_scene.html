@@ -31,7 +31,7 @@
   // Injected at WebView load time by CesiumMapView from BuildConfig.CESIUM_ION_TOKEN
   // (fed by gitignored local.properties) — never commit a literal token here.
   Cesium.Ion.defaultAccessToken='__CESIUM_ION_TOKEN__';
-  const _state={ready:false,viewer:null,entities:new Map(),drawings:new Map(),billboardCache:new Map(),northLocked:false,northEnforcer:null};
+  const _state={ready:false,viewer:null,entities:new Map(),drawings:new Map(),billboardCache:new Map(),northLocked:false,northEnforcer:null,scaleAnchor:null,scaleFrame:0};
   function _drawColor(hex,a){try{const c=Cesium.Color.fromCssColorString(hex||'#4ADE80');return a!==undefined?c.withAlpha(a):c}catch(e){return Cesium.Color.CYAN}}
   function _havDist(a,b){const R=6371000,lat1=a[1]*Math.PI/180,lat2=b[1]*Math.PI/180,dLat=(b[1]-a[1])*Math.PI/180,dLon=(b[0]-a[0])*Math.PI/180;const s=Math.sin(dLat/2)**2+Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2)**2;return 2*R*Math.asin(Math.min(1,Math.sqrt(s)))}
   function _fitViewport(){
@@ -98,8 +98,18 @@
   function _pickedUid(viewer,pos){const p=viewer.scene.pick(pos);return(p&&p.id&&typeof p.id.id==='string')?p.id.id:null}
   function _cartoFor(viewer,pos){let c=viewer.scene.pickPosition(pos);if(!Cesium.defined(c))c=viewer.camera.pickEllipsoid(pos,viewer.scene.globe.ellipsoid);if(!Cesium.defined(c))return null;const cc=Cesium.Cartographic.fromCartesian(c);return{lat:Cesium.Math.toDegrees(cc.latitude),lon:Cesium.Math.toDegrees(cc.longitude),hae:cc.height}}
   function _zoomFromHeight(h,latRad){const c=Math.max(Math.cos(latRad||0),0.01),mpp=(h*256)/1000.0,z=Math.log2(40075017*c/Math.max(mpp,1));return Math.max(0,Math.min(22,z))}
+  // The scale bar: ground metres per CSS px (= dp) along the bar's own row. The row is where native says the bar is
+  // (setScaleAnchor, CSS px from the page's top-left; the middle of the screen until it does). Two globe points, 50 px
+  // left and right of the anchor on that row, through the page's own pick helper; the ground distance between them
+  // by EllipsoidGeodesic, divided by the 100 px between them. A tilted globe is nearer at the bottom of the screen
+  // than in the middle, so the bar must measure its own row. null when either point is not on the globe (sky above the
+  // horizon, off the globe). Same name and maths as the iOS page.
+  function _scaleMpp(v){try{const c=v.scene.canvas,a=_state.scaleAnchor,x=a?a.x:c.clientWidth/2,y=a?a.y:c.clientHeight/2;
+    const l=_cartoFor(v,new Cesium.Cartesian2(x-50,y)),r=_cartoFor(v,new Cesium.Cartesian2(x+50,y));if(!l||!r)return null;
+    const d=new Cesium.EllipsoidGeodesic(Cesium.Cartographic.fromDegrees(l.lon,l.lat),Cesium.Cartographic.fromDegrees(r.lon,r.lat)).surfaceDistance;
+    return(isFinite(d)&&d>0)?d/100:null}catch(e){return null}}
   function _postCameraChanged(v){const cam=v.camera,carto=cam.positionCartographic;if(!carto)return;
-    _postMapEvent({event:'camerachanged',lat:Cesium.Math.toDegrees(carto.latitude),lon:Cesium.Math.toDegrees(carto.longitude),height:carto.height,heading:Cesium.Math.toDegrees(cam.heading),pitch:Cesium.Math.toDegrees(cam.pitch),zoom:_zoomFromHeight(carto.height,carto.latitude)})}
+    _postMapEvent({event:'camerachanged',lat:Cesium.Math.toDegrees(carto.latitude),lon:Cesium.Math.toDegrees(carto.longitude),height:carto.height,heading:Cesium.Math.toDegrees(cam.heading),pitch:Cesium.Math.toDegrees(cam.pitch),zoom:_zoomFromHeight(carto.height,carto.latitude),mpp:_scaleMpp(v)})}
   // Toolbar zoom — move the camera along its view axis by the change in
   // height (factor<1 zooms in, >1 zooms out). Mirrors the iOS zoomBy so the
   // +/- buttons drive the globe the same on both platforms.
@@ -235,6 +245,13 @@
         if(_state.northEnforcer){v.camera.changed.removeEventListener(_state.northEnforcer);_state.northEnforcer=null;
           if(typeof _state._priorPct==='number')v.camera.percentageChanged=_state._priorPct;}
       }
+    },
+    // Where the native scale bar's row is: x, y in CSS px (= dp) from the page's top-left. The camera event's
+    // `mpp` is measured there. Native calls it when the bar is laid out and whenever the layout changes
+    // (rotation, the toolbar lifting the bar); the scale is posted again, at most once a frame.
+    setScaleAnchor(x,y){if(typeof x!=='number'||typeof y!=='number'||!isFinite(x)||!isFinite(y))return;_state.scaleAnchor={x:x,y:y};
+      const v=_state.viewer;if(!v||_state.scaleFrame)return;
+      _state.scaleFrame=requestAnimationFrame(function(){_state.scaleFrame=0;_postCameraChanged(v)});
     },
     ping(){return _state.ready?'pong':'loading'},
     upsertDrawing(arg){const d=_parse(arg);if(!d||!d.uid||!d.kind||!Array.isArray(d.coords)||d.coords.length===0)return;const v=_state.viewer;if(!v)return;

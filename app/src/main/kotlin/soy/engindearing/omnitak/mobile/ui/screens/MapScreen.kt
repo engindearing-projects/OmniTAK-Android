@@ -75,6 +75,9 @@ import soy.engindearing.omnitak.mobile.ui.components.CompassOverlay
 import soy.engindearing.omnitak.mobile.ui.components.ContactsPanel
 import soy.engindearing.omnitak.mobile.ui.components.LayersDialog
 import soy.engindearing.omnitak.mobile.ui.components.MapOrnamentLayout
+import soy.engindearing.omnitak.mobile.ui.components.MapScaleBar
+import soy.engindearing.omnitak.mobile.ui.components.MapScaleSource
+import soy.engindearing.omnitak.mobile.ui.components.RetainedMapView
 import soy.engindearing.omnitak.mobile.ui.components.MarkerEditSheet
 import soy.engindearing.omnitak.mobile.ui.components.OnRequest
 import soy.engindearing.omnitak.mobile.ui.components.RadialAction
@@ -374,6 +377,14 @@ fun MapScreen(
     // hands it back when the 2D engine returns.
     LaunchedEffect(userPrefs.cesiumGlobeEnabled) {
         if (userPrefs.cesiumGlobeEnabled) mapboxMap = null
+    }
+    // The scale bar shows the scale of the engine that is on screen. When the engine changes the old
+    // value means nothing to the new one: it is dropped until the new engine reports its own (the 2D
+    // map at once, the globe with its next camera event).
+    LaunchedEffect(userPrefs.cesiumGlobeEnabled) {
+        RetainedMapView.scale.useEngine(
+            if (userPrefs.cesiumGlobeEnabled) MapScaleSource.Engine.GLOBE else MapScaleSource.Engine.MAPLIBRE,
+        )
     }
 
     // Re-apply KML overlays to the live style whenever the set changes.
@@ -698,6 +709,7 @@ fun MapScreen(
             // Issue #95 — north-up lock + compass snap for the globe.
             northUpLocked = userPrefs.northUpLocked,
             snapNorthTrigger = snapNorthTick,
+            scaleSource = RetainedMapView.scale,
         )
         // Plugin map overlays on the GLOBE engine. The handle is null here
         // (no MapLibreMap on Cesium), so an overlay that can only draw on
@@ -1756,6 +1768,8 @@ fun MapScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 mapControlButtons()
+                // To the right of the row, on the same baseline: the bar's line is level with the buttons' foot.
+                MapScaleBar(RetainedMapView.scale, userPrefs.distanceUnit, Modifier.align(Alignment.Bottom))
             }
         } else {
             androidx.compose.foundation.layout.Column(
@@ -1766,6 +1780,8 @@ fun MapScreen(
                     .padding(start = 16.dp, bottom = MapOrnamentLayout.ZOOM_STACK_BOTTOM_DP.dp),
                 verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
             ) {
+                // Directly above the zoom and centre buttons, so it lifts and insets with them.
+                MapScaleBar(RetainedMapView.scale, userPrefs.distanceUnit)
                 mapControlButtons()
             }
         }

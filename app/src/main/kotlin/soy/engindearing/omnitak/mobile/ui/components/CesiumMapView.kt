@@ -9,9 +9,11 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalContext
@@ -89,6 +91,9 @@ fun CesiumMapView(
     northUpLocked: Boolean = false,
     /** Issue #95/#96 — tap the compass → snap globe heading to north. */
     snapNorthTrigger: Int = 0,
+    /** The scale bar's holder. The globe is told where the bar's row is (setScaleAnchor) and reports the
+     *  ground scale it measured there with every camera event. See [MapScaleSource]. */
+    scaleSource: MapScaleSource? = null,
 ) {
     val density = LocalDensity.current.density
     // #98 — app context to rasterise the Markers / Google badge glyphs into the
@@ -111,6 +116,7 @@ fun CesiumMapView(
     val selfHeadingState = rememberUpdatedState(selfHeadingDeg)
     val selfMarkerVisibleState = rememberUpdatedState(selfMarkerVisible)
     val onCameraState = rememberUpdatedState(onCameraChanged)
+    val scaleSourceState = rememberUpdatedState(scaleSource)
     // #95 — read the latest lock state inside the JS bridge callbacks so a
     // globe that opens while north-up is already on gets the lock applied on
     // bridge-ready (the change-driven DisposableEffect below only fires on a
@@ -227,6 +233,8 @@ fun CesiumMapView(
                                             o.optDouble("zoom", 11.0),
                                             o.optDouble("heading", 0.0),
                                         )
+                                        // The ground scale along the scale bar's row, measured by the page.
+                                        scaleSourceState.value?.reportGlobe(metersPerDpFromCameraEvent(o))
                                     }
                                 }
                             }
@@ -304,6 +312,16 @@ fun CesiumMapView(
         }
         onDispose { }
     }
+    // The scale bar's row: told to the page once the globe is ready and whenever the bar is laid out
+    // or moves (rotation, the toolbar lifting it), so the page measures the scale there.
+    LaunchedEffect(scaleSource) {
+        val source = scaleSource ?: return@LaunchedEffect
+        snapshotFlow { if (ready.value) source.anchorDp.value else null }.collect { at ->
+            if (at != null) {
+                webViewRef.value?.evaluateJavascript("window.OmniBridge.setScaleAnchor(${at.x},${at.y});", null)
+            }
+        }
+    }
     // Issue #95/#96 — manual snap to north (compass tap when lock is off).
     DisposableEffect(snapNorthTrigger) {
         if (snapNorthTrigger > 0 && ready.value) {
@@ -324,3 +342,13 @@ fun CesiumMapView(
     }
 }
 
+/**
+ * The `mpp` of a `camerachanged` event: ground metres per CSS px (= dp) along the scale bar's row,
+ * measured by the page. Null when it is absent, JSON null (a point missed the globe), not finite or
+ * not positive.
+ */
+internal fun metersPerDpFromCameraEvent(event: JSONObject): Double? {
+    if (!event.has("mpp") || event.isNull("mpp")) return null
+    val value = event.optDouble("mpp", Double.NaN)
+    return if (value.isFinite() && value > 0.0) value else null
+}
