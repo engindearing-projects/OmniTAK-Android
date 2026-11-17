@@ -39,9 +39,15 @@ class MissionSyncManager(
     private val _lastRefresh = MutableStateFlow<Long?>(null)
     val lastRefresh: StateFlow<Long?> = _lastRefresh.asStateFlow()
 
-    /** Enrolled, enabled, TLS servers — the only ones that can do mTLS sync. */
+    /**
+     * Enabled TLS servers that can authenticate to the Marti API: with a
+     * client certificate, or with a stored username and password, which
+     * reach the API through the enrollment port (iOS #169 parity).
+     */
     private fun enabledServers(): List<TAKServer> =
-        serverManager.servers.value.filter { it.enabled && it.useTLS && it.certificateName != null }
+        serverManager.servers.value.filter {
+            it.enabled && it.useTLS && (it.certificateName != null || it.hasStoredCredentials)
+        }
 
     /**
      * Refresh every enabled server in parallel. Existing data is preserved and
@@ -93,7 +99,7 @@ class MissionSyncManager(
             for (server in candidates) {
                 val client = TakRestApiClient(server, certVault)
                 val attempt = runCatching {
-                    client.checkReachability()
+                    client.connect()
                     client.uploadDataPackage(zipBytes, filename, creatorUid)
                 }
                 val hash = attempt.getOrNull()
@@ -109,7 +115,7 @@ class MissionSyncManager(
             // earlier ones were probably the same network condition.
             val lastFailure = candidates.last().let { sv ->
                 runCatching {
-                    TakRestApiClient(sv, certVault).uploadDataPackage(zipBytes, filename, creatorUid)
+                    TakRestApiClient(sv, certVault).also { it.connect() }.uploadDataPackage(zipBytes, filename, creatorUid)
                 }.exceptionOrNull()
             }
             UploadOutcome.Failed(
@@ -134,7 +140,7 @@ class MissionSyncManager(
             ?: return Result.failure(IllegalStateException("Server is not available for mission sync"))
         val result = withContext(Dispatchers.IO) {
             runCatching {
-                TakRestApiClient(sv, certVault).createMission(
+                TakRestApiClient(sv, certVault).also { it.connect() }.createMission(
                     name = name,
                     creatorUid = creatorUid,
                     description = description?.takeIf { it.isNotBlank() },
@@ -159,7 +165,7 @@ class MissionSyncManager(
             ?: return Result.failure(IllegalStateException("Server is not available for mission sync"))
         val result = withContext(Dispatchers.IO) {
             runCatching {
-                TakRestApiClient(sv, certVault).attachHashToMission(missionName, hash)
+                TakRestApiClient(sv, certVault).also { it.connect() }.attachHashToMission(missionName, hash)
             }
         }
         if (result.isSuccess) refresh(serverId)
@@ -191,7 +197,9 @@ class MissionSyncManager(
         val now = System.currentTimeMillis()
         val base = ServerSyncSession(server.id, server.name, server.host, MissionServerStatus.Checking, lastChecked = now)
         return try {
-            client.checkReachability()
+            // Certificate port first; username/password on the enrollment
+            // port when that is refused and credentials are stored (#169).
+            val route = client.connect()
             val missions = runCatching { client.getMissions() }.getOrDefault(emptyList())
             val packages = runCatching { client.getDataPackages() }.getOrDefault(emptyList())
             base.copy(
@@ -199,9 +207,15 @@ class MissionSyncManager(
                 missions = missions,
                 dataPackages = packages,
                 lastChecked = System.currentTimeMillis(),
+                authLabel = route.label.takeIf { route.usesCredentials },
             )
         } catch (t: Throwable) {
-            base.copy(status = MissionServerStatus.Offline(t.message ?: t.javaClass.simpleName))
+            base.copy(
+                status = MissionServerStatus.Offline(
+                    t.message ?: t.javaClass.simpleName,
+                    (t as? TakRestApiClient.ApiException)?.detail,
+                ),
+            )
         }
     }
 }
@@ -211,7 +225,8 @@ class MissionSyncManager(
 sealed interface MissionServerStatus {
     data object Checking : MissionServerStatus
     data object Online : MissionServerStatus
-    data class Offline(val reason: String) : MissionServerStatus
+    /** [reason] is the row text; [detail] the full diagnosis for the details dialog. */
+    data class Offline(val reason: String, val detail: String? = null) : MissionServerStatus
 
     val isOnline: Boolean get() = this is Online
 }
@@ -224,6 +239,8 @@ data class ServerSyncSession(
     val missions: List<TakMissionInfo> = emptyList(),
     val dataPackages: List<TakDataPackageInfo> = emptyList(),
     val lastChecked: Long? = null,
+    /** How the Marti API was reached when not by client certificate, e.g. "username and password (8446)". */
+    val authLabel: String? = null,
 ) {
     val itemCount: Int get() = missions.size + dataPackages.size
 }

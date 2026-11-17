@@ -167,6 +167,7 @@ fun EnrollServerScreen(onDone: () -> Unit) {
                                         // Pin against the enrollment CA on every future
                                         // connect — replaces dev-mode trust-all (#38).
                                         caCertificateName = enrolled.caCertificateName,
+                                        enrollmentPort = enrollPort!!,
                                     ),
                                 )
                                 onDone()
