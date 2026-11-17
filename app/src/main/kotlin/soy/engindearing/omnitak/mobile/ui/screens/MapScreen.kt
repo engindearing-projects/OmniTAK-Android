@@ -74,7 +74,7 @@ import soy.engindearing.omnitak.mobile.data.geofence.GeoBounds
 import soy.engindearing.omnitak.mobile.data.geofence.GeofenceDrawings
 import soy.engindearing.omnitak.mobile.data.geofence.GeofenceFraming
 import soy.engindearing.omnitak.mobile.data.geofence.LatLon
-import soy.engindearing.omnitak.mobile.domain.GeofenceNotificationPermission
+import soy.engindearing.omnitak.mobile.domain.NotificationPermission
 import soy.engindearing.omnitak.mobile.domain.GeofenceNotifier
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
 import soy.engindearing.omnitak.mobile.domain.ServerHealthProjection
@@ -371,15 +371,7 @@ fun MapScreen(
         androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
     ) { }
     fun askForNotificationsIfNeeded() {
-        val shouldAsk = GeofenceNotificationPermission.shouldAsk(
-            sdkInt = android.os.Build.VERSION.SDK_INT,
-            granted = GeofenceNotificationPermission.isGranted(app),
-            alreadyAsked = GeofenceNotificationPermission.wasAsked(app),
-        )
-        if (shouldAsk) {
-            GeofenceNotificationPermission.markAsked(app)
-            notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-        }
+        if (NotificationPermission.takeTurnToAsk(app)) notificationPermission.launch(NotificationPermission.PERMISSION)
     }
     // ADS-B is now a plugin (:plugins:example-adsb). The plugin owns its
     // AdsbService, its map overlay (which paints via AircraftLayer on the live

@@ -1,5 +1,7 @@
 package soy.engindearing.omnitak.mobile.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -64,6 +66,7 @@ import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.UserPrefs
 import soy.engindearing.omnitak.mobile.domain.ChatConversationList
 import soy.engindearing.omnitak.mobile.domain.ChatStore
+import soy.engindearing.omnitak.mobile.domain.NotificationPermission
 import soy.engindearing.omnitak.mobile.domain.ServerManager
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalBackground
@@ -88,6 +91,15 @@ fun ChatScreen(initialConversationId: String? = null) {
     // UID PPLI uses — sending two different UIDs to a TAK server makes
     // ATAK render the operator as two separate contacts (#9).
     LaunchedEffect(Unit) { app.userPrefsStore.ensureSelfUid() }
+
+    // Chat notifications (MeshChatNotifier) need the notification permission on Android 13 and later, and nothing
+    // asked for it: a teammate's message came in silently unless the operator had saved a geofence first. The
+    // first time the Chat tab is opened is where messages are read, so the question makes sense there. Asked once
+    // for the whole app (NotificationPermission keeps the one flag), and this tab only exists after onboarding.
+    val askForNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    LaunchedEffect(Unit) {
+        if (NotificationPermission.takeTurnToAsk(app)) askForNotifications.launch(NotificationPermission.PERMISSION)
+    }
 
     // Multi-server: resolve a serverId → display name so chat can badge which
     // server a message/thread came from. Badges only show when >1 server is
