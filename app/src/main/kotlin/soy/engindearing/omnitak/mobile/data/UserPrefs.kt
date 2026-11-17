@@ -1,6 +1,7 @@
 package soy.engindearing.omnitak.mobile.data
 
 import android.content.Context
+import android.util.Log
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -12,6 +13,9 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import java.io.IOException
+
+private const val TAG = "UserPrefsStore"
 
 private val Context.userPrefsDataStore by preferencesDataStore(name = "user_prefs")
 
@@ -237,11 +241,34 @@ data class UserPrefs(
     val relayGatewayEnabled: Boolean = false,
 )
 
-class UserPrefsStore internal constructor(private val dataStore: DataStore<Preferences>) {
+class UserPrefsStore internal constructor(
+    private val dataStore: DataStore<Preferences>,
+    /** Where a failed write is reported. Called once per outage (see [writeFailures]). */
+    private val warn: (String) -> Unit = { Log.w(TAG, it) },
+) {
     // The public entry point stays `UserPrefsStore(context)`; the DataStore
     // constructor exists so unit tests can run the store against a
     // file-backed DataStore on the JVM (no Context needed).
     constructor(context: Context) : this(context.userPrefsDataStore)
+
+    /** Whether a failed write has been reported since the last one that worked. */
+    private val writeFailures = OncePerOutage()
+
+    /**
+     * Runs one write to the preferences file; [what] says which. A disk that cannot take it (full: ENOSPC, or
+     * otherwise unwritable) throws an IOException out of DataStore, from a coroutine nobody awaits, and that took
+     * the whole app down. Here the setting is not saved and the app keeps running; the failure is reported once
+     * for as long as the writes keep failing ([OncePerOutage]). Anything that is not an IOException (a bug in a
+     * caller's block, a cancelled coroutine) still reaches the caller. Returns whether it was saved.
+     */
+    private suspend fun guarded(what: String, write: suspend () -> Unit): Boolean = try {
+        write()
+        writeFailures.succeeded()
+        true
+    } catch (e: IOException) {
+        if (writeFailures.shouldReport()) warn("preferences not saved ($what): ${e.javaClass.simpleName}: ${e.message}")
+        false
+    }
 
     private val KEY_CALLSIGN = stringPreferencesKey("callsign")
     private val KEY_TEAM = stringPreferencesKey("team")
@@ -309,6 +336,13 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
     val prefs: Flow<UserPrefs> = dataStore.data.map { p -> readFrom(p) }
 
     suspend fun update(block: (UserPrefs) -> UserPrefs) {
+        tryUpdate(block)
+    }
+
+    /** [update], saying whether the preferences were written. */
+    suspend fun tryUpdate(block: (UserPrefs) -> UserPrefs): Boolean = guarded("update") { writeUpdate(block) }
+
+    private suspend fun writeUpdate(block: (UserPrefs) -> UserPrefs) {
         dataStore.edit { p ->
             val next = block(readFrom(p))
             p[KEY_CALLSIGN] = next.callsign
@@ -428,11 +462,12 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
      */
     suspend fun cycleScreenRotation(): ScreenRotation {
         var now = ScreenRotation.DEFAULT
-        update { cur ->
+        val saved = tryUpdate { cur ->
             now = cur.screenRotation.next()
             cur.copy(screenRotation = now)
         }
-        return now
+        // A disk that would not take the new mode leaves the old one in force, and the answer says so.
+        return if (saved) now else prefs.first().screenRotation
     }
 
     /** Persist the mesh PPLI broadcast interval (coerced to 30..60 seconds). */
@@ -497,17 +532,28 @@ class UserPrefsStore internal constructor(private val dataStore: DataStore<Prefe
         // return it, while only the last writer's uid stayed on disk. edit{}
         // calls are serialized, so the second caller finds the first one's uid.
         var uid = ""
-        dataStore.edit { p ->
-            val existing = p[KEY_SELF_UID].orEmpty()
-            if (existing.isNotBlank()) {
-                uid = existing
-            } else {
-                uid = "ANDROID-${java.util.UUID.randomUUID()}"
-                p[KEY_SELF_UID] = uid
+        val saved = guarded("self uid") {
+            dataStore.edit { p ->
+                val existing = p[KEY_SELF_UID].orEmpty()
+                if (existing.isNotBlank()) {
+                    uid = existing
+                } else {
+                    // The one handed out while the disk would not take it, if there was one: the identity does
+                    // not change when the disk comes back.
+                    uid = unsavedSelfUid.get() ?: "ANDROID-${java.util.UUID.randomUUID()}"
+                    p[KEY_SELF_UID] = uid
+                }
             }
         }
-        return uid
+        if (saved) return uid
+        // The disk would not take it (full). This run keeps one identity all the same, so two messages do not go
+        // out under two different uids (#205); it is the one saved when the disk can take it.
+        unsavedSelfUid.compareAndSet(null, "ANDROID-${java.util.UUID.randomUUID()}")
+        return unsavedSelfUid.get()!!
     }
+
+    /** The uid handed out while it could not be saved: one for the whole run. */
+    private val unsavedSelfUid = java.util.concurrent.atomic.AtomicReference<String?>(null)
 
     private fun readFrom(p: androidx.datastore.preferences.core.Preferences): UserPrefs = UserPrefs(
         callsign = p[KEY_CALLSIGN] ?: "OMNI-1",
