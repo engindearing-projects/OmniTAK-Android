@@ -68,6 +68,18 @@ object CesiumCameraMath {
     }
 
     /**
+     * The camera height "Center on me" goes to on the globe, or null to keep the height it has:
+     * the 2D map's rule ([RetainedMapRules.zoomForOperator]) in camera heights. From far out (the
+     * camera reports a zoom below [RetainedMapRules.OPERATOR_FAR_OUT_ZOOM]) it is the height that
+     * frames the operator's latitude at street zoom ([RetainedMapRules.OPERATOR_ZOOM], about
+     * 3.2 km at Spokane); at that zoom or closer the operator chose the height and keeps it.
+     * [currentZoom] is the zoom of the last camera event ([zoomForHeight]'s answer for the camera);
+     * NaN, a camera that has not reported yet, keeps the height.
+     */
+    fun heightForOperator(currentZoom: Double, operatorLatDeg: Double): Double? =
+        RetainedMapRules.zoomForOperator(currentZoom)?.let { heightForZoom(it, operatorLatDeg) }
+
+    /**
      * Web-mercator zoom for a Cesium camera at [heightMeters] above
      * latitude [latDeg] — the exact Kotlin mirror of the JS
      * `_zoomFromHeight`, kept here so the inverse pair can be unit

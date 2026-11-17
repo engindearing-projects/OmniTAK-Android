@@ -10,6 +10,7 @@ import android.webkit.WebViewClient
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -103,6 +104,8 @@ fun CesiumMapView(
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val ready = remember { mutableStateOf(false) }
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
+    // The zoom of the last camera event: how far out the camera is, for "Center on me" below.
+    val cameraZoom = remember { mutableDoubleStateOf(Double.NaN) }
 
     val contactsState = rememberUpdatedState(contacts)
     val drawingsState = rememberUpdatedState(drawings)
@@ -234,9 +237,11 @@ fun CesiumMapView(
                                         onLongPressState.value(LatLng(lat, lon), Offset(sx, sy))
                                     }
                                     "camerachanged" -> {
+                                        val zoom = o.optDouble("zoom", 11.0)
+                                        cameraZoom.doubleValue = zoom
                                         onCameraState.value(
                                             LatLng(lat, lon),
-                                            o.optDouble("zoom", 11.0),
+                                            zoom,
                                             o.optDouble("heading", 0.0),
                                         )
                                         // The ground scale along the scale bar's row, measured by the page.
@@ -287,9 +292,11 @@ fun CesiumMapView(
             val lat = selfLatState.value
             val lon = selfLonState.value
             if (lat != null && lon != null && !lat.isNaN() && !lon.isNaN()) {
-                webViewRef.value?.evaluateJavascript(
-                    "window.OmniBridge.centerOnSelf({lat:$lat,lon:$lon});", null,
-                )
+                // From far out the camera also comes in to street level, the same rule as the 2D map;
+                // from zoom 12 or closer it keeps its height.
+                val height = CesiumCameraMath.heightForOperator(cameraZoom.doubleValue, lat)
+                val args = if (height != null) "{lat:$lat,lon:$lon,height:$height}" else "{lat:$lat,lon:$lon}"
+                webViewRef.value?.evaluateJavascript("window.OmniBridge.centerOnSelf($args);", null)
             }
         }
         onDispose { }

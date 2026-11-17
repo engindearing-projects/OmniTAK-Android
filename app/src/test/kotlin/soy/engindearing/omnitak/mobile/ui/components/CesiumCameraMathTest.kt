@@ -2,6 +2,8 @@ package soy.engindearing.omnitak.mobile.ui.components
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -91,5 +93,60 @@ class CesiumCameraMathTest {
         assertFalse(CesiumCameraSeed(47.65, Double.NEGATIVE_INFINITY, 12.0, 0.0).isValid)
         assertFalse(CesiumCameraSeed(47.65, -117.42, Double.NaN, 0.0).isValid)
         assertFalse(CesiumCameraSeed(47.65, -117.42, 12.0, Double.POSITIVE_INFINITY).isValid)
+    }
+
+    // MARK: "Center on me" from far out: the globe's half of RetainedMapRules.zoomForOperator
+
+    private val spokaneLat = 47.6588
+
+    @Test fun center_on_me_from_the_whole_earth_goes_in_to_street_level() {
+        val wholeEarth = CesiumCameraMath.zoomForHeight(CesiumCameraMath.WORLD_VIEW_HEIGHT_M, 0.0)
+        val height = CesiumCameraMath.heightForOperator(wholeEarth, spokaneLat)!!
+        // The camera the page reports as zoom 15, the 2D map's street zoom: about 3.2 km up at Spokane.
+        assertEquals(RetainedMapRules.OPERATOR_ZOOM, CesiumCameraMath.zoomForHeight(height, spokaneLat), 1e-6)
+        assertEquals(3219.0, height, 5.0)
+    }
+
+    @Test fun center_on_me_from_just_short_of_zoom_12_goes_in() {
+        assertNotNull(CesiumCameraMath.heightForOperator(11.99, spokaneLat))
+    }
+
+    @Test fun center_on_me_at_zoom_12_or_closer_keeps_the_height() {
+        for (zoom in listOf(12.0, 13.5, 15.0, 17.0, 22.0)) {
+            assertNull("zoom $zoom", CesiumCameraMath.heightForOperator(zoom, spokaneLat))
+        }
+    }
+
+    @Test fun center_on_me_never_takes_the_camera_further_out() {
+        var zoom = 0.0
+        while (zoom <= 22.0) {
+            val height = CesiumCameraMath.heightForOperator(zoom, spokaneLat)
+            if (height != null) {
+                assertTrue("zoom $zoom", CesiumCameraMath.zoomForHeight(height, spokaneLat) > zoom)
+            }
+            zoom += 0.25
+        }
+    }
+
+    @Test fun a_camera_that_has_not_reported_yet_keeps_its_height() {
+        assertNull(CesiumCameraMath.heightForOperator(Double.NaN, spokaneLat))
+    }
+
+    @Test fun the_globe_and_the_2d_map_go_in_from_the_same_zooms() {
+        var zoom = 0.0
+        while (zoom <= 22.0) {
+            assertEquals(
+                "zoom $zoom",
+                RetainedMapRules.zoomForOperator(zoom) != null,
+                CesiumCameraMath.heightForOperator(zoom, spokaneLat) != null,
+            )
+            zoom += 0.25
+        }
+    }
+
+    @Test fun the_street_height_follows_the_operators_latitude() {
+        val atEquator = CesiumCameraMath.heightForOperator(3.0, 0.0)!!
+        val at60 = CesiumCameraMath.heightForOperator(3.0, 60.0)!!
+        assertEquals(atEquator * 0.5, at60, 0.5)
     }
 }
