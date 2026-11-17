@@ -136,18 +136,25 @@ class CesiumNamePlacementTest {
 
     // ---- the page moves the names of the zones before each frame
 
-    /** A fake globe: window positions are the world positions given, so a zone's place on the screen is what the test says. */
+    /**
+     * A fake globe: a world position is {x, y, h} and its window position is the world position given (so a zone's place on
+     * the screen is what the test says), with the height lifting it up the screen by `parallax` px per metre, the way a camera
+     * high above ground that is not at sea level sees it. The terrain is `groundHeight` (nothing until its tile has loaded).
+     */
     private fun globe(body: String) = PageScript.json(
         """
         $names
-        let projections = 0;
+        let projections = 0, parallax = 0, groundHeight = () => undefined, clock = 0;
+        globalThis.performance = { now: () => clock };
         globalThis.Cesium = {
           Cartesian2: function (x, y) { this.x = x; this.y = y; },
-          SceneTransforms: { worldToWindowCoordinates: (scene, p) => { projections++; return p.behind ? undefined : { x: p.x, y: p.y }; } },
+          Cartographic: { fromCartesian: p => ({ longitude: p.x, latitude: p.y }) },
+          Cartesian3: { fromRadians: (lon, lat, h) => ({ x: lon, y: lat, h }) },
+          SceneTransforms: { worldToWindowCoordinates: (scene, p) => { projections++; return p.behind ? undefined : { x: p.x, y: p.y - (p.h || 0) * parallax }; } },
         };
         const _state = { drawings: new Map(), nameTop: 300, nameKey: '', namesDirty: true };
         const cam = { positionWC: { x: 1, y: 2, z: 3 }, directionWC: { x: 0, y: 0, z: -1 }, upWC: { x: 0, y: 1, z: 0 } };
-        const v = { scene: { canvas: { clientWidth: 1080, clientHeight: 2400 } }, camera: cam, clock: { currentTime: 0 } };
+        const v = { scene: { canvas: { clientWidth: 1080, clientHeight: 2400 }, globe: { getHeight: c => groundHeight(c) } }, camera: cam, clock: { currentTime: 0 } };
         function zone(name, at, ring) {
           return { label: { show: true, pixelOffset: undefined }, position: { getValue: () => at }, zoneName: name, zoneRing: ring };
         }
@@ -171,6 +178,45 @@ class CesiumNamePlacementTest {
         assertEquals(-2.0 + 1122.0, r.getJSONObject("offset").getDouble("y"), 0.0)
     }
 
+    @Test fun the_name_is_placed_from_where_the_ground_is_not_from_the_ellipsoid_under_it() {
+        // Spokane is 600 m up. From 6 km up that moves a point near the top of the screen by 70 px, and the name (which is clamped to
+        // the ground) was drawn that far above where it was put: under the status bar, not under the strip.
+        val r = globe(
+            """
+            parallax = 0.1;                       // 600 m up is 60 px higher on the screen
+            groundHeight = () => 600;
+            const e = zone('Big', { x: 540, y: -191 }, [{ x: 100, y: -191 }, { x: 980, y: 700 }, { x: 540, y: 1500 }]);
+            _state.drawings.set('a', e);
+            _placeNames(v);
+            console.log(JSON.stringify({ offset: e.label.pixelOffset.y }));
+            """.trimIndent(),
+        )
+        // On the ground the point is at -191 - 60 = -251. The name goes where its bottom is 2 px over the first y that clears the 300 px
+        // of status bar and strip with 20 px of name: 322. So it is moved 322 + 251 = 573 px down, less the 2 px gap it always has.
+        assertEquals(-2.0 + 573.0, r.getDouble("offset"), 1e-9)
+    }
+
+    @Test fun the_ground_heights_are_taken_again_once_a_second_so_a_tile_that_loads_later_is_used() {
+        val r = globe(
+            """
+            parallax = 0.1;
+            const e = zone('Big', { x: 540, y: -191 }, [{ x: 100, y: -191 }, { x: 980, y: 700 }]);
+            _state.drawings.set('a', e);
+            _placeNames(v);                       // no tile yet: sea level
+            const noTile = e.label.pixelOffset.y;
+            groundHeight = () => 600;
+            _state.namesDirty = true; clock = 500; _placeNames(v);
+            const soon = e.label.pixelOffset.y;   // less than a second: the heights are not asked again
+            _state.namesDirty = true; clock = 1000; _placeNames(v);
+            const later = e.label.pixelOffset.y;
+            console.log(JSON.stringify({ noTile, soon, later }));
+            """.trimIndent(),
+        )
+        assertEquals("sea level: the point is at -191, the name goes to 322: 513 down", -2.0 + 513.0, r.getDouble("noTile"), 1e-9)
+        assertEquals("not asked again yet", r.getDouble("noTile"), r.getDouble("soon"), 0.0)
+        assertEquals("the ground at 600 m: the point is at -251, so 573 down", -2.0 + 573.0, r.getDouble("later"), 1e-9)
+    }
+
     @Test fun a_zone_with_none_of_it_on_the_screen_has_no_name_and_gets_it_back_when_it_comes_into_view() {
         val r = globe(
             """
@@ -178,11 +224,12 @@ class CesiumNamePlacementTest {
             _state.drawings.set('a', e);
             _placeNames(v);
             const hidden = e.nameShown, hiddenLabel = e.label.show;
-            e.position = { getValue: () => ({ x: 540, y: 900 }) };
-            e.zoneRing = [{ x: 100, y: 900 }, { x: 980, y: 1500 }];
+            // The zone is drawn again where it now is (the page replaces a shape's entity when it is sent again).
+            const again = zone('Far', { x: 540, y: 900 }, [{ x: 100, y: 900 }, { x: 980, y: 1500 }]);
+            _state.drawings.set('a', again);
             _state.namesDirty = true;
             _placeNames(v);
-            console.log(JSON.stringify({ hidden, hiddenLabel, shown: e.nameShown, offset: e.label.pixelOffset.y, labelShow: e.label.show }));
+            console.log(JSON.stringify({ hidden, hiddenLabel, shown: again.nameShown, offset: again.label.pixelOffset.y, labelShow: again.label.show }));
             """.trimIndent(),
         )
         assertFalse(r.getBoolean("hidden"))

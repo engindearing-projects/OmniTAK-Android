@@ -220,8 +220,14 @@
   function _thinRing(coords){const n=coords.length,most=16,out=[];
     for(let i=0;i<Math.min(n,most);i++){const c=coords[n<=most?i:Math.floor(i*(n-1)/(most-1))];out.push(Cesium.Cartesian3.fromDegrees(c[0],c[1],0))}
     return out}
+  // A name is clamped to the ground, so it is seen where the ground is, not where the ellipsoid under it is: from 6 km up, 600 m of
+  // ground (Spokane) moves a point near the top of the screen by 70 px. The zone's points are put at the height of the terrain
+  // (globe.getHeight: nothing until its tile has loaded, then sea level is assumed) before they are projected.
+  function _groundPoints(scene,pts){return pts.map(function(q){const c=Cesium.Cartographic.fromCartesian(q),h=scene.globe.getHeight(c);
+    return(typeof h==='number'&&isFinite(h)&&h!==0)?Cesium.Cartesian3.fromRadians(c.longitude,c.latitude,h):q})}
   // Before each frame the names of the zones are put where they are seen (_namePlace). It does nothing while the camera, the
-  // window and the shapes are still: the positions only change with those.
+  // window and the shapes are still: the positions only change with those, and with the terrain loading (the heights are taken
+  // again once a second, and the page asks for this to be worked out again then).
   function _placeNames(v){
     if(!_state.drawings.size)return;
     const scene=v.scene,c=scene.canvas,cam=v.camera,w=c.clientWidth,h=c.clientHeight,top=_state.nameTop,p=cam.positionWC,d=cam.directionWC,u=cam.upWC;
@@ -231,8 +237,10 @@
     const t=v.clock.currentTime;
     _state.drawings.forEach(function(e){if(!e.label||!e.zoneRing)return;
       const pos=e.position&&e.position.getValue(t);if(!pos)return;
-      const at=Cesium.SceneTransforms.worldToWindowCoordinates(scene,pos),pts=[];
-      for(const q of e.zoneRing){const s=Cesium.SceneTransforms.worldToWindowCoordinates(scene,q);if(s)pts.push(s)}
+      const now=performance.now();
+      if(!e.onGround||now-e.groundAt>=1000){e.groundAt=now;e.onGround=_groundPoints(scene,[pos].concat(e.zoneRing))}
+      const at=Cesium.SceneTransforms.worldToWindowCoordinates(scene,e.onGround[0]),pts=[];
+      for(let i=1;i<e.onGround.length;i++){const s=Cesium.SceneTransforms.worldToWindowCoordinates(scene,e.onGround[i]);if(s)pts.push(s)}
       if(at)pts.push(at);
       const m=_namePlace(at,_boxOf(pts),w,h,top,_NAME_H,_NAME_GAP,_NAME_CHAR_PX*(e.zoneName||'').length/2);
       const ox=Math.round(m.dx),oy=-_NAME_GAP+Math.round(m.dy);
@@ -404,6 +412,7 @@
     v.scene.skyAtmosphere.show=true;v.scene.globe.enableLighting=true;_state.viewer=v;_fitViewport();_installInputHandlers(v);
     v.scene.preRender.addEventListener(function(){_cullFarSide(v);_placeNames(v)});
     setInterval(function(){if(!document.hidden)_scaleRefresh(v)},1000);
+    setInterval(function(){_state.namesDirty=true},1000);
     try{const t=await Cesium.createGooglePhotorealistic3DTileset();v.scene.primitives.add(t);t.allTilesLoaded.addEventListener(function(){_scaleSoon(v)});}catch(e){console.warn('Photoreal unavailable:',e);}
     v.camera.flyTo({destination:Cesium.Cartesian3.fromDegrees(0.0,0.0,20000000),orientation:{heading:0,pitch:Cesium.Math.toRadians(-90),roll:0},duration:1.5,complete:_hideLoading});
     _signalReady();
