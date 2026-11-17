@@ -33,7 +33,10 @@ import java.util.concurrent.ConcurrentHashMap
 class ServerManager(
     private val store: ServerStoreApi,
     private val contactStore: ContactStore? = null,
-    private val chatStore: ChatStore? = null,
+    // #260 - a lookup, not the store itself: building the store reads the saved chat
+    // log from disk. OmniTAKApp builds it on a background thread at launch, so the
+    // first chat message waits for the read, not the start of the app.
+    private val chatStoreProvider: (() -> ChatStore)? = null,
     private val certVault: CertVault? = null,
     private val userPrefsStore: UserPrefsStore? = null,
     private val locationProvider: LocationProvider? = null,
@@ -184,7 +187,7 @@ class ServerManager(
                 // scoping work (multi-server parity with iOS).
                 val chat = ChatXml.parse(xml, serverId = server.id)
                 if (chat != null) {
-                    chatStore?.ingest(chat)
+                    chatStoreProvider?.invoke()?.ingest(chat)
                 } else {
                     CoTParser.parse(xml)?.let { parsed ->
                         // #180 — tag the transport at the ingest point so the
