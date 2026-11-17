@@ -19,17 +19,29 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalBackground
 
 /**
- * The map fills the whole window, under the status bar and the navigation bar. Everything that is
- * drawn on it for the operator to read or touch is laid out inside this: clear of the system bars
- * (gesture or three-button navigation, on whichever edge they are) and of a display cutout.
+ * The window's insets, in the two ways the map uses them.
  *
- * One definition, so the Compose chrome ([mapSafeAreaPadding]) and the MapLibre ornaments
- * ([mapSafeAreaPx]) cannot disagree about where the safe area is. The keyboard is not part
- * of it: nothing on the map moves when it opens.
+ * [safeArea]: the map fills the whole window, under the status bar and the navigation bar.
+ * Everything that is drawn on it for the operator to read or touch is laid out inside this: clear
+ * of the system bars (gesture or three-button navigation, on whichever edge they are) and of a
+ * display cutout. One definition, so the Compose chrome ([mapSafeAreaPadding]) and the MapLibre
+ * ornaments ([mapSafeAreaPx]) cannot disagree about where the safe area is. The keyboard is not
+ * part of it: nothing on the map moves when it opens.
+ *
+ * [systemBars]: where a system icon can be. The fade behind the icons ([SystemBarScrims]) covers
+ * this and nothing else: a cutout is a hole for a camera with no icons in it, and in landscape the
+ * fade put a dark band down that edge of the map.
  */
+internal class MapInsets(systemBars: WindowInsets, displayCutout: WindowInsets) {
+    val safeArea: WindowInsets = systemBars.union(displayCutout)
+    val systemBars: WindowInsets = systemBars
+}
+
 @Composable
-private fun mapSafeAreaInsets(): WindowInsets =
-    WindowInsets.systemBars.union(WindowInsets.displayCutout)
+private fun mapInsets(): MapInsets = MapInsets(WindowInsets.systemBars, WindowInsets.displayCutout)
+
+@Composable
+private fun mapSafeAreaInsets(): WindowInsets = mapInsets().safeArea
 
 /**
  * Lay this out inside the safe area of the window. Put it before the other padding of a map
@@ -41,8 +53,14 @@ internal fun Modifier.mapSafeAreaPadding(): Modifier = windowInsetsPadding(mapSa
 
 /** The safe area in px, read in composition so it follows rotation and a change of navigation mode. */
 @Composable
-internal fun mapSafeAreaPx(): MapOrnamentLayout.EdgePx {
-    val insets = mapSafeAreaInsets()
+internal fun mapSafeAreaPx(): MapOrnamentLayout.EdgePx = edgesPx(mapSafeAreaInsets())
+
+/** The system bars alone in px: what [SystemBarScrims] covers. */
+@Composable
+private fun systemBarsPx(): MapOrnamentLayout.EdgePx = edgesPx(mapInsets().systemBars)
+
+@Composable
+private fun edgesPx(insets: WindowInsets): MapOrnamentLayout.EdgePx {
     val density = LocalDensity.current
     val direction = LocalLayoutDirection.current
     return MapOrnamentLayout.EdgePx(
@@ -57,11 +75,12 @@ internal fun mapSafeAreaPx(): MapOrnamentLayout.EdgePx {
  * The system bars' icons are light and the map under them can be bright (sand, snow, a
  * satellite basemap): without help the clock, the signal and the gesture handle wash out. A
  * navy fade, only as tall (or wide) as the bar itself, keeps them readable. It is drawn on the
- * bar's own pixels, it takes no touches, and the map inside the safe area is not tinted.
+ * bar's own pixels, it takes no touches, and the map inside the safe area is not tinted. It
+ * covers the system bars only, not a display cutout ([MapInsets]).
  */
 @Composable
 internal fun SystemBarScrims(modifier: Modifier = Modifier) {
-    val safe = mapSafeAreaPx()
+    val safe = systemBarsPx()
     val navy = TacticalBackground
     // Strongest at the screen edge, where the icons are; gone at the safe area's edge.
     val stops = arrayOf(0f to navy.copy(alpha = 0.78f), 0.55f to navy.copy(alpha = 0.55f), 1f to Color.Transparent)
