@@ -28,6 +28,7 @@ object CoTParser {
         var type: String? = null
         var timeIso: String? = null
         var staleIso: String? = null
+        var how: String? = null
         var lat: Double? = null
         var lon: Double? = null
         var hae: Double = 0.0
@@ -50,6 +51,7 @@ object CoTParser {
                         type = parser.getAttributeValue(null, "type")
                         timeIso = parser.getAttributeValue(null, "time")
                         staleIso = parser.getAttributeValue(null, "stale")
+                        how = parser.getAttributeValue(null, "how")
                     }
                     "point" -> {
                         lat = parser.getAttributeValue(null, "lat")?.toDoubleOrNull()
@@ -110,6 +112,7 @@ object CoTParser {
             iconsetPath = iconsetPath,
             colorArgb = colorArgb,
             courseHeading = courseHeading,
+            how = how,
         )
     }.getOrNull()
 }

@@ -24,6 +24,7 @@ import soy.engindearing.omnitak.mobile.data.SelfFixPersistence
 import soy.engindearing.omnitak.mobile.data.TAKServerStore
 import soy.engindearing.omnitak.mobile.data.UserPrefsStore
 import soy.engindearing.omnitak.mobile.domain.ChatStore
+import soy.engindearing.omnitak.mobile.domain.ContactAging
 import soy.engindearing.omnitak.mobile.domain.ContactStore
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
 import soy.engindearing.omnitak.mobile.domain.DataPackageBootstrap
@@ -39,6 +40,7 @@ import soy.engindearing.omnitak.mobile.domain.MeshCoreManager
 import soy.engindearing.omnitak.mobile.data.MeshFramework
 import soy.engindearing.omnitak.mobile.data.MeshtasticCoTConverter
 import soy.engindearing.omnitak.mobile.data.MeshCoreCoTConverter
+import soy.engindearing.omnitak.mobile.data.MeshTcpRestore
 import soy.engindearing.omnitak.mobile.domain.ServerManager
 
 class OmniTAKApp : Application() {
@@ -92,6 +94,10 @@ class OmniTAKApp : Application() {
                 localMarkerStore.persist(localMarkers)
             }
         }
+
+        // #215: hide a teammate that has stopped reporting, then remove it. One
+        // collector decides; the map and the Teams list both read its State.
+        appScope.launch { contactAging.run() }
 
         // Issue #5 — start a foreground service while we're holding a
         // connection so Doze doesn't kill the read loop within ~10s of
@@ -269,6 +275,20 @@ class OmniTAKApp : Application() {
                     if (enabled) gybManager.start() else gybManager.stop()
                 }
         }
+
+        // #261 - bring the Meshtastic TCP gateway back when the operator left it
+        // up. onCreate runs once per process, so this is one attempt per start:
+        // a gateway that is down now is not retried, the same as a link that
+        // drops while the app runs. The operator presses Connect.
+        appScope.launch {
+            val target = MeshTcpRestore.targetAtStart(userPrefsStore.prefs.first())
+                ?: return@launch
+            // Nothing starts the node-to-map bridge until the Mesh screen opens.
+            // Without this a restored link would fill the node table and put no
+            // marker on the map. start() does nothing if it is already running.
+            meshtasticCoTBridge.start()
+            meshtastic.connectTcp(target.host, target.port)
+        }
     }
 
     // Application-scoped singletons. Screens reach these via
@@ -346,6 +366,18 @@ class OmniTAKApp : Application() {
     }
 
     val contactStore: ContactStore by lazy { ContactStore() }
+
+    /** #215: the max-age rule on [contactStore]: which contacts the map and the Teams list
+     *  treat as not heard from, and the removal of those at twice the max age. Started in
+     *  [onCreate]. The setting comes straight from the preferences flow (not [cachedPrefs]),
+     *  so nothing is hidden or removed before the saved value has been read. */
+    val contactAging: ContactAging by lazy {
+        ContactAging(
+            store = contactStore,
+            maxAgeMinutes = userPrefsStore.prefs.map { it.contactMaxAgeMinutes }.distinctUntilChanged(),
+            selfUid = { cachedPrefs.value.selfUid },
+        )
+    }
 
     /** #119 — Persists locally-dropped point markers across process death. */
     val localMarkerStore: LocalMarkerStore by lazy { LocalMarkerStore(this) }

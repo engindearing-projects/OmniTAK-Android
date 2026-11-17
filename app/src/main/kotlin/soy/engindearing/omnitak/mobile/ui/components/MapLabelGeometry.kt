@@ -1,6 +1,5 @@
 package soy.engindearing.omnitak.mobile.ui.components
 
-import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
@@ -9,18 +8,19 @@ import kotlin.math.roundToInt
  * Every dimension follows one factor (the phone's font size x the Label size
  * setting), so the proportions between the text, its outline, the strip it sits
  * in and the gap to the icon are the same at every size: a larger name stays
- * inside its strip and does not reach the icon. At a factor of 1 these are the
- * sizes the app drew before the setting existed, with no padding.
+ * inside its strip and does not reach the icon. At a factor of 1 the text, outline,
+ * strip and gap are the sizes the app drew before the setting existed.
  *
  * The icon itself is not part of this and keeps its size.
  *
- * Position: MapLibre (11.8.0, measured on a device) anchors a marker bitmap at
- * its CENTRE, not at its bottom edge as the old comments said. A strip that grew
- * would therefore pull the icon away from the point it marks (and shrinking it
- * would push it the other way). [topPad] and [bottomPad] are transparent rows on
- * the side away from the strip that keep the bitmap's centre at the same place
- * relative to the icon as at a factor of 1, so the icon stays where it always
- * was at every size.
+ * #273 - where the icon sits. MapLibre (11.8.0, measured on a device) anchors a
+ * marker bitmap at its CENTRE, not at its bottom edge as the old comments said. The
+ * point that marks the coordinate (a contact's dot centre, a pushpin's tip) must
+ * therefore be the bitmap's centre, or it is drawn off its coordinate. [padsToCentre]
+ * works out the transparent rows to add above or below to make that so; [topPad] and
+ * [bottomPad] are its answer for each shape, at each size. A bitmap with a name
+ * strip on one side of the icon needs a transparent strip of the same height on the
+ * other side. That strip is part of the marker, so it takes taps like the rest of it.
  *
  * No Android types, so the rules can be unit tested on the JVM.
  */
@@ -31,7 +31,7 @@ internal data class MapLabelGeometry(
     val haloStroke: Float,
     /** Space left and right of the text. */
     val padding: Float,
-    /** Height of the strip the text sits in; the icon starts where it ends. */
+    /** Height of the strip the text sits in; the icon starts where it ends. Exact, scaled. */
     val band: Float,
     /** Text baseline, measured down from the top of the strip. */
     val baseline: Float,
@@ -40,40 +40,99 @@ internal data class MapLabelGeometry(
     /** Transparent rows below everything else in the bitmap. */
     val bottomPad: Int,
 ) {
+    /** The strip height actually drawn: a whole number of pixels, so the centre of the bitmap lands on a pixel line. */
+    val bandPx: Int get() = band.roundToInt()
+
+    /** Transparent rows to add above and below a bitmap. At most one of the two is not zero. */
+    data class Pads(val top: Int, val bottom: Int)
+
+    /** How a contact pin's bitmap is laid out, top to bottom: [nameTop], the name strip, the dot, then any padding. */
+    data class ContactLayout(
+        val height: Int,
+        /** Where the dot's centre is, from the top of the bitmap. It is always [height] / 2. */
+        val dotCentreY: Int,
+        /** Height of the name strip: 0 with no name. */
+        val stripHeight: Int,
+        /** Rows above the name strip. */
+        val nameTop: Int,
+    )
+
+    /**
+     * The layout of a contact pin's bitmap. With no name there is no strip and nothing to
+     * pad: the bitmap is the dot, already centred on the coordinate.
+     */
+    fun contactLayout(hasName: Boolean): ContactLayout {
+        val strip = if (hasName) bandPx else 0
+        val pads = if (hasName) Pads(topPad, bottomPad) else Pads(0, 0)
+        val height = pads.top + strip + CONTACT_DOT_DIAMETER + pads.bottom
+        return ContactLayout(
+            height = height,
+            dotCentreY = pads.top + strip + CONTACT_DOT_DIAMETER / 2,
+            stripHeight = strip,
+            nameTop = pads.top,
+        )
+    }
+
     companion object {
         private const val CONTACT_BAND = 40f
         private const val KML_BAND = 46f
 
-        /** A contact pin: the name sits in a strip above the dot. */
+        /** A contact's dot: the circle's radius, and the ring drawn around it, in px. They do not scale. */
+        const val CONTACT_DOT_RADIUS = 16
+        const val CONTACT_DOT_RING = 3
+
+        /** The dot with its ring: the part of a contact pin below the name strip. */
+        const val CONTACT_DOT_DIAMETER = (CONTACT_DOT_RADIUS + CONTACT_DOT_RING) * 2
+
+        /**
+         * The transparent rows to add so that the point [anchorFromTop] rows down a bitmap that is
+         * [contentHeight] rows tall ends up exactly at its vertical centre, which is where MapLibre
+         * puts the coordinate. If the anchor is above the middle the padding goes on top, if it is
+         * below the middle it goes underneath, and nothing is added when it is already central.
+         */
+        fun padsToCentre(contentHeight: Int, anchorFromTop: Int): Pads {
+            val excess = contentHeight - 2 * anchorFromTop
+            return if (excess >= 0) Pads(top = excess, bottom = 0) else Pads(top = 0, bottom = -excess)
+        }
+
+        /** A contact pin: the name sits in a strip above the dot, and the dot's centre is the point on the coordinate. */
         fun forContact(factor: Float): MapLabelGeometry {
             val band = CONTACT_BAND * factor
-            // Strip taller than today: pad below the dot. Shorter: pad above the strip.
-            val grow = (band - CONTACT_BAND).roundToInt()
+            val bandPx = band.roundToInt()
+            val pads = padsToCentre(
+                contentHeight = bandPx + CONTACT_DOT_DIAMETER,
+                anchorFromTop = bandPx + CONTACT_DOT_DIAMETER / 2,
+            )
             return MapLabelGeometry(
                 textSize = 30f * factor,
                 haloStroke = 6f * factor,
                 padding = 12f * factor,
                 band = band,
                 baseline = 30f * factor,
-                topPad = max(0, -grow),
-                bottomPad = max(0, grow),
+                topPad = pads.top,
+                bottomPad = pads.bottom,
             )
         }
 
-        /** A KML pin: the name sits in a strip below the pushpin. */
+        /** A KML pin: the name sits in a strip below the pushpin, and the pushpin's tip is the point on the coordinate. */
         fun forKmlPin(factor: Float): MapLabelGeometry {
             val band = KML_BAND * factor
-            // Strip taller than today: pad above the pushpin. Shorter: pad below the strip.
-            val grow = (band - KML_BAND).roundToInt()
+            val pads = padsToCentre(
+                contentHeight = PUSHPIN_HEIGHT + band.roundToInt(),
+                anchorFromTop = PUSHPIN_TIP_Y,
+            )
             return MapLabelGeometry(
                 textSize = 30f * factor,
                 haloStroke = 6f * factor,
                 padding = 12f * factor,
                 band = band,
                 baseline = 34f * factor,
-                topPad = max(0, grow),
-                bottomPad = max(0, -grow),
+                topPad = pads.top,
+                bottomPad = pads.bottom,
             )
         }
+
+        /** The bare KML pushpin, with no name: only its tip matters. */
+        fun forBareKmlPin(): Pads = padsToCentre(contentHeight = PUSHPIN_HEIGHT, anchorFromTop = PUSHPIN_TIP_Y)
     }
 }
