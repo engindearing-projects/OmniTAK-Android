@@ -46,6 +46,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.LaunchedEffect
@@ -69,9 +70,11 @@ import soy.engindearing.omnitak.mobile.data.Drawing
 import soy.engindearing.omnitak.mobile.data.DrawingKind
 import soy.engindearing.omnitak.mobile.data.GeoMath
 import soy.engindearing.omnitak.mobile.data.LabelSize
+import soy.engindearing.omnitak.mobile.data.geofence.GeoBounds
 import soy.engindearing.omnitak.mobile.data.geofence.GeofenceDrawings
+import soy.engindearing.omnitak.mobile.data.geofence.GeofenceFraming
 import soy.engindearing.omnitak.mobile.data.geofence.LatLon
-import soy.engindearing.omnitak.mobile.domain.GeofenceNotificationPermission
+import soy.engindearing.omnitak.mobile.domain.NotificationPermission
 import soy.engindearing.omnitak.mobile.domain.GeofenceNotifier
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
 import soy.engindearing.omnitak.mobile.domain.ServerHealthProjection
@@ -96,6 +99,7 @@ import soy.engindearing.omnitak.mobile.ui.components.RadialMenu
 import soy.engindearing.omnitak.mobile.ui.components.SelfPositionCard
 import soy.engindearing.omnitak.mobile.ui.components.positionCardMaxWidthDp
 import soy.engindearing.omnitak.mobile.ui.components.TacticalMap
+import soy.engindearing.omnitak.mobile.ui.components.belowGeofenceBanner
 import soy.engindearing.omnitak.mobile.ui.components.liftAboveToolbar
 import soy.engindearing.omnitak.mobile.ui.components.mapSafeAreaPadding
 import soy.engindearing.omnitak.mobile.ui.components.rememberToolbarClearance
@@ -329,6 +333,13 @@ fun MapScreen(
     var teamsPanelOpen by remember { mutableStateOf(false) }
     var panTarget by remember { mutableStateOf<LatLng?>(null) }
     var panTargetTick by remember { mutableStateOf(0) }
+    // A zone to show whole ("Show on map" for a geofence, #155). Each engine works the camera out from its own view.
+    var frameBounds by remember { mutableStateOf<GeoBounds?>(null) }
+    var frameBoundsTick by remember { mutableStateOf(0) }
+    // How tall the geofence alert is while it shows (px, 0 while it does not). The pills and banners it would cover
+    // read it to start under it. Read only while they are laid out (belowGeofenceBanner), so an alert coming and
+    // going does not recompose this screen.
+    val geofenceBannerHeightPx = remember { mutableIntStateOf(0) }
     // "Go to Coordinate" sheet (TWD97 / MGRS / Lat-Lon). Opened from the
     // Tools popup via CoordinateEntryEvents; reference coord = map centre
     // so 5+5 TWD97 grid input recovers the right 100 km cell. The request is
@@ -360,15 +371,7 @@ fun MapScreen(
         androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
     ) { }
     fun askForNotificationsIfNeeded() {
-        val shouldAsk = GeofenceNotificationPermission.shouldAsk(
-            sdkInt = android.os.Build.VERSION.SDK_INT,
-            granted = GeofenceNotificationPermission.isGranted(app),
-            alreadyAsked = GeofenceNotificationPermission.wasAsked(app),
-        )
-        if (shouldAsk) {
-            GeofenceNotificationPermission.markAsked(app)
-            notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-        }
+        if (NotificationPermission.takeTurnToAsk(app)) notificationPermission.launch(NotificationPermission.PERMISSION)
     }
     // ADS-B is now a plugin (:plugins:example-adsb). The plugin owns its
     // AdsbService, its map overlay (which paints via AircraftLayer on the live
@@ -778,6 +781,8 @@ fun MapScreen(
             // Center) fly the globe instead of being silently eaten.
             panTarget = panTarget,
             panTargetTick = panTargetTick,
+            frameBounds = frameBounds,
+            frameBoundsTick = frameBoundsTick,
             // Issue #95 — north-up lock + compass snap for the globe.
             northUpLocked = userPrefs.northUpLocked,
             snapNorthTrigger = snapNorthTick,
@@ -946,6 +951,8 @@ fun MapScreen(
             } else null,
             panTarget = panTarget,
             panTargetTick = panTargetTick,
+            frameBounds = frameBounds,
+            frameBoundsTick = frameBoundsTick,
             followMeActive = followMeActive,
             useMilStdSelfSymbol = userPrefs.useMilStdSelfSymbol,
             selfTeamColor = userPrefs.team,
@@ -978,7 +985,7 @@ fun MapScreen(
             mapToolActive = measurementActive || rangeRingsActive || drawingKind != null || lassoMode,
             toolbarClearanceDp = toolbarClearance,
         )
-        // The names of the geofences (#155), written under the middle of each zone. Over the map, under
+        // The names of the geofences (#155), written on the north edge of each zone. Over the map, under
         // every control, and they take no touches.
         GeofenceLabelOverlay(
             map = mapboxMap,
@@ -1119,12 +1126,18 @@ fun MapScreen(
             uas.acknowledgeFollowStop()
         }
         var altSheetOpen by remember { mutableStateOf(false) }
-        if (droneState.isConnected()) {
+        // The top right, under the status strip: the lasso's "N selected" pill over the drone's pills. One column, so
+        // the layout stacks them whatever size the font makes them (they used to be drawn on each other), and it
+        // starts under a geofence alert while one shows (#155).
+        val lassoPillCount = lassoSelection.totalCount
+        val dronePillsShowing = droneState.isConnected()
+        if (dronePillsShowing || lassoPillCount > 0) {
             androidx.compose.foundation.layout.Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .mapSafeAreaPadding()
-                    .padding(top = 90.dp, end = 12.dp),
+                    .padding(top = MapOrnamentLayout.TOP_RIGHT_PILLS_DP.dp, end = 12.dp)
+                    .belowGeofenceBanner(geofenceBannerHeightPx, MapOrnamentLayout.TOP_RIGHT_PILLS_DP, isLandscape),
                 contentAlignment = Alignment.TopEnd,
             ) {
                 val operatorFix by app.locationProvider.fix.collectAsState()
@@ -1133,6 +1146,16 @@ fun MapScreen(
                     horizontalAlignment = Alignment.End,
                     verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp),
                 ) {
+                    // Issue #16 — selection pill. Surfaces "N selected" whenever
+                    // there's an active lasso selection. Tap → action sheet.
+                    if (lassoPillCount > 0) {
+                        soy.engindearing.omnitak.mobile.ui.components.LassoSelectionPill(
+                            count = lassoPillCount,
+                            onShowActions = { lassoActionsOpen = true },
+                        )
+                    }
+                    // The rest of the column is the drone's.
+                    if (!dronePillsShowing) return@Column
                     // Drones picker — visible whenever ≥1 drone is in
                     // the registry, regardless of which is active.
                     var dronesSheetOpen by remember { mutableStateOf(false) }
@@ -1239,7 +1262,10 @@ fun MapScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .mapSafeAreaPadding()
-                    .padding(top = 64.dp),
+                    .padding(top = MapOrnamentLayout.UAS_ALERT_TOP_DP.dp)
+                    .belowGeofenceBanner(
+                        geofenceBannerHeightPx, MapOrnamentLayout.UAS_ALERT_TOP_DP, isLandscape, reachesTheLeftHalf = true,
+                    ),
                 contentAlignment = Alignment.TopCenter,
             ) {
                 soy.engindearing.omnitak.mobile.ui.components.UasAlertBanner(
@@ -1253,7 +1279,11 @@ fun MapScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .mapSafeAreaPadding()
-                    .padding(top = 90.dp),
+                    .padding(top = MapOrnamentLayout.MISSION_BANNER_TOP_DP.dp)
+                    // The same shift as the alert above it (both rest in the band that starts at the alert's top).
+                    .belowGeofenceBanner(
+                        geofenceBannerHeightPx, MapOrnamentLayout.UAS_ALERT_TOP_DP, isLandscape, reachesTheLeftHalf = true,
+                    ),
                 contentAlignment = Alignment.TopCenter,
             ) {
                 soy.engindearing.omnitak.mobile.ui.components.MissionBanner(
@@ -1396,22 +1426,7 @@ fun MapScreen(
             onDone = { movingDrawingId = null },
         )
 
-        // Issue #16 — selection pill. Surfaces "N selected" whenever
-        // there's an active lasso selection. Tap → action sheet.
-        if (lassoSelection.totalCount > 0) {
-            androidx.compose.foundation.layout.Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .mapSafeAreaPadding()
-                    .padding(top = 90.dp, end = 16.dp),
-                contentAlignment = Alignment.TopEnd,
-            ) {
-                soy.engindearing.omnitak.mobile.ui.components.LassoSelectionPill(
-                    count = lassoSelection.totalCount,
-                    onShowActions = { lassoActionsOpen = true },
-                )
-            }
-        }
+        // (The "N selected" pill is in the column of pills at the top right, above.)
         if (lassoActionsOpen) {
             // Resolve the selection's UIDs back to the live CoTEvent
             // objects in the contact store. Filters out anything
@@ -2339,7 +2354,11 @@ fun MapScreen(
         ) {
             // A geofence alert (#155) takes the top of the corner while it shows, and everything under
             // it moves down by its height, so it never covers a tool banner or the compass.
-            GeofenceBannerHost(service = app.geofenceService, onOpen = ::openGeofences)
+            GeofenceBannerHost(
+                service = app.geofenceService,
+                onOpen = ::openGeofences,
+                onHeightPx = { geofenceBannerHeightPx.intValue = it },
+            )
 
             if (drawingKind != null) {
                 DrawingOverlay(
@@ -2430,13 +2449,14 @@ fun MapScreen(
                     geofenceSheetOpen = false
                 },
                 onShowOnMap = { geofence ->
-                    val at = geofence.labelPoint
+                    val bounds = GeofenceFraming.boundsOf(geofence)
                     geofenceSheetOpen = false
-                    if (at != null) {
+                    if (bounds != null) {
                         // An operator's own camera move: the first fix of a first run must not undo it.
                         RetainedMapView.firstFix.operatorMovedCamera()
-                        panTarget = LatLng(at.lat, at.lon)
-                        panTargetTick += 1
+                        // The whole zone, not just its middle.
+                        frameBounds = bounds
+                        frameBoundsTick += 1
                         if (followMeActive) mutatePref { it.copy(followMeActive = false) }
                     }
                 },

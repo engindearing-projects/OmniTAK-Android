@@ -135,6 +135,8 @@ android {
     // RuntimeExceptions. Default values mean Log.* returns 0 / "" / false.
     testOptions {
         unitTests.isReturnDefaultValues = true
+        // Robolectric reads the merged manifest and resources (the Compose test activity is declared in ui-test-manifest).
+        unitTests.isIncludeAndroidResources = true
     }
 }
 
@@ -264,6 +266,13 @@ dependencies {
     // exercise the production CoTParser/ChatXml path — the mockable
     // android.jar makes XmlPullParserFactory.newInstance() return null.
     testImplementation("net.sf.kxml:kxml2:2.3.0")
+    // Compose and the Android framework on the JVM (Robolectric supplies the framework): a composable is composed,
+    // its effects run and what it reports is asserted, as for the geofence alert's height and the notification
+    // question. Only tests that ask for it (@RunWith(AndroidJUnit4::class)) use it; the rest stay plain JUnit.
+    testImplementation("org.robolectric:robolectric:4.16.1")
+    testImplementation(composeBom)
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("androidx.test.ext:junit:1.2.1")
 
     // Instrumented tests — symbology validation runs on a real device or
     // emulator because MapLibre's SurfaceView renders through native GL
@@ -272,4 +281,13 @@ dependencies {
     androidTestImplementation("androidx.test:rules:1.6.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
+}
+
+// The page tests read cesium_scene.html straight from the source tree and run its code under node. Declare it as
+// an input of the unit tests: otherwise a change to the page alone leaves the tests UP-TO-DATE, or restored from
+// the build cache with the result they had for the old page.
+tasks.withType<Test>().configureEach {
+    inputs.file("src/main/assets/cesium_scene.html")
+        .withPropertyName("cesiumScenePage")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 }

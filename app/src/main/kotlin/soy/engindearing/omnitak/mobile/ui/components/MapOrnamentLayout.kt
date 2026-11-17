@@ -1,5 +1,7 @@
 package soy.engindearing.omnitak.mobile.ui.components
 
+import soy.engindearing.omnitak.mobile.data.geofence.FrameInsets
+import soy.engindearing.omnitak.mobile.data.geofence.GeofenceFraming
 import kotlin.math.ceil
 import kotlin.math.max
 
@@ -51,6 +53,37 @@ internal object MapOrnamentLayout {
         bottom = px(SIDE_MARGIN_DP, density),
     )
 
+    // MARK: the names of the zones
+
+    /** Air between the status strip and the first thing written on the map under it: the name of a zone. */
+    const val UNDER_STRIP_AIR_DP = 8
+
+    private fun densityOrOne(density: Float): Double = if (density.isFinite() && density > 0f) density.toDouble() else 1.0
+
+    /**
+     * Where, in dp from the top of the window, the map is clear of the status bar, the status strip and a
+     * little air: the highest the top of a name written on the map can be. A name stays under this when its
+     * zone's edge is above it, and "Show on map" keeps the zone under it (with room for the name itself).
+     */
+    fun belowStripDp(safe: EdgePx, density: Float): Double =
+        safe.top / densityOrOne(density) + STATUS_STRIP_DP + UNDER_STRIP_AIR_DP
+
+    /**
+     * The room "Show on map" keeps clear of the window's edges, for a window whose safe area is [safe]: the
+     * safe area itself, the padding around a zone, and at the top the status strip and the zone's name, so the
+     * name is not hidden under the strip when the north edge is the closest to the top (held sideways).
+     */
+    fun frameInsets(safe: EdgePx, density: Float): FrameInsets {
+        val d = densityOrOne(density)
+        return GeofenceFraming.insetsFor(
+            safeLeftDp = safe.left / d,
+            safeTopDp = safe.top / d,
+            safeRightDp = safe.right / d,
+            safeBottomDp = safe.bottom / d,
+            topChromeDp = (STATUS_STRIP_DP + UNDER_STRIP_AIR_DP).toDouble(),
+        )
+    }
+
     // MARK: the top left: the compass and the tool banners
 
     /**
@@ -65,6 +98,38 @@ internal object MapOrnamentLayout {
 
     /** How far the compass sits below the top of its corner: nothing, unless a banner is above it. */
     fun compassTopGapDp(bannerShowing: Boolean): Int = if (bannerShowing) COMPASS_BELOW_BANNER_GAP_DP else 0
+
+    // MARK: the top right and top centre: the pills and the banners
+
+    /** The lasso's "N selected" pill and the drone's pills rest this far below the safe area's top edge (top right). */
+    const val TOP_RIGHT_PILLS_DP = 90
+
+    /** The drone's status-text alert banner rests this far below the safe area's top edge (top centre). */
+    const val UAS_ALERT_TOP_DP = 64
+
+    /** The mission banner rests this far below the safe area's top edge (top centre). */
+    const val MISSION_BANNER_TOP_DP = 90
+
+    /**
+     * How many dp lower than where they rest the things in a band that starts [restTopDp] under the safe area's
+     * top edge must go while a geofence alert [bannerHeightDp] tall shows, so the first of them starts under it
+     * (the 8 dp the alert leaves under itself are its gap). Held upright the alert is as wide as the screen and
+     * starts at [TOP_CHROME_DP], where the pills and the drone's banners are; held sideways it keeps to the left
+     * half ([GeofenceBannerLayout]), which covers nothing at the right, so the pills stay where they are. What is
+     * centred on the window ([reachesTheLeftHalf]: the drone's two top-centre banners) runs into that half whatever
+     * way the phone is held, so it moves in both. 0 when there is no alert, or when it ends above where the band starts.
+     */
+    fun shiftBelowGeofenceBannerDp(
+        restTopDp: Int,
+        bannerHeightDp: Float,
+        landscape: Boolean,
+        reachesTheLeftHalf: Boolean = false,
+    ): Float =
+        if (bannerHeightDp <= 0f || (landscape && !reachesTheLeftHalf)) {
+            0f
+        } else {
+            max(0f, TOP_CHROME_DP + bannerHeightDp - restTopDp)
+        }
 
     // MARK: the bottom: where the controls rest
 

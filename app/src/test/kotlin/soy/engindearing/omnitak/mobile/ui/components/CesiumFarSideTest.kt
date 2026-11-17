@@ -40,7 +40,8 @@ class CesiumFarSideTest {
     }
 
     @Test fun it_runs_before_each_frame_is_drawn() {
-        assertTrue(page.contains("v.scene.preRender.addEventListener(function(){_cullFarSide(v)})"))
+        // The names of the zones are put where they are seen in the same hook, after the far side is hidden (CesiumNamePlacementTest).
+        assertTrue(page.contains("v.scene.preRender.addEventListener(function(){_cullFarSide(v);_placeNames(v)})"))
     }
 
     @Test fun it_does_nothing_while_the_camera_and_the_markers_are_still() {

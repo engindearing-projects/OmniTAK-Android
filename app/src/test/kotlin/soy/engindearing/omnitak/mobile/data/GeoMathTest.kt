@@ -71,4 +71,18 @@ class GeoMathTest {
         assertEquals("5.00 km", GeoMath.formatDistance(5000.0, DistanceUnit.METRIC))
         assertEquals("3.11 mi", GeoMath.formatDistance(5000.0, DistanceUnit.IMPERIAL))
     }
+
+    // MARK: longitudes either side of the antimeridian
+
+    @Test fun a_longitude_is_moved_by_whole_turns_to_within_half_a_turn_of_the_one_it_is_near() {
+        assertEquals(180.1, GeoMath.unwrapLongitude(-179.9, near = 179.9), 1e-9)
+        assertEquals(-180.1, GeoMath.unwrapLongitude(179.9, near = -179.9), 1e-9)
+        assertEquals(-10.0, GeoMath.unwrapLongitude(350.0, near = 10.0), 1e-9)
+    }
+
+    @Test fun a_longitude_that_is_already_near_stays_exactly_as_it_is() {
+        assertEquals(10.0, GeoMath.unwrapLongitude(10.0, near = 10.0), 0.0)
+        assertEquals(-117.43, GeoMath.unwrapLongitude(-117.43, near = -117.4), 1e-12)
+        assertEquals(179.0, GeoMath.unwrapLongitude(179.0, near = 180.0), 1e-12)
+    }
 }

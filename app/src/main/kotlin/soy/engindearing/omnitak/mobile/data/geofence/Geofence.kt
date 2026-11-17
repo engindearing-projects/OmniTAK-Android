@@ -1,6 +1,8 @@
 package soy.engindearing.omnitak.mobile.data.geofence
 
 import kotlinx.serialization.Serializable
+import soy.engindearing.omnitak.mobile.data.GeoMath
+import soy.engindearing.omnitak.mobile.data.rangebearing.RangeBearing
 
 /** The shapes a geofence can have. */
 @Serializable
@@ -101,22 +103,39 @@ data class Geofence(
     val dwellMs: Long get() = dwellMinutes.coerceAtLeast(0) * 60_000L
 
     /**
-     * Where its name is written and where "Show on map" goes: the middle of a circle, the mean of a
-     * polygon's corners. Null when there are no corners or no centre.
+     * Where its name is written, as the iOS app writes it: on the north edge of a circle (so the operator's
+     * own marker, which sits on the middle of the zone they are in, never covers it), at the mean of a
+     * polygon's corners. The text sits above the point. Null when there are no corners or no centre. A circle
+     * with no size has no edge, so its name goes on its centre. ("Show on map" does not go here: it frames
+     * the whole shape, see [GeofenceFraming].)
      */
     val labelPoint: LatLon?
         get() = when (type) {
             GeofenceType.CIRCLE -> {
                 val lat = centerLat
                 val lon = centerLon
-                if (lat != null && lon != null) LatLon(lat, lon) else null
+                val radius = radiusMeters
+                if (lat == null || lon == null) {
+                    null
+                } else if (radius != null && radius.isFinite() && radius > 0.0) {
+                    // The first point of the ring the zone is drawn with is due north of the centre.
+                    val north = RangeBearing.ringPoints(lat, lon, radius, 4).first()
+                    LatLon(north[0], north[1])
+                } else {
+                    LatLon(lat, lon)
+                }
             }
             GeofenceType.POLYGON -> {
                 val corners = points
                 if (corners.isNullOrEmpty()) {
                     null
                 } else {
-                    LatLon(corners.sumOf { it.lat } / corners.size, corners.sumOf { it.lon } / corners.size)
+                    // The mean of the longitudes after moving them near the first corner, so corners either side of the
+                    // antimeridian (179.9 and -179.9) average to 180, not to 0 on the far side of the planet; then back
+                    // onto the map.
+                    val near = corners.first().lon
+                    val lon = corners.sumOf { GeoMath.unwrapLongitude(it.lon, near) } / corners.size
+                    LatLon(corners.sumOf { it.lat } / corners.size, if (lon > 180.0) lon - 360.0 else if (lon < -180.0) lon + 360.0 else lon)
                 }
             }
         }

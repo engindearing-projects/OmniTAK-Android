@@ -6,28 +6,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * #155 - when the app asks for permission to show notifications (when the first geofence is saved,
- * never at launch), which notification ids an alert gets, and how the app knows it is behind.
+ * #155 - which notification ids an alert gets, and how the app knows it is behind. (When the app asks for
+ * permission to show notifications is [NotificationPermissionTest].)
  */
 class GeofenceNotifierTest {
-
-    @Test fun the_question_is_asked_on_android_13_and_later_when_not_granted_and_not_asked_before() {
-        assertTrue(GeofenceNotificationPermission.shouldAsk(sdkInt = 33, granted = false, alreadyAsked = false))
-        assertTrue(GeofenceNotificationPermission.shouldAsk(sdkInt = 36, granted = false, alreadyAsked = false))
-    }
-
-    @Test fun it_is_not_asked_where_notifications_need_no_permission() {
-        assertFalse(GeofenceNotificationPermission.shouldAsk(sdkInt = 32, granted = false, alreadyAsked = false))
-        assertFalse(GeofenceNotificationPermission.shouldAsk(sdkInt = 26, granted = false, alreadyAsked = false))
-    }
-
-    @Test fun it_is_not_asked_when_it_is_already_allowed() {
-        assertFalse(GeofenceNotificationPermission.shouldAsk(sdkInt = 36, granted = true, alreadyAsked = false))
-    }
-
-    @Test fun it_is_not_asked_twice() {
-        assertFalse(GeofenceNotificationPermission.shouldAsk(sdkInt = 36, granted = false, alreadyAsked = true))
-    }
 
     @Test fun every_alert_gets_its_own_notification_up_to_a_limit_then_the_oldest_is_replaced() {
         val ids = (0 until 20).map { GeofenceNotifier.notificationId(it) }

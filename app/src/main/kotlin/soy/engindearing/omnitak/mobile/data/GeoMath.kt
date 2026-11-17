@@ -2,6 +2,7 @@ package soy.engindearing.omnitak.mobile.data
 
 import kotlin.math.asin
 import kotlin.math.atan2
+import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -13,6 +14,20 @@ import kotlin.math.sqrt
  */
 object GeoMath {
     private const val EARTH_RADIUS_M = 6_371_008.8
+
+    /**
+     * [lon] moved by whole turns (360 degrees) to the value within half a turn of [near], so points either side of
+     * the antimeridian get longitudes that are close, not 360 apart: 179.9 and -179.9 near 179.9 come out as 179.9
+     * and 180.1. A ring or a box built from them is one piece; with the folded values it would span the world.
+     */
+    fun unwrapLongitude(lon: Double, near: Double): Double {
+        val apart = lon - near
+        return when {
+            apart > 180.0 -> lon - 360.0 * ceil((apart - 180.0) / 360.0)
+            apart < -180.0 -> lon + 360.0 * ceil((-apart - 180.0) / 360.0)
+            else -> lon // already near: returned exactly as it is
+        }
+    }
 
     /** Haversine distance between two (lat, lon) pairs, in meters. */
     fun haversineMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {

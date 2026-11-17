@@ -32,8 +32,11 @@ class CesiumGeofencePageTest {
         assertTrue("the name sits on the ground", upsertDrawing.contains("heightReference:Cesium.HeightReference.CLAMP_TO_GROUND,disableDepthTestDistance"))
     }
 
-    @Test fun the_name_sits_under_the_middle_of_the_zone_clear_of_the_operators_marker_and_its_callsign() {
-        assertTrue(upsertDrawing.contains("verticalOrigin:Cesium.VerticalOrigin.TOP,pixelOffset:new Cesium.Cartesian2(0,24)"))
+    @Test fun the_name_sits_on_its_point_with_its_bottom_on_it_the_way_the_ios_page_writes_it() {
+        // The point is the north edge of a circle, so the operator's marker and callsign, on the middle, never cover it.
+        assertTrue(upsertDrawing.contains("verticalOrigin:Cesium.VerticalOrigin.BOTTOM,pixelOffset:new Cesium.Cartesian2(0,-2)"))
+        assertTrue(upsertDrawing.contains("font:'bold 13px -apple-system, sans-serif'"))
+        assertTrue(upsertDrawing.contains("outlineWidth:3"))
     }
 
     @Test fun a_name_on_the_far_side_of_the_planet_is_hidden_with_the_markers_there() {

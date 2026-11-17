@@ -1,16 +1,13 @@
 package soy.engindearing.omnitak.mobile.domain
 
-import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import androidx.core.content.ContextCompat
 import soy.engindearing.omnitak.mobile.MainActivity
 import soy.engindearing.omnitak.mobile.R
 import soy.engindearing.omnitak.mobile.i18n.Loc
@@ -23,7 +20,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * notice. The text is the same sentence the banner on the map shows.
  *
  * Posting is quietly skipped when notifications are not allowed (Android 13 and later ask for
- * permission; [GeofenceNotificationPermission] says when the app asks), so a denied permission is
+ * permission; [NotificationPermission] says when the app asks), so a denied permission is
  * never a crash.
  */
 class GeofenceNotifier(private val context: Context) {
@@ -79,40 +76,6 @@ class GeofenceNotifier(private val context: Context) {
                 },
             )
         }
-    }
-}
-
-/**
- * When the app asks for permission to show notifications: the first time a geofence is saved, and
- * not before. Someone who has made no geofence has no use for the answer, so it is never asked at
- * launch.
- */
-object GeofenceNotificationPermission {
-
-    /** Android 13 added the permission; before it a notification needs none. */
-    const val FIRST_SDK_WITH_PERMISSION = 33
-
-    /**
-     * Whether to ask now, as a geofence has just been saved: only where the permission exists, only
-     * while it is not granted, and only once (a person who said no is not asked again on the next
-     * save; Android stops showing the prompt after two refusals anyway).
-     */
-    fun shouldAsk(sdkInt: Int, granted: Boolean, alreadyAsked: Boolean): Boolean =
-        sdkInt >= FIRST_SDK_WITH_PERMISSION && !granted && !alreadyAsked
-
-    private const val PREFS = "omnitak_geofence"
-    private const val KEY_ASKED = "notification_permission_asked"
-
-    fun isGranted(context: Context): Boolean =
-        Build.VERSION.SDK_INT < FIRST_SDK_WITH_PERMISSION ||
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
-            PackageManager.PERMISSION_GRANTED
-
-    fun wasAsked(context: Context): Boolean =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_ASKED, false)
-
-    fun markAsked(context: Context) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_ASKED, true).apply()
     }
 }
 

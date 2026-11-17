@@ -7,6 +7,8 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import soy.engindearing.omnitak.mobile.data.GeoMath
+import soy.engindearing.omnitak.mobile.data.rangebearing.RangeBearing
 
 /** #155 - what a geofence is: its fields, its defaults, and what they mean. */
 class GeofenceModelTest {
@@ -57,10 +59,16 @@ class GeofenceModelTest {
         assertFalse(poly.copy(points = three + LatLon(Double.NaN, 0.0)).hasUsableShape)
     }
 
-    @Test fun the_name_is_written_at_the_centre_of_a_circle_and_the_mean_of_a_polygons_corners() {
+    @Test fun the_name_is_written_on_the_north_edge_of_a_circle_and_at_the_mean_of_a_polygons_corners() {
+        // The way the iOS app writes it: on the north edge, so the operator's own marker (on the middle of
+        // the zone they are in) never covers it.
         val at = circle().labelPoint!!
-        assertEquals(47.6588, at.lat, 0.0)
-        assertEquals(-117.4260, at.lon, 0.0)
+        assertEquals("due north of the centre", -117.4260, at.lon, 1e-9)
+        assertTrue("north of it", at.lat > 47.6588)
+        assertEquals("one radius out", 200.0, GeoMath.haversineMeters(47.6588, -117.4260, at.lat, at.lon), 0.01)
+        val firstPointOfTheRing = RangeBearing.ringPoints(47.6588, -117.4260, 200.0, 64).first()
+        assertEquals("the first point of the drawn ring is due north", firstPointOfTheRing[0], at.lat, 1e-12)
+        assertEquals(firstPointOfTheRing[1], at.lon, 1e-12)
 
         val square = Geofence(
             id = "p", name = "Yard", type = GeofenceType.POLYGON,
@@ -72,6 +80,38 @@ class GeofenceModelTest {
 
         assertNull(Geofence(id = "n", name = "None", type = GeofenceType.POLYGON).labelPoint)
         assertNull(Geofence(id = "n", name = "None", type = GeofenceType.CIRCLE).labelPoint)
+    }
+
+    @Test fun a_polygons_name_stays_with_the_zone_across_the_antimeridian() {
+        // Corners at 179.9 and -179.9 averaged to 0, the far side of the planet, while the camera framed the zone.
+        val box = Geofence(
+            id = "d", name = "Date line", type = GeofenceType.POLYGON,
+            points = listOf(LatLon(0.0, 179.9), LatLon(0.0, -179.9), LatLon(0.1, -179.9), LatLon(0.1, 179.9)),
+        )
+        val at = box.labelPoint!!
+        assertTrue("on the antimeridian, not on the far side of the planet: ${at.lon}", kotlin.math.abs(at.lon) > 179.9)
+        assertTrue("and a longitude that exists: ${at.lon}", at.lon in -180.0..180.0)
+        assertEquals(0.05, at.lat, 1e-12)
+    }
+
+    @Test fun a_polygons_name_longitude_is_on_the_map_whichever_side_the_corners_are() {
+        val west = Geofence(
+            id = "w", name = "W", type = GeofenceType.POLYGON,
+            points = listOf(LatLon(10.0, -175.0), LatLon(10.0, 178.0), LatLon(11.0, 178.0), LatLon(11.0, -175.0)),
+        )
+        val at = west.labelPoint!!
+        assertTrue("${at.lon}", at.lon in -180.0..180.0)
+        assertTrue("near 181.5 degrees east, which is -178.5: ${at.lon}", kotlin.math.abs(at.lon - (-178.5)) < 1e-9)
+    }
+
+    @Test fun a_circle_with_no_size_has_no_edge_so_its_name_goes_on_its_centre() {
+        val at = circle().copy(radiusMeters = 0.0).labelPoint!!
+        assertEquals(47.6588, at.lat, 0.0)
+        assertEquals(-117.4260, at.lon, 0.0)
+    }
+
+    @Test fun a_bigger_circle_has_its_name_further_north() {
+        assertTrue(circle().copy(radiusMeters = 1_000.0).labelPoint!!.lat > circle().copy(radiusMeters = 200.0).labelPoint!!.lat)
     }
 
     @Test fun it_round_trips_through_json_with_every_field() {
