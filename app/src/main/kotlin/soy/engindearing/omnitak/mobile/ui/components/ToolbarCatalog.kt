@@ -7,6 +7,9 @@ import androidx.compose.material.icons.filled.Gesture
 import androidx.compose.material.icons.filled.Handyman
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Router
+import androidx.compose.material.icons.filled.ScreenLockLandscape
+import androidx.compose.material.icons.filled.ScreenLockPortrait
+import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Storage
@@ -16,6 +19,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import soy.engindearing.omnitak.mobile.data.ScreenRotation
 
 /**
  * User-customizable bottom toolbar — catalog + rules. Mirrors the iOS
@@ -35,6 +39,9 @@ enum class BarCommand {
 
     /** Toggle the 3D terrain map mode (map3dEnabled pref). */
     ENGINE_TOGGLE,
+
+    /** #214 - cycle the screen rotation mode: Auto, Portrait, Landscape, Auto. */
+    ROTATION,
 }
 
 /** A bar entry is either a NavHost destination or a command. */
@@ -53,6 +60,9 @@ data class BarItem(
     val icon: ImageVector,
     val tint: Color,
     val kind: BarKind,
+    /** What a screen reader says for the icon. Most items are just their [label]; the
+     *  screen rotation shortcut says its current mode too (#214). */
+    val contentDescription: String = label,
 )
 
 object ToolbarCatalog {
@@ -72,6 +82,7 @@ object ToolbarCatalog {
     private val cSettings = Color(0xFF8E8E93)
     private val cCamera = Color(0xFF00E5FF)
     private val cLasso = Color(0xFFFF9500)
+    private val cRotate = Color(0xFFBF5AF2)
 
     /** NavHost destinations — switch the visible screen. */
     val destinations: List<BarItem> = listOf(
@@ -89,9 +100,33 @@ object ToolbarCatalog {
         BarItem("tools", "Tools", Icons.Filled.Handyman, cTools, BarKind.Command(BarCommand.TOOLS)),
         BarItem("lasso", "Select", Icons.Filled.Gesture, cLasso, BarKind.Command(BarCommand.LASSO)),
         BarItem("engine", "2D / 3D", Icons.Filled.Public, cMap, BarKind.Command(BarCommand.ENGINE_TOGGLE)),
+        // #214 - not in [defaultIds] (the bar is capped at [MAX_ITEMS] and the default layout
+        // must not change under anyone); an operator adds it from the bar's + palette.
+        BarItem(ROTATION_ID, "Rotate", rotationIcon(ScreenRotation.DEFAULT), cRotate, BarKind.Command(BarCommand.ROTATION)),
     )
 
     val all: List<BarItem> = destinations + commands
+
+    /** #214 - the id of the screen rotation shortcut. */
+    const val ROTATION_ID = "rotation"
+
+    /** #214 - the icon that shows which mode the screen is in: the plain rotate glyph for
+     *  Auto, a locked portrait or landscape phone for the other two. */
+    fun rotationIcon(mode: ScreenRotation): ImageVector = when (mode) {
+        ScreenRotation.AUTO -> Icons.Filled.ScreenRotation
+        ScreenRotation.PORTRAIT -> Icons.Filled.ScreenLockPortrait
+        ScreenRotation.LANDSCAPE -> Icons.Filled.ScreenLockLandscape
+    }
+
+    /** #214 - [item] as the bar draws it right now: the screen rotation shortcut carries the
+     *  icon and the "Screen rotation: <mode>" description of the current [mode]; every other
+     *  item is returned as it is. */
+    fun showing(item: BarItem, mode: ScreenRotation): BarItem =
+        if (item.id == ROTATION_ID) {
+            item.copy(icon = rotationIcon(mode), contentDescription = mode.contentDescription)
+        } else {
+            item
+        }
 
     /** Default layout — matches the original hardcoded NavTabs so existing
      *  users see no change until they customize. */

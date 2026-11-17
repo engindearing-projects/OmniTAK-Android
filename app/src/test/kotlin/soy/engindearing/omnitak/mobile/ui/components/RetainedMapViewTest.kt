@@ -225,4 +225,80 @@ class RetainedMapViewTest {
         assertFalse(bindings.useMilStdSelfSymbol)
         assertTrue(bindings.northUpLocked)
     }
+
+    // MARK: the size the map comes back at (#214)
+    //
+    // MapLibre's restarted render thread can keep drawing at the size the surface had when
+    // the view left. That only happens when the size changed while the map was away, so that
+    // is the only time the nudge is wanted.
+
+    @Test fun a_map_that_comes_back_at_a_different_size_needs_the_nudge() {
+        val watch = ReturnSizeWatch()
+        watch.returned()
+        assertFalse("the first time it is shown", watch.sized(1080, 2201))
+        // Left for Settings, the screen turned, the map comes back landscape.
+        watch.returned()
+        assertTrue(watch.sized(2400, 943))
+    }
+
+    @Test fun a_map_that_comes_back_at_the_same_size_needs_none() {
+        val watch = ReturnSizeWatch()
+        watch.returned()
+        watch.sized(1080, 2201)
+        watch.returned()
+        assertFalse(watch.sized(1080, 2201))
+    }
+
+    @Test fun the_first_time_the_map_is_shown_needs_none() {
+        val watch = ReturnSizeWatch()
+        watch.returned()
+        assertFalse(watch.sized(2400, 943))
+    }
+
+    @Test fun only_the_first_size_after_it_comes_back_counts() {
+        val watch = ReturnSizeWatch()
+        watch.returned()
+        watch.sized(1080, 2201)
+        watch.returned()
+        assertTrue(watch.sized(2400, 943))
+        // Later sizes are the map being resized while it is on screen (insets settling, the
+        // phone turning with the map open). That path works and is not nudged.
+        assertFalse(watch.sized(2400, 900))
+        assertFalse(watch.sized(1080, 2201))
+    }
+
+    @Test fun turning_the_phone_with_the_map_open_is_not_a_return() {
+        val watch = ReturnSizeWatch()
+        watch.returned()
+        watch.sized(1080, 2201)
+        assertFalse(watch.sized(2400, 943))
+        assertFalse(watch.sized(1080, 2201))
+    }
+
+    @Test fun the_size_it_left_with_is_the_last_one_it_was_shown_at() {
+        val watch = ReturnSizeWatch()
+        watch.returned()
+        watch.sized(1080, 2201)
+        // Turned to landscape with the map open, then left for another tab.
+        assertFalse(watch.sized(2400, 943))
+        watch.returned()
+        assertFalse("back at the size it left with", watch.sized(2400, 943))
+        watch.returned()
+        assertTrue("back at a different size", watch.sized(1080, 2201))
+    }
+
+    @Test fun every_return_is_judged_on_its_own() {
+        val watch = ReturnSizeWatch()
+        watch.returned(); watch.sized(1080, 2201)
+        watch.returned(); assertTrue(watch.sized(2400, 943))
+        watch.returned(); assertTrue(watch.sized(1080, 2201))
+        watch.returned(); assertFalse(watch.sized(1080, 2201))
+    }
+
+    @Test fun a_size_reported_when_nobody_has_taken_the_view_never_counts() {
+        val watch = ReturnSizeWatch()
+        watch.returned(); watch.sized(1080, 2201)
+        assertFalse(watch.sized(2400, 943))
+        assertFalse(watch.sized(1080, 2201))
+    }
 }
