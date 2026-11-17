@@ -5,8 +5,6 @@ import org.json.JSONObject
 import org.maplibre.android.maps.MapLibreMap
 import soy.engindearing.omnitak.mobile.data.Drawing
 import soy.engindearing.omnitak.mobile.data.DrawingKind
-import kotlin.math.cos
-import kotlin.math.sin
 
 /**
  * Updates the persistent drawings source (`drawings-src`) defined
@@ -27,7 +25,7 @@ object DrawingLayer {
             when (d.kind) {
                 DrawingKind.LINE -> features.put(lineFeature(d))
                 DrawingKind.POLYGON -> features.put(polygonFeature(d))
-                DrawingKind.CIRCLE -> features.put(circleFeature(d))
+                DrawingKind.CIRCLE -> circleFeature(d)?.let { features.put(it) }
             }
         }
         return features
@@ -59,22 +57,14 @@ object DrawingLayer {
     }
 
     /**
-     * CoT circles are stored as [center, edge]. We approximate the
-     * drawn circle as a 64-sided polygon so MapLibre can render it
-     * with the standard fill layer.
+     * CoT circles are stored as [center, edge]. We approximate the drawn circle as a 64-sided polygon so
+     * MapLibre can render it with the standard fill layer: the same ring [DrawingShapeRenderer] draws, a
+     * circle on the ground. Null for a circle with no size.
      */
-    private fun circleFeature(d: Drawing): JSONObject {
-        val (lat0, lon0) = d.points.first()
-        val (lat1, lon1) = d.points.getOrElse(1) { lat0 to lon0 }
-        val radiusDeg = kotlin.math.hypot(lat1 - lat0, lon1 - lon0)
+    private fun circleFeature(d: Drawing): JSONObject? {
         val coords = JSONArray()
-        val steps = 64
-        for (i in 0..steps) {
-            val t = 2.0 * Math.PI * i / steps
-            val lon = lon0 + radiusDeg * cos(t)
-            val lat = lat0 + radiusDeg * sin(t)
-            coords.put(JSONArray().put(lon).put(lat))
-        }
+        DrawingShapeRenderer.circlePolygon(d.points).forEach { (lat, lon) -> coords.put(JSONArray().put(lon).put(lat)) }
+        if (coords.length() == 0) return null
         val ring = JSONArray().put(coords)
         return baseFeature(d, "polygon")
             .put(

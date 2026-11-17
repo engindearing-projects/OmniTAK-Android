@@ -9,9 +9,8 @@ import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.maps.MapLibreMap
 import soy.engindearing.omnitak.mobile.data.Drawing
 import soy.engindearing.omnitak.mobile.data.DrawingKind
-import kotlin.math.cos
-import kotlin.math.hypot
-import kotlin.math.sin
+import soy.engindearing.omnitak.mobile.data.GeoMath
+import soy.engindearing.omnitak.mobile.data.rangebearing.RangeBearing
 
 /**
  * Renders operator drawings (lines / polygons / circles) as native MapLibre
@@ -104,21 +103,24 @@ object DrawingShapeRenderer {
     }
 
     /**
-     * A drawn circle is stored as [center, edge]; approximate it as a
-     * [CIRCLE_STEPS]-gon (the same approach DrawingLayer used for its fill).
+     * A drawn circle is stored as [center, edge]; approximate it as a [CIRCLE_STEPS]-gon, closed (the first
+     * vertex is repeated at the end). The radius is the distance on the ground from the centre to the edge
+     * point, and the ring is that distance all round the centre, so it is a circle on the map and the same
+     * circle the globe draws and a geofence made from it covers ([RangeBearing.ringPoints], the way the range
+     * rings and the geofences are drawn). It used to add the same number of degrees of latitude and of longitude
+     * to the centre, which is not the same distance away from the equator: a circle drawn at Spokane was an oval
+     * 1.49 times taller than wide.
      * Pure (no MapLibre types) so it unit-tests on the JVM.
      */
     internal fun circlePolygon(points: List<Pair<Double, Double>>): List<Pair<Double, Double>> {
         if (points.isEmpty()) return emptyList()
         val (lat0, lon0) = points.first()
         val (lat1, lon1) = points.getOrElse(1) { lat0 to lon0 }
-        val radiusDeg = hypot(lat1 - lat0, lon1 - lon0)
-        if (radiusDeg <= 0.0) return emptyList()
-        val out = ArrayList<Pair<Double, Double>>(CIRCLE_STEPS + 1)
-        for (i in 0..CIRCLE_STEPS) {
-            val t = 2.0 * Math.PI * i / CIRCLE_STEPS
-            out.add((lat0 + radiusDeg * sin(t)) to (lon0 + radiusDeg * cos(t)))
-        }
-        return out
+        val radiusMeters = GeoMath.haversineMeters(lat0, lon0, lat1, lon1)
+        if (!(radiusMeters > 0.0)) return emptyList()
+        // ringPoints folds every longitude into [-180, 180). Near the antimeridian that would put a jump of 360 degrees
+        // between two vertices, which the map draws as a band across the world, so they are made continuous again.
+        return RangeBearing.ringPoints(lat0, lon0, radiusMeters, CIRCLE_STEPS)
+            .map { it[0] to GeoMath.unwrapLongitude(it[1], near = lon0) }
     }
 }
