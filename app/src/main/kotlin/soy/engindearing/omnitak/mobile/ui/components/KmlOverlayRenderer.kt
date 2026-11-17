@@ -59,14 +59,22 @@ object KmlOverlayEvents {
 /** The image id registered once in the MapLibre style for the KML pushpin icon. */
 private const val KML_PUSHPIN_IMAGE_ID = "kml-pushpin"
 
+/** The pushpin picture's size in px, and the row of its tip (4 px above the bottom edge). */
+internal const val PUSHPIN_WIDTH = 64
+internal const val PUSHPIN_HEIGHT = 96
+internal const val PUSHPIN_TIP_Y = PUSHPIN_HEIGHT - 4
+
 /**
  * Generates a classic teardrop pushpin bitmap programmatically:
- * yellow fill (#FFD400), dark outline, white center dot, ~96px tall.
- * The pin's visual anchor point is at the bottom-center of the bitmap.
+ * yellow fill (#FFD400), dark outline, white center dot, [PUSHPIN_HEIGHT] px tall.
+ * The pin's tip is [PUSHPIN_TIP_Y] rows down, near the bottom of this picture. The
+ * picture alone is not what goes on the map: MapLibre anchors a marker at the CENTRE
+ * of its bitmap, so [buildBarePushpin] and [buildLabeledPin] pad it until the tip is
+ * the centre (#273).
  */
 private fun buildPushpinBitmap(): Bitmap {
-    val w = 64
-    val h = 96
+    val w = PUSHPIN_WIDTH
+    val h = PUSHPIN_HEIGHT
     val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bmp)
 
@@ -90,7 +98,7 @@ private fun buildPushpinBitmap(): Bitmap {
 
     // Teardrop path: arc for the balloon + two lines meeting at the tip.
     val path = Path()
-    val tipY = (h - 4).toFloat()
+    val tipY = PUSHPIN_TIP_Y.toFloat()
     // Start at the left tangent of the circle where the tail begins
     // Use a RectF arc for the balloon portion (roughly 270° of circle)
     val oval = android.graphics.RectF(
@@ -117,14 +125,27 @@ private fun buildPushpinBitmap(): Bitmap {
 }
 
 /**
+ * The pushpin with no name, padded underneath so that its TIP is the centre of the
+ * bitmap, which is where MapLibre puts the coordinate (#273). Unpadded, the middle of
+ * the picture was on the coordinate and the tip was drawn well below it.
+ */
+private fun buildBarePushpin(): Bitmap {
+    val pin = buildPushpinBitmap()
+    val pads = MapLabelGeometry.forBareKmlPin()
+    val bmp = Bitmap.createBitmap(pin.width, pads.top + pin.height + pads.bottom, Bitmap.Config.ARGB_8888)
+    Canvas(bmp).drawBitmap(pin, 0f, pads.top.toFloat(), null)
+    return bmp
+}
+
+/**
  * Composes the yellow pushpin with the placemark name baked in below it so the
  * label is always-on (marker titles are otherwise tap-only). One bitmap per
  * unique name, cached by KmlMarkerRenderer. Typeface.DEFAULT_BOLD renders CJK
  * (Gavin's names) from the system font.
  */
 private fun buildLabeledPin(name: String, labelFactor: Float = 1f): Bitmap {
+    if (name.isBlank()) return buildBarePushpin()
     val pin = buildPushpinBitmap()
-    if (name.isBlank()) return pin
     val text = if (name.length > 28) name.take(27) + "…" else name
     // #213: the name follows the label size; the pushpin keeps its size.
     val g = MapLabelGeometry.forKmlPin(labelFactor)
@@ -139,9 +160,9 @@ private fun buildLabeledPin(name: String, labelFactor: Float = 1f): Bitmap {
     val pad = g.padding
     val textW = fill.measureText(text)
     val w = maxOf(pin.width.toFloat(), textW + pad * 2).toInt()
-    val labelH = g.band.toInt()
-    // #213: transparent rows that keep the pushpin where it is at every label size:
-    // MapLibre anchors the bitmap at its centre, so a taller strip would move the pin.
+    val labelH = g.bandPx
+    // #273: transparent rows so that the pushpin's tip is the bitmap's centre, at every
+    // label size: MapLibre anchors the bitmap at its centre (see MapLabelGeometry).
     val bmp = Bitmap.createBitmap(w, g.topPad + pin.height + labelH + g.bottomPad, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bmp)
     canvas.drawBitmap(pin, (w - pin.width) / 2f, g.topPad.toFloat(), null)
@@ -434,7 +455,7 @@ object KmlMarkerRenderer {
                         labelIconCache.getOrPut(labelKey(name, factor)) {
                             factory.fromBitmap(buildLabeledPin(name, factor))
                         }
-                    else (pinIcon ?: factory.fromBitmap(buildPushpinBitmap()).also { pinIcon = it })
+                    else (pinIcon ?: factory.fromBitmap(buildBarePushpin()).also { pinIcon = it })
                     runCatching {
                         map.addMarker(MarkerOptions().position(LatLng(lat, lon)).title(name).icon(icon))
                     }.getOrNull()
