@@ -66,6 +66,38 @@ internal object MapOrnamentLayout {
     /** How far the compass sits below the top of its corner: nothing, unless a banner is above it. */
     fun compassTopGapDp(bannerShowing: Boolean): Int = if (bannerShowing) COMPASS_BELOW_BANNER_GAP_DP else 0
 
+    // MARK: the top right and top centre: the pills and the banners
+
+    /** The lasso's "N selected" pill and the drone's pills rest this far below the safe area's top edge (top right). */
+    const val TOP_RIGHT_PILLS_DP = 90
+
+    /** The drone's status-text alert banner rests this far below the safe area's top edge (top centre). */
+    const val UAS_ALERT_TOP_DP = 64
+
+    /** The mission banner rests this far below the safe area's top edge (top centre). */
+    const val MISSION_BANNER_TOP_DP = 90
+
+    /**
+     * How many dp lower than where they rest the things in a band that starts [restTopDp] under the safe area's
+     * top edge must go while a geofence alert [bannerHeightDp] tall shows, so the first of them starts under it
+     * (the 8 dp the alert leaves under itself are its gap). Held upright the alert is as wide as the screen and
+     * starts at [TOP_CHROME_DP], where the pills and the drone's banners are; held sideways it keeps to the left
+     * half ([GeofenceBannerLayout]), which covers nothing at the right, so the pills stay where they are. What is
+     * centred on the window ([reachesTheLeftHalf]: the drone's two top-centre banners) runs into that half whatever
+     * way the phone is held, so it moves in both. 0 when there is no alert, or when it ends above where the band starts.
+     */
+    fun shiftBelowGeofenceBannerDp(
+        restTopDp: Int,
+        bannerHeightDp: Float,
+        landscape: Boolean,
+        reachesTheLeftHalf: Boolean = false,
+    ): Float =
+        if (bannerHeightDp <= 0f || (landscape && !reachesTheLeftHalf)) {
+            0f
+        } else {
+            max(0f, TOP_CHROME_DP + bannerHeightDp - restTopDp)
+        }
+
     // MARK: the bottom: where the controls rest
 
     /** The zoom and centre buttons are 48 dp across. */
