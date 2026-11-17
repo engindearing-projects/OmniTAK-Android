@@ -1348,23 +1348,18 @@ private fun buildPuckOptions(
     return markerOptionsBuilder.build()
 }
 
-/** Tint an ARGB bitmap's opaque pixels via a SRC_IN PorterDuff filter.
- *  The SVG renders as a transparent-background ARGB bitmap so SRC_IN
- *  recolors only the opaque glyph pixels — equivalent to the iOS
- *  UIImage.withTintColor approach. */
+/**
+ * The symbol in the team colour [argb]: the frame's fill in the full colour and the symbol's own lines
+ * (the outline and the label) kept, so it reads as the friendly-unit frame it is. A SRC_IN colour filter
+ * here replaced every opaque pixel with the team colour and left a plain rectangle. The rule is
+ * [SelfSymbolTint]: black lines, or white ones on a dark team colour where black would vanish.
+ */
 private fun tintBitmap(raw: android.graphics.Bitmap, argb: Int): android.graphics.Bitmap {
-    val tinted = android.graphics.Bitmap.createBitmap(
-        raw.width, raw.height, android.graphics.Bitmap.Config.ARGB_8888
-    )
-    val canvas = android.graphics.Canvas(tinted)
-    val paint = android.graphics.Paint().apply {
-        colorFilter = android.graphics.PorterDuffColorFilter(
-            argb,
-            android.graphics.PorterDuff.Mode.SRC_IN,
-        )
-    }
-    canvas.drawBitmap(raw, 0f, 0f, paint)
-    return tinted
+    val w = raw.width
+    val h = raw.height
+    val pixels = IntArray(w * h)
+    raw.getPixels(pixels, 0, w, 0, 0, w, h)
+    return android.graphics.Bitmap.createBitmap(SelfSymbolTint.tint(pixels, argb), w, h, android.graphics.Bitmap.Config.ARGB_8888)
 }
 
 /** #159 — resolve an echelon code to its APP-6 amplifier glyph; "" when unset
