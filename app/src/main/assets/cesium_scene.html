@@ -125,6 +125,11 @@
   function _postCameraChanged(v){const cam=v.camera,carto=cam.positionCartographic;if(!carto)return;
     const mpp=_scaleMpp(v);_state.scalePosted=mpp;
     _postMapEvent({event:'camerachanged',lat:Cesium.Math.toDegrees(carto.latitude),lon:Cesium.Math.toDegrees(carto.longitude),height:carto.height,heading:Cesium.Math.toDegrees(cam.heading),pitch:Cesium.Math.toDegrees(cam.pitch),zoom:_zoomFromHeight(carto.height,carto.latitude),mpp:mpp})}
+  // The distance along the view from the camera to the operator for a camera that is `height` above the ground and
+  // looks down at `pitch` radians (negative below the horizon): the height over the sine of the pitch, so the camera
+  // ends at that height whatever its tilt (straight down it is the height itself). A flat view is capped at ten times
+  // the height. No usable height: the range it had.
+  function _centerRange(range,height,pitch){return(typeof height==='number'&&isFinite(height)&&height>0)?height/Math.max(Math.sin(-pitch),0.1):range}
   // Toolbar zoom — move the camera along its view axis by the change in
   // height (factor<1 zooms in, >1 zooms out). Mirrors the iOS zoomBy so the
   // +/- buttons drive the globe the same on both platforms.
@@ -201,11 +206,15 @@
     // position at the current heading/pitch and camera-to-target distance
     // (so zoom/tilt are preserved and the marker stays centered), then the
     // lookAt transform is released so free pan/zoom works again after.
+    // From far out native also sends `height`, the camera height of street zoom (the 2D map's rule, see
+    // CesiumCameraMath.heightForOperator): the camera comes in to it and keeps its heading and tilt. Without a
+    // height the camera keeps its range.
     centerOnSelf(arg){const e=_parse(arg);if(!e||typeof e.lat!=='number'||typeof e.lon!=='number')return;const v=_state.viewer;if(!v)return;
       const target=Cesium.Cartesian3.fromDegrees(e.lon,e.lat,0);
       let range=Cesium.Cartesian3.distance(v.camera.positionWC,target);
       if(!isFinite(range)||range<=0)range=v.camera.positionCartographic.height||5000;
       const heading=v.camera.heading,pitch=v.camera.pitch;
+      range=_centerRange(range,e.height,pitch);
       v.camera.lookAt(target,new Cesium.HeadingPitchRange(heading,pitch,range));
       v.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);_postCameraChanged(v);
     },
