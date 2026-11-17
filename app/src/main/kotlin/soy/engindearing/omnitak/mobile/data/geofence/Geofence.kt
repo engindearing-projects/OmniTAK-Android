@@ -1,6 +1,7 @@
 package soy.engindearing.omnitak.mobile.data.geofence
 
 import kotlinx.serialization.Serializable
+import soy.engindearing.omnitak.mobile.data.GeoMath
 import soy.engindearing.omnitak.mobile.data.rangebearing.RangeBearing
 
 /** The shapes a geofence can have. */
@@ -129,7 +130,12 @@ data class Geofence(
                 if (corners.isNullOrEmpty()) {
                     null
                 } else {
-                    LatLon(corners.sumOf { it.lat } / corners.size, corners.sumOf { it.lon } / corners.size)
+                    // The mean of the longitudes after moving them near the first corner, so corners either side of the
+                    // antimeridian (179.9 and -179.9) average to 180, not to 0 on the far side of the planet; then back
+                    // onto the map.
+                    val near = corners.first().lon
+                    val lon = corners.sumOf { GeoMath.unwrapLongitude(it.lon, near) } / corners.size
+                    LatLon(corners.sumOf { it.lat } / corners.size, if (lon > 180.0) lon - 360.0 else if (lon < -180.0) lon + 360.0 else lon)
                 }
             }
         }

@@ -82,6 +82,28 @@ class GeofenceModelTest {
         assertNull(Geofence(id = "n", name = "None", type = GeofenceType.CIRCLE).labelPoint)
     }
 
+    @Test fun a_polygons_name_stays_with_the_zone_across_the_antimeridian() {
+        // Corners at 179.9 and -179.9 averaged to 0, the far side of the planet, while the camera framed the zone.
+        val box = Geofence(
+            id = "d", name = "Date line", type = GeofenceType.POLYGON,
+            points = listOf(LatLon(0.0, 179.9), LatLon(0.0, -179.9), LatLon(0.1, -179.9), LatLon(0.1, 179.9)),
+        )
+        val at = box.labelPoint!!
+        assertTrue("on the antimeridian, not on the far side of the planet: ${at.lon}", kotlin.math.abs(at.lon) > 179.9)
+        assertTrue("and a longitude that exists: ${at.lon}", at.lon in -180.0..180.0)
+        assertEquals(0.05, at.lat, 1e-12)
+    }
+
+    @Test fun a_polygons_name_longitude_is_on_the_map_whichever_side_the_corners_are() {
+        val west = Geofence(
+            id = "w", name = "W", type = GeofenceType.POLYGON,
+            points = listOf(LatLon(10.0, -175.0), LatLon(10.0, 178.0), LatLon(11.0, 178.0), LatLon(11.0, -175.0)),
+        )
+        val at = west.labelPoint!!
+        assertTrue("${at.lon}", at.lon in -180.0..180.0)
+        assertTrue("near 181.5 degrees east, which is -178.5: ${at.lon}", kotlin.math.abs(at.lon - (-178.5)) < 1e-9)
+    }
+
     @Test fun a_circle_with_no_size_has_no_edge_so_its_name_goes_on_its_centre() {
         val at = circle().copy(radiusMeters = 0.0).labelPoint!!
         assertEquals(47.6588, at.lat, 0.0)

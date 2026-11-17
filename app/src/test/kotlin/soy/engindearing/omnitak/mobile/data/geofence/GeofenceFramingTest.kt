@@ -97,6 +97,14 @@ class GeofenceFramingTest {
         assertEquals(180.0, bounds.east, 0.0)
     }
 
+    @Test fun a_circle_that_holds_the_south_pole_spans_every_longitude() {
+        val bounds = checkNotNull(GeofenceFraming.boundsOf(circle(50_000.0, LatLon(-89.9, 10.0))))
+        assertEquals(-90.0, bounds.south, 0.0)
+        assertEquals(-180.0, bounds.west, 0.0)
+        assertEquals(180.0, bounds.east, 0.0)
+        assertTrue("its north edge is a radius from the pole: ${bounds.north}", bounds.north > -89.6 && bounds.north < -89.4)
+    }
+
     @Test fun a_circle_across_the_antimeridian_is_framed_around_the_antimeridian_not_the_far_side_of_the_world() {
         val zone = circle(5_000.0, LatLon(0.0, 179.99))
         val bounds = checkNotNull(GeofenceFraming.boundsOf(zone))
