@@ -31,7 +31,7 @@
   // Injected at WebView load time by CesiumMapView from BuildConfig.CESIUM_ION_TOKEN
   // (fed by gitignored local.properties) — never commit a literal token here.
   Cesium.Ion.defaultAccessToken='__CESIUM_ION_TOKEN__';
-  const _state={ready:false,viewer:null,entities:new Map(),drawings:new Map(),billboardCache:new Map(),northLocked:false,northEnforcer:null,scaleAnchor:null,scaleFrame:0};
+  const _state={ready:false,viewer:null,entities:new Map(),drawings:new Map(),billboardCache:new Map(),northLocked:false,northEnforcer:null,scaleAnchor:null,scaleFrame:0,scalePosted:null,scaleSoon:0};
   function _drawColor(hex,a){try{const c=Cesium.Color.fromCssColorString(hex||'#4ADE80');return a!==undefined?c.withAlpha(a):c}catch(e){return Cesium.Color.CYAN}}
   function _havDist(a,b){const R=6371000,lat1=a[1]*Math.PI/180,lat2=b[1]*Math.PI/180,dLat=(b[1]-a[1])*Math.PI/180,dLon=(b[0]-a[0])*Math.PI/180;const s=Math.sin(dLat/2)**2+Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2)**2;return 2*R*Math.asin(Math.min(1,Math.sqrt(s)))}
   function _fitViewport(){
@@ -99,17 +99,32 @@
   function _cartoFor(viewer,pos){let c=viewer.scene.pickPosition(pos);if(!Cesium.defined(c))c=viewer.camera.pickEllipsoid(pos,viewer.scene.globe.ellipsoid);if(!Cesium.defined(c))return null;const cc=Cesium.Cartographic.fromCartesian(c);return{lat:Cesium.Math.toDegrees(cc.latitude),lon:Cesium.Math.toDegrees(cc.longitude),hae:cc.height}}
   function _zoomFromHeight(h,latRad){const c=Math.max(Math.cos(latRad||0),0.01),mpp=(h*256)/1000.0,z=Math.log2(40075017*c/Math.max(mpp,1));return Math.max(0,Math.min(22,z))}
   // The scale bar: ground metres per CSS px (= dp) along the bar's own row. The row is where native says the bar is
-  // (setScaleAnchor, CSS px from the page's top-left; the middle of the screen until it does). Two globe points, 50 px
-  // left and right of the anchor on that row, through the page's own pick helper; the ground distance between them
-  // by EllipsoidGeodesic, divided by the 100 px between them. A tilted globe is nearer at the bottom of the screen
-  // than in the middle, so the bar must measure its own row. null when either point is not on the globe (sky above the
-  // horizon, off the globe). Same name and maths as the iOS page.
-  function _scaleMpp(v){try{const c=v.scene.canvas,a=_state.scaleAnchor,x=a?a.x:c.clientWidth/2,y=a?a.y:c.clientHeight/2;
-    const l=_cartoFor(v,new Cesium.Cartesian2(x-50,y)),r=_cartoFor(v,new Cesium.Cartesian2(x+50,y));if(!l||!r)return null;
-    const d=new Cesium.EllipsoidGeodesic(Cesium.Cartographic.fromDegrees(l.lon,l.lat),Cesium.Cartographic.fromDegrees(r.lon,r.lat)).surfaceDistance;
-    return(isFinite(d)&&d>0)?d/100:null}catch(e){return null}}
+  // (setScaleAnchor, CSS px from the page's top-left; the middle of the screen until it does). Five globe points on
+  // that row, the anchor and 25 and 50 px either side, through the page's own pick helper (each clamped to the canvas).
+  // Each of the four neighbouring pairs is the ground distance between its points (EllipsoidGeodesic) divided by the
+  // pixels between them, and the scale is the MEDIAN of those four, so one point on a roof or a tree cannot move the
+  // bar. A pair needs both points on the globe (sky above the horizon, off the globe: no point); with fewer than
+  // three usable pairs there is no scale. A tilted globe is nearer at the bottom of the screen than in the middle, so
+  // the bar must measure its own row. Same names and maths as the iOS page.
+  const _SCALE_OFFSETS=[-50,-25,0,25,50];
+  function _median(a){if(!a.length)return null;const s=a.slice().sort(function(p,q){return p-q}),m=s.length>>1;return s.length%2?s[m]:(s[m-1]+s[m])/2}
+  function _scaleFromPairs(pairs){const m=[];for(const p of pairs){if(p&&isFinite(p.d)&&p.d>0&&p.px>0)m.push(p.d/p.px)}return m.length<3?null:_median(m)}
+  function _scaleMpp(v){try{const c=v.scene.canvas,a=_state.scaleAnchor,x0=a?a.x:c.clientWidth/2,y=a?a.y:c.clientHeight/2;
+    const xs=_SCALE_OFFSETS.map(function(o){return Math.min(Math.max(x0+o,0),c.clientWidth)});
+    const ps=xs.map(function(x){const p=_cartoFor(v,new Cesium.Cartesian2(x,y));return p?Cesium.Cartographic.fromDegrees(p.lon,p.lat):null});
+    const pairs=[];for(let i=0;i<4;i++)pairs.push(ps[i]&&ps[i+1]?{d:new Cesium.EllipsoidGeodesic(ps[i],ps[i+1]).surfaceDistance,px:xs[i+1]-xs[i]}:null);
+    return _scaleFromPairs(pairs)}catch(e){return null}}
+  // The scale is measured on a camera move, but the ground under the bar can also change while the camera is still: the
+  // photoreal tiles for the view arrive after the camera stopped, and until they do the picks land on the bare terrain
+  // or ellipsoid, far from the real surface. So it is measured again when the tileset reports the view loaded and once a
+  // second, and posted (as its own small event, not a camera event: it carries no position) only when it differs from
+  // the last value posted, by a camera event or by this, by more than 1 percent, or appears or disappears.
+  function _scaleMoved(prev,next){if(prev==null||next==null)return(prev==null)!==(next==null);return Math.abs(next-prev)/prev>0.01}
+  function _scaleRefresh(v){const m=_scaleMpp(v);if(!_scaleMoved(_state.scalePosted,m))return;_state.scalePosted=m;_postMapEvent({event:'scalechanged',mpp:m})}
+  function _scaleSoon(v){if(_state.scaleSoon)return;_state.scaleSoon=setTimeout(function(){_state.scaleSoon=0;_scaleRefresh(v)},0)}
   function _postCameraChanged(v){const cam=v.camera,carto=cam.positionCartographic;if(!carto)return;
-    _postMapEvent({event:'camerachanged',lat:Cesium.Math.toDegrees(carto.latitude),lon:Cesium.Math.toDegrees(carto.longitude),height:carto.height,heading:Cesium.Math.toDegrees(cam.heading),pitch:Cesium.Math.toDegrees(cam.pitch),zoom:_zoomFromHeight(carto.height,carto.latitude),mpp:_scaleMpp(v)})}
+    const mpp=_scaleMpp(v);_state.scalePosted=mpp;
+    _postMapEvent({event:'camerachanged',lat:Cesium.Math.toDegrees(carto.latitude),lon:Cesium.Math.toDegrees(carto.longitude),height:carto.height,heading:Cesium.Math.toDegrees(cam.heading),pitch:Cesium.Math.toDegrees(cam.pitch),zoom:_zoomFromHeight(carto.height,carto.latitude),mpp:mpp})}
   // Toolbar zoom — move the camera along its view axis by the change in
   // height (factor<1 zooms in, >1 zooms out). Mirrors the iOS zoomBy so the
   // +/- buttons drive the globe the same on both platforms.
@@ -278,7 +293,8 @@
     _fitViewport();
     const v=new Cesium.Viewer('cesiumContainer',{terrain:Cesium.Terrain.fromWorldTerrain(),animation:false,timeline:false,baseLayerPicker:false,geocoder:false,homeButton:false,sceneModePicker:false,navigationHelpButton:false,fullscreenButton:false,infoBox:false,selectionIndicator:false,creditContainer:document.createElement('div')});
     v.scene.skyAtmosphere.show=true;v.scene.globe.enableLighting=true;_state.viewer=v;_fitViewport();_installInputHandlers(v);
-    try{const t=await Cesium.createGooglePhotorealistic3DTileset();v.scene.primitives.add(t);}catch(e){console.warn('Photoreal unavailable:',e);}
+    setInterval(function(){if(!document.hidden)_scaleRefresh(v)},1000);
+    try{const t=await Cesium.createGooglePhotorealistic3DTileset();v.scene.primitives.add(t);t.allTilesLoaded.addEventListener(function(){_scaleSoon(v)});}catch(e){console.warn('Photoreal unavailable:',e);}
     v.camera.flyTo({destination:Cesium.Cartesian3.fromDegrees(0.0,0.0,20000000),orientation:{heading:0,pitch:Cesium.Math.toRadians(-90),roll:0},duration:1.5,complete:_hideLoading});
     _signalReady();
   })().catch(e=>{const el=document.getElementById('loading');if(el)el.innerHTML='<div class="label">3D scene failed: '+(e&&e.message?e.message:'unknown')+'</div>';});
