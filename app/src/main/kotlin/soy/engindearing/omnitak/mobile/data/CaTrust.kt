@@ -1,8 +1,12 @@
 package soy.engindearing.omnitak.mobile.data
 
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.security.InvalidKeyException
 import java.security.KeyStore
 import java.security.MessageDigest
+import java.security.SignatureException
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.util.Base64
@@ -30,10 +34,8 @@ object CaTrust {
     private const val PEM_BEGIN = "-----BEGIN CERTIFICATE-----"
     private const val PEM_END = "-----END CERTIFICATE-----"
 
-    // The CN of an RFC 2253 subject, as X500Principal.name prints it: a value
-    // runs to the next unescaped ',' or '+', and a backslash escapes one char.
-    private val COMMON_NAME = Regex("""(?:^|[,+])CN=((?:\\.|[^,+\\])+)""")
-    private val ESCAPED_CHAR = Regex("""\\(.)""")
+    /** A picked CA file is read up to this size: a CA certificate, even a long chain of them, is a few KB. */
+    const val MAX_CA_FILE_BYTES = 1024 * 1024
 
     /**
      * Serialize a CA chain to a single PEM file — one CERTIFICATE block
@@ -99,41 +101,75 @@ object CaTrust {
         java.security.MessageDigest.getInstance("SHA-256").digest(cert.encoded)
             .joinToString(":") { "%02X".format(it) }
 
+    private var builtIn: List<X509Certificate>? = null
+
     /**
      * The CAs built into the phone, which it already trusts for public
      * websites: the `system:` entries of the Android CA store, never the
-     * `user:` ones a person added. Read once, on first use. Empty when the
-     * store cannot be read, which is always so in JVM unit tests.
+     * `user:` ones a person added. Null when the store cannot be read or has
+     * no `system:` entry (always so in JVM unit tests): the public-CA check
+     * cannot be done then. Only a successful read is kept, so a failed one is
+     * tried again on the next call. Reads files: call it off the main thread.
      */
-    val builtInCas: List<X509Certificate> by lazy {
-        runCatching {
+    @Synchronized
+    fun builtInCas(): List<X509Certificate>? {
+        builtIn?.let { return it }
+        val loaded = runCatching {
             val store = KeyStore.getInstance("AndroidCAStore").apply { load(null) }
             store.aliases().toList()
                 .filter { it.startsWith("system:") }
                 .mapNotNull { store.getCertificate(it) as? X509Certificate }
-        }.getOrDefault(emptyList())
+        }.getOrNull()?.takeIf { it.isNotEmpty() }
+        if (loaded != null) builtIn = loaded
+        return loaded
+    }
+
+    /**
+     * [evaluateManualPin] for a picked file: at most [MAX_CA_FILE_BYTES] are
+     * read, and a bigger file is [ManualPinResult.TooLarge].
+     */
+    fun evaluateManualPin(input: InputStream, publicAnchors: List<X509Certificate>?): ManualPinResult {
+        val bytes = readCapped(input) ?: return ManualPinResult.TooLarge
+        return evaluateManualPin(bytes, publicAnchors)
     }
 
     /**
      * Decide what the Add Server screen does with a CA file the person picked
      * for manual pinning. [publicAnchors] are the CAs the phone already trusts
      * publicly ([builtInCas]); they come in as a parameter so this stays pure.
+     * Null means they could not be read: a file with a CA in it is then
+     * [ManualPinResult.CannotCheck], never accepted unchecked.
      *
      * A pinned CA replaces the host name check (see `TakTls`), so a CA the
      * phone trusts publicly must never be pinned: every certificate that CA
      * signs, for any name, would then pass for this server. One public CA among
-     * the CAs kept from the file refuses the whole file.
+     * the CAs kept from the file refuses the whole file. A chain of CAs under a
+     * built-in one always has a CA that is built in or was issued directly by
+     * one, so it is enough to look at each CA of the file on its own.
      */
-    fun evaluateManualPin(bytes: ByteArray, publicAnchors: List<X509Certificate>): ManualPinResult {
+    fun evaluateManualPin(bytes: ByteArray, publicAnchors: List<X509Certificate>?): ManualPinResult {
         val cas = parseCaFile(bytes).distinctBy { sha256Fingerprint(it) }
         if (cas.isEmpty()) return ManualPinResult.NoCa
-        val firstPublic = publicCas(cas, publicAnchors).firstOrNull()
+        if (publicAnchors == null) return ManualPinResult.CannotCheck
+        val firstPublic = cas.firstOrNull { ca -> publicAnchors.any { isSameCa(ca, it) || isIssuedBy(ca, it) } }
         if (firstPublic != null) return ManualPinResult.PublicCa(commonName(firstPublic))
         return ManualPinResult.Ok(
             cas = cas,
             fileName = manualPinFileName(cas),
             fingerprints = cas.map { CaFingerprint(commonName(it), sha256Fingerprint(it)) },
         )
+    }
+
+    /** All of [input], or null when it holds more than [MAX_CA_FILE_BYTES]; never reads past that. */
+    private fun readCapped(input: InputStream): ByteArray? {
+        val out = ByteArrayOutputStream()
+        val chunk = ByteArray(8 * 1024)
+        while (true) {
+            val n = input.read(chunk)
+            if (n < 0) return out.toByteArray()
+            if (out.size() + n > MAX_CA_FILE_BYTES) return null
+            out.write(chunk, 0, n)
+        }
     }
 
     /**
@@ -147,40 +183,32 @@ object CaTrust {
         return if (more == 0) first.commonName else "${first.commonName} and $more more"
     }
 
-    /**
-     * The certificates of [cas] that the phone already trusts publicly, in the
-     * order of [cas]. A certificate is public when it is (a) a CA from
-     * [anchors], (b) issued by one, or (c) issued by another certificate of
-     * [cas] that is public. (c) repeats until nothing changes, so a chain of
-     * intermediates under a built-in CA is public all the way down, whatever
-     * order the file lists it in.
-     */
-    private fun publicCas(cas: List<X509Certificate>, anchors: List<X509Certificate>): List<X509Certificate> {
-        val isPublic = BooleanArray(cas.size) { i ->
-            anchors.any { isSameCa(cas[i], it) || isIssuedBy(cas[i], it) }
-        }
-        var changed = true
-        while (changed) {
-            changed = false
-            for (i in cas.indices) {
-                if (!isPublic[i] && cas.indices.any { j -> isPublic[j] && isIssuedBy(cas[i], cas[j]) }) {
-                    isPublic[i] = true
-                    changed = true
-                }
-            }
-        }
-        return cas.filterIndexed { i, _ -> isPublic[i] }
-    }
-
-    /** Same subject and same public key: the very same CA, however it is encoded. */
+    /** Same subject and same public key: the very same CA, however it is encoded or cross-signed. */
     private fun isSameCa(cert: X509Certificate, other: X509Certificate): Boolean =
         cert.subjectX500Principal == other.subjectX500Principal &&
             cert.publicKey.encoded.contentEquals(other.publicKey.encoded)
 
-    /** [issuer] is named as the issuer of [cert] and its key checks the signature. */
-    private fun isIssuedBy(cert: X509Certificate, issuer: X509Certificate): Boolean =
-        cert.issuerX500Principal == issuer.subjectX500Principal &&
-            runCatching { cert.verify(issuer.publicKey) }.isSuccess
+    /**
+     * [issuer] is named as the issuer of [cert] and its key checks the
+     * signature. A signature that does not match (or a key of the wrong kind)
+     * means another CA used the name. A check that cannot be made at all, an
+     * algorithm this phone does not support for instance, counts as issued: a
+     * private CA refused by mistake costs a retry by QR code, a public one let
+     * through is the hole this check closes.
+     */
+    private fun isIssuedBy(cert: X509Certificate, issuer: X509Certificate): Boolean {
+        if (cert.issuerX500Principal != issuer.subjectX500Principal) return false
+        return try {
+            cert.verify(issuer.publicKey)
+            true
+        } catch (e: SignatureException) {
+            false
+        } catch (e: InvalidKeyException) {
+            false
+        } catch (e: Exception) {
+            true
+        }
+    }
 
     /**
      * Vault file name for a set of pinned CAs: `ca-manual-`, the first 16 hex
@@ -206,8 +234,46 @@ object CaTrust {
      */
     private fun commonName(cert: X509Certificate): String {
         val subject = cert.subjectX500Principal.name
-        val escaped = COMMON_NAME.find(subject)?.groupValues?.get(1) ?: return subject
-        return ESCAPED_CHAR.replace(escaped) { it.groupValues[1] }
+        return commonNameIn(subject)?.takeIf { it.isNotBlank() } ?: subject
+    }
+
+    /**
+     * The value of the first CN attribute in the RFC 2253 name [name], or null
+     * when it has none. Attributes end at a ',' '+' or ';' that is neither
+     * escaped with a backslash nor inside quotes, so a "CN=" sitting inside the
+     * value of another attribute is never taken for one. (The JDK prints '='
+     * inside a value escaped and Android does not: both read the same here.)
+     */
+    internal fun commonNameIn(name: String): String? {
+        val type = StringBuilder()
+        val value = StringBuilder()
+        var inValue = false
+        var quoted = false
+        var escaped = false
+
+        fun isCommonName() = type.toString().trim().equals("CN", ignoreCase = true)
+
+        for (c in name) {
+            val target = if (inValue) value else type
+            when {
+                escaped -> {
+                    target.append(c)
+                    escaped = false
+                }
+                c == '\\' -> escaped = true
+                c == '"' -> quoted = !quoted
+                quoted -> target.append(c)
+                c == '=' && !inValue -> inValue = true
+                c == ',' || c == '+' || c == ';' -> {
+                    if (isCommonName()) return value.toString()
+                    type.setLength(0)
+                    value.setLength(0)
+                    inValue = false
+                }
+                else -> target.append(c)
+            }
+        }
+        return if (isCommonName()) value.toString() else null
     }
 
     /**
@@ -241,6 +307,12 @@ object CaTrust {
 sealed interface ManualPinResult {
     /** The file holds no CA certificate. */
     data object NoCa : ManualPinResult
+
+    /** The file is bigger than [CaTrust.MAX_CA_FILE_BYTES], so it cannot be a CA certificate. */
+    data object TooLarge : ManualPinResult
+
+    /** The phone's own CA list could not be read, so the file cannot be checked for a public CA. */
+    data object CannotCheck : ManualPinResult
 
     /** The file holds a CA the phone already trusts publicly, named [commonName]. */
     data class PublicCa(val commonName: String) : ManualPinResult

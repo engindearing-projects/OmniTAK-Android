@@ -50,6 +50,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,10 +59,14 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import soy.engindearing.omnitak.mobile.OmniTAKApp
 import soy.engindearing.omnitak.mobile.data.CaFingerprint
 import soy.engindearing.omnitak.mobile.data.CaTrust
+import soy.engindearing.omnitak.mobile.data.CertVault
 import soy.engindearing.omnitak.mobile.data.ConnectionProtocol
 import soy.engindearing.omnitak.mobile.data.ManualPinResult
 import soy.engindearing.omnitak.mobile.data.TAKServer
@@ -95,6 +100,10 @@ fun AddServerScreen(onDone: () -> Unit) {
     var caName by remember { mutableStateOf<String?>(null) }
     var caFingerprints by remember { mutableStateOf<List<CaFingerprint>>(emptyList()) }
     var caError by remember { mutableStateOf<String?>(null) }
+    // A picked CA file is read and checked off the main thread. Until that is done
+    // the CA buttons and Save are off, so a server cannot be saved before it is applied.
+    var caChecking by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     // BUG-A — visibility toggles so users can confirm what they typed.
     // Default to masked (dots) on both password fields.
     var passwordVisible by remember { mutableStateOf(false) }
@@ -118,27 +127,40 @@ fun AddServerScreen(onDone: () -> Unit) {
         contract = ActivityResultContracts.OpenDocument(),
     ) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult
-        val bytes = runCatching {
-            context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-        }.getOrNull()
-        val pin = bytes?.let { CaTrust.evaluateManualPin(it, CaTrust.builtInCas) } ?: ManualPinResult.NoCa
-        when (pin) {
-            ManualPinResult.NoCa -> {
-                caError = "No CA certificate found in that file. Pick the CA (.pem/.crt) your admin gave you."
-            }
-            is ManualPinResult.PublicCa -> {
-                caError = "That is a public CA (${pin.commonName}). Leave this empty. " +
-                    "The app already checks public certificates and the server's name."
-            }
-            is ManualPinResult.Ok -> {
-                val saved = certVault.importBytes(pin.fileName, CaTrust.encodePemChain(pin.cas))
-                if (saved != null) {
-                    caName = saved
-                    caFingerprints = pin.fingerprints
-                    caError = null
-                } else {
-                    caError = "Couldn't save that CA certificate."
+        caChecking = true
+        scope.launch {
+            try {
+                val pick = withContext(Dispatchers.IO) { checkCaPick(context, certVault, uri) }
+                // A file that is not used leaves the earlier choice as it was, and says so.
+                when (val pin = pick.result) {
+                    ManualPinResult.NoCa -> {
+                        caError = "That file was not used. No CA certificate was found in it. " +
+                            "Pick the CA (.pem/.crt) your admin gave you."
+                    }
+                    ManualPinResult.TooLarge -> {
+                        caError = "That file is too large to be a CA certificate."
+                    }
+                    ManualPinResult.CannotCheck -> {
+                        caError = "The app could not read this phone's own CA list, so it cannot check " +
+                            "this file. Add the server by QR code or enrollment instead."
+                    }
+                    is ManualPinResult.PublicCa -> {
+                        caError = "That file was not used. It holds a public CA (${pin.commonName}). " +
+                            "Pick a file with only your server's own CA. " +
+                            "If the server has a public certificate, leave this empty."
+                    }
+                    is ManualPinResult.Ok -> {
+                        if (pick.savedName != null) {
+                            caName = pick.savedName
+                            caFingerprints = pin.fingerprints
+                            caError = null
+                        } else {
+                            caError = "Couldn't save that CA certificate."
+                        }
+                    }
                 }
+            } finally {
+                caChecking = false
             }
         }
     }
@@ -211,7 +233,7 @@ fun AddServerScreen(onDone: () -> Unit) {
                         )
                         onDone()
                     },
-                    enabled = canSave,
+                    enabled = canSave && !caChecking,
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = TacticalAccent,
@@ -445,13 +467,13 @@ fun AddServerScreen(onDone: () -> Unit) {
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            if (caName != null) {
-                                CaTrust.manualPinLabel(caFingerprints)
-                            } else {
-                                "No CA selected (system trust)"
+                            when {
+                                caChecking -> "Checking..."
+                                caName != null -> CaTrust.manualPinLabel(caFingerprints)
+                                else -> "No CA selected (system trust)"
                             },
                             style = MaterialTheme.typography.bodyMedium,
-                            color = if (caName != null) {
+                            color = if (caName != null && !caChecking) {
                                 TacticalAccent
                             } else {
                                 MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
@@ -466,6 +488,7 @@ fun AddServerScreen(onDone: () -> Unit) {
                                 caFingerprints = emptyList()
                                 caError = null
                             },
+                            enabled = !caChecking,
                         ) {
                             Text("Remove")
                         }
@@ -475,6 +498,7 @@ fun AddServerScreen(onDone: () -> Unit) {
                             caError = null
                             pickCaLauncher.launch(arrayOf("*/*"))
                         },
+                        enabled = !caChecking,
                     ) {
                         Text(if (caName == null) "Choose CA" else "Replace")
                     }
@@ -561,6 +585,25 @@ fun AddServerScreen(onDone: () -> Unit) {
             Spacer(Modifier.height(8.dp))
         }
     }
+}
+
+/** A picked CA file once checked: what it turned out to be, and the vault name it was saved under when it can be pinned. */
+private class CaPick(val result: ManualPinResult, val savedName: String?)
+
+/** Read, check and save a picked CA file. It does file IO: call it off the main thread. */
+private fun checkCaPick(context: Context, certVault: CertVault, uri: Uri): CaPick {
+    val result = runCatching {
+        context.contentResolver.openInputStream(uri)?.use { CaTrust.evaluateManualPin(it, CaTrust.builtInCas()) }
+    }.getOrNull() ?: ManualPinResult.NoCa
+    if (result !is ManualPinResult.Ok) return CaPick(result, null)
+    val pem = CaTrust.encodePemChain(result.cas)
+    // Two servers on one CA share one file. Leave an identical one alone: importBytes deletes it when a write fails.
+    val saved = if (certVault.read(result.fileName)?.contentEquals(pem) == true) {
+        result.fileName
+    } else {
+        certVault.importBytes(result.fileName, pem)
+    }
+    return CaPick(result, saved)
 }
 
 /**

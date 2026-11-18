@@ -1,11 +1,14 @@
 package soy.engindearing.omnitak.mobile.data
 
+import org.bouncycastle.asn1.ASN1ObjectIdentifier
 import org.bouncycastle.asn1.x500.X500Name
+import org.bouncycastle.asn1.x509.AlgorithmIdentifier
 import org.bouncycastle.asn1.x509.BasicConstraints
 import org.bouncycastle.asn1.x509.Extension
 import org.bouncycastle.cert.X509v3CertificateBuilder
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder
+import org.bouncycastle.operator.ContentSigner
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -17,6 +20,10 @@ import org.junit.Assert.fail
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.io.OutputStream
 import java.math.BigInteger
 import java.security.KeyPair
 import java.security.KeyPairGenerator
@@ -246,19 +253,39 @@ class CaTrustTest {
         assertEquals(ManualPinResult.PublicCa("Public Intermediate"), result)
     }
 
-    @Test fun evaluateManualPin_refuses_a_ca_issued_by_a_public_ca_in_the_same_file() {
+    @Test fun evaluateManualPin_refuses_a_chain_of_cas_under_a_built_in_ca() {
         val root = makeSelfSignedCa("CN=Public Root")
         val middle = makeIntermediateCa("CN=Public Middle", issuedBy = root)
         val lower = makeIntermediateCa("CN=Public Lower", issuedBy = middle)
         val bottom = makeIntermediateCa("CN=Public Bottom", issuedBy = lower)
 
-        // Deepest first, and only the middle CA was issued by a built-in one. The others are public through
-        // the CAs above them in the file, which takes more than one look over the file when it lists them like this.
+        // Deepest first. Only the middle CA was issued by a built-in one, and it is the one that is named.
         val result = evaluate(listOf(bottom.cert, lower.cert, middle.cert), anchors = listOf(root.cert))
 
-        assertEquals(ManualPinResult.PublicCa("Public Bottom"), result)
-        // Without the middle CA nothing names the lower CA's issuer, so the middle CA is what made the rest public.
+        assertEquals(ManualPinResult.PublicCa("Public Middle"), result)
+        // Without the middle CA nothing names the lower CA's issuer, so it is the middle CA that made the file public.
         assertTrue(evaluate(listOf(bottom.cert, lower.cert), anchors = listOf(root.cert)) is ManualPinResult.Ok)
+    }
+
+    @Test fun evaluateManualPin_refuses_a_cross_signed_copy_of_a_built_in_ca() {
+        val builtIn = makeSelfSignedCa("CN=Public Root")
+        val otherCa = makeSelfSignedCa("CN=Some Other CA")
+        // The same subject and key as the built-in CA, signed by a CA that is neither built in nor in the file.
+        val crossSigned = makeCrossSignedCopy(builtIn, issuedBy = otherCa)
+
+        val result = evaluate(listOf(crossSigned), anchors = listOf(builtIn.cert))
+
+        assertEquals(ManualPinResult.PublicCa("Public Root"), result)
+    }
+
+    @Test fun evaluateManualPin_refuses_a_ca_whose_signature_cannot_be_checked() {
+        val root = makeSelfSignedCa("CN=Public Root")
+        // Named as issued by the built-in CA, signed with an algorithm nothing here knows.
+        val odd = makeCaWithUnknownSignatureAlgorithm("CN=Odd CA", issuerDn = "CN=Public Root")
+
+        val result = evaluate(listOf(odd), anchors = listOf(root.cert))
+
+        assertEquals(ManualPinResult.PublicCa("Odd CA"), result)
     }
 
     @Test fun evaluateManualPin_accepts_a_private_ca_that_only_shares_a_built_in_subject() {
@@ -268,6 +295,50 @@ class CaTrustTest {
         val result = evaluate(listOf(lookalike.cert), anchors = listOf(builtIn.cert))
 
         assertTrue("got $result", result is ManualPinResult.Ok)
+    }
+
+    @Test fun evaluateManualPin_accepts_a_private_ca_of_another_key_type_with_a_built_in_subject() {
+        val builtIn = makeSelfSignedCa("CN=Public Root")
+        val lookalike = makeSelfSignedEcCa("CN=Public Root")
+
+        val result = evaluate(listOf(lookalike.cert), anchors = listOf(builtIn.cert))
+
+        assertTrue("got $result", result is ManualPinResult.Ok)
+    }
+
+    @Test fun evaluateManualPin_does_not_accept_a_file_it_cannot_check() {
+        val own = makeSelfSignedCa("CN=Own CA")
+
+        assertEquals(ManualPinResult.CannotCheck, CaTrust.evaluateManualPin(CaTrust.encodePemChain(listOf(own.cert)), null))
+        // With no CA in the file there is nothing to check, and that is what is said.
+        assertEquals(ManualPinResult.NoCa, CaTrust.evaluateManualPin("not a certificate".toByteArray(), null))
+    }
+
+    @Test fun evaluateManualPin_reads_a_ca_from_a_stream() {
+        val own = makeSelfSignedCa("CN=Own CA")
+
+        val ok = okOf(CaTrust.evaluateManualPin(ByteArrayInputStream(CaTrust.encodePemChain(listOf(own.cert))), emptyList()))
+
+        assertEquals("Own CA", ok.fingerprints.single().commonName)
+    }
+
+    @Test fun evaluateManualPin_takes_a_file_up_to_the_size_cap_and_refuses_a_bigger_one() {
+        val atCap = ByteArrayInputStream(ByteArray(CaTrust.MAX_CA_FILE_BYTES))
+        val pastCap = ByteArrayInputStream(ByteArray(CaTrust.MAX_CA_FILE_BYTES + 1))
+
+        assertEquals(ManualPinResult.NoCa, CaTrust.evaluateManualPin(atCap, emptyList()))
+        assertEquals(ManualPinResult.TooLarge, CaTrust.evaluateManualPin(pastCap, emptyList()))
+    }
+
+    @Test fun evaluateManualPin_stops_reading_a_huge_file_at_the_size_cap() {
+        var served = 0
+        val huge = object : InputStream() {
+            override fun read(): Int = if (served < 10_000_000) { served++; 0 } else -1
+        }
+
+        assertEquals(ManualPinResult.TooLarge, CaTrust.evaluateManualPin(huge, emptyList()))
+
+        assertTrue("read $served bytes", served <= CaTrust.MAX_CA_FILE_BYTES + 8 * 1024)
     }
 
     @Test fun evaluateManualPin_refuses_the_whole_file_when_one_ca_is_public() {
@@ -344,9 +415,39 @@ class CaTrustTest {
         assertEquals(ca.cert.subjectX500Principal.name, ok.fingerprints.single().commonName)
     }
 
-    @Test fun builtInCas_is_empty_where_the_android_store_does_not_exist() {
-        // Only a phone has "AndroidCAStore". On the JVM the lookup throws, and the list is empty instead.
-        assertEquals(emptyList<X509Certificate>(), CaTrust.builtInCas)
+    @Test fun commonNameIn_does_not_take_a_CN_from_inside_another_value() {
+        // Android prints '=' in a value as it is, the JDK escapes it: both read as "Real".
+        assertEquals("Real", CaTrust.commonNameIn("O=Acme\\,CN=Evil,CN=Real"))
+        assertEquals("Real", CaTrust.commonNameIn("CN=Real,O=Acme\\,CN=Evil"))
+        assertEquals("Real", CaTrust.commonNameIn("CN=Real,O=Acme\\,CN\\=Evil"))
+    }
+
+    @Test fun commonNameIn_reads_escaped_and_quoted_values() {
+        assertEquals("Acme, Inc Root", CaTrust.commonNameIn("CN=Acme\\, Inc Root,O=Acme,C=US"))
+        assertEquals("Acme, Inc", CaTrust.commonNameIn("O=X,CN=\"Acme, Inc\""))
+        assertEquals("a+b;c", CaTrust.commonNameIn("CN=a\\+b\\;c"))
+        assertEquals("back\\slash", CaTrust.commonNameIn("CN=back\\\\slash"))
+    }
+
+    @Test fun commonNameIn_ends_a_value_at_a_multi_valued_separator() {
+        assertEquals("A", CaTrust.commonNameIn("CN=A+UID=1,O=X"))
+        assertEquals("A", CaTrust.commonNameIn("UID=1+CN=A,O=X"))
+    }
+
+    @Test fun commonNameIn_takes_the_first_of_several_and_ignores_the_case_of_the_type() {
+        assertEquals("First", CaTrust.commonNameIn("CN=First,CN=Second"))
+        assertEquals("lower", CaTrust.commonNameIn("O=X,cn=lower"))
+    }
+
+    @Test fun commonNameIn_is_null_without_a_CN() {
+        assertNull(CaTrust.commonNameIn("O=Plain Org,C=US"))
+        assertNull(CaTrust.commonNameIn("O=Not a CN\\,XCN=x"))
+        assertNull(CaTrust.commonNameIn(""))
+    }
+
+    @Test fun builtInCas_is_null_where_the_android_store_does_not_exist() {
+        // Only a phone has "AndroidCAStore". On the JVM the lookup throws: no list, so no public-CA check to trust.
+        assertNull(CaTrust.builtInCas())
     }
 
     private fun makeSelfSignedCa(dn: String): IssuedCert {
@@ -397,6 +498,54 @@ class CaTrustTest {
         val signer = JcaContentSignerBuilder("SHA256WithRSA").build(issuedBy.keyPair.private)
         val holder = builder.build(signer)
         return IssuedCert(JcaX509CertificateConverter().getCertificate(holder), kp)
+    }
+
+    /** A copy of [original]'s CA (same subject, same key) that [issuedBy] signed, the way a root is cross-signed. */
+    private fun makeCrossSignedCopy(original: IssuedCert, issuedBy: IssuedCert): X509Certificate {
+        val now = Date()
+        val builder = JcaX509v3CertificateBuilder(
+            issuedBy.cert,
+            BigInteger.valueOf(System.nanoTime() + 3),
+            now, Date(now.time + 365L * 24 * 60 * 60 * 1000),
+            original.cert.subjectX500Principal,
+            original.keyPair.public,
+        ).addExtension(Extension.basicConstraints, true, BasicConstraints(true))
+        val signer = JcaContentSignerBuilder("SHA256WithRSA").build(issuedBy.keyPair.private)
+        return JcaX509CertificateConverter().getCertificate(builder.build(signer))
+    }
+
+    /** A CA certificate whose signature carries an algorithm identifier nothing knows, so it cannot be checked. */
+    private fun makeCaWithUnknownSignatureAlgorithm(subjectDn: String, issuerDn: String): X509Certificate {
+        val signer = object : ContentSigner {
+            private val out = ByteArrayOutputStream()
+            override fun getAlgorithmIdentifier() = AlgorithmIdentifier(ASN1ObjectIdentifier("1.2.3.4.5"))
+            override fun getOutputStream(): OutputStream = out
+            override fun getSignature() = ByteArray(64)
+        }
+        val now = Date()
+        val builder = JcaX509v3CertificateBuilder(
+            X500Name(issuerDn),
+            BigInteger.valueOf(System.nanoTime() + 4),
+            now, Date(now.time + 365L * 24 * 60 * 60 * 1000),
+            X500Name(subjectDn),
+            newKeyPair().public,
+        ).addExtension(Extension.basicConstraints, true, BasicConstraints(true))
+        return JcaX509CertificateConverter().getCertificate(builder.build(signer))
+    }
+
+    /** Like [makeSelfSignedCa], with an EC key. */
+    private fun makeSelfSignedEcCa(dn: String): IssuedCert {
+        val kp = KeyPairGenerator.getInstance("EC").apply { initialize(256) }.generateKeyPair()
+        val now = Date()
+        val builder = JcaX509v3CertificateBuilder(
+            X500Name(dn),
+            BigInteger.valueOf(System.nanoTime() + 5),
+            now, Date(now.time + 365L * 24 * 60 * 60 * 1000),
+            X500Name(dn),
+            kp.public,
+        ).addExtension(Extension.basicConstraints, true, BasicConstraints(true))
+        val signer = JcaContentSignerBuilder("SHA256withECDSA").build(kp.private)
+        return IssuedCert(JcaX509CertificateConverter().getCertificate(builder.build(signer)), kp)
     }
 
     private fun newKeyPair(): KeyPair {
