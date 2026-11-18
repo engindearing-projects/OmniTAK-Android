@@ -31,8 +31,18 @@ internal data class GeofenceLabel(
 /** The part of the screen a zone covers, in px: the box round its outline. */
 internal data class ScreenBox(val left: Float, val top: Float, val right: Float, val bottom: Float)
 
-/** Where a name goes on the screen, in px, and the part of the screen its zone covers when that is known. */
-internal data class ScreenLabel(val text: String, val x: Float, val y: Float, val colorHex: String, val zone: ScreenBox? = null)
+/**
+ * Where a name goes on the screen, in px, and the part of the screen its zone covers when that is known.
+ * [halfWidthPx] is half the width of the name's text: how far it reaches to either side of its point. NaN when it is not known.
+ */
+internal data class ScreenLabel(
+    val text: String,
+    val x: Float,
+    val y: Float,
+    val colorHex: String,
+    val zone: ScreenBox? = null,
+    val halfWidthPx: Float = Float.NaN,
+)
 
 /**
  * The rules for the names of the geofences on the 2D map, free of Android types so they are tested
@@ -91,26 +101,32 @@ internal object GeofenceLabels {
      * edge of a circle, the middle of a polygon) is not:
      *  - above the top it is kept at the top, under the first [topPx] (the status bar and the status strip), the
      *    whole name clear of them: [nameHeightPx] tall, [gapPx] over its point;
-     *  - below the bottom it is kept at the bottom;
+     *  - below the bottom it is kept at the bottom, above the [bottomPx] along it (the gesture bar or the navigation
+     *    buttons, which the map is drawn under and a fade covers);
      *  - past a side it is moved to the middle of the part of the zone that is on the screen.
-     * A name whose point is on the screen (or within [marginPx] of a side: a name is wide, so one just off the
-     * edge still reaches in) stays where it is, but is moved down off the strip. When nothing is known about the
-     * zone ([ScreenLabel.zone] is null) the name stays with its point and is dropped when that is off the screen.
-     * Drawn in order, so a later one is over an earlier one.
+     * A name whose point is on the screen (or off a side by no more than half of the name's own width,
+     * [ScreenLabel.halfWidthPx]: the name is centred on its point, so up to there some of its text is still on the
+     * screen) stays where it is, but is moved down off the strip. A name that is wholly off the screen is moved onto
+     * its zone like one whose point is far off. [marginPx] stands in for the half width of a name that has none.
+     * When nothing is known about the zone ([ScreenLabel.zone] is null) the name stays with its point and is dropped
+     * when that is off the screen. Drawn in order, so a later one is over an earlier one.
      */
     fun placed(
         labels: List<ScreenLabel>,
         widthPx: Float,
         heightPx: Float,
-        marginPx: Float,
+        marginPx: Float = 0f,
         topPx: Float = 0f,
         nameHeightPx: Float = 0f,
         gapPx: Float = 0f,
+        bottomPx: Float = 0f,
     ): List<ScreenLabel> = labels.mapNotNull { label ->
         if (!label.x.isFinite() || !label.y.isFinite()) return@mapNotNull null
+        // The name is centred on its point: it reaches half of its own width to either side of it.
+        val margin = if (label.halfWidthPx.isFinite()) label.halfWidthPx else marginPx
         val zone = label.zone
         if (zone == null || !(zone.left.isFinite() && zone.top.isFinite() && zone.right.isFinite() && zone.bottom.isFinite())) {
-            val kept = label.x >= -marginPx && label.x <= widthPx + marginPx && label.y >= -marginPx && label.y <= heightPx + marginPx
+            val kept = label.x >= -margin && label.x <= widthPx + margin && label.y >= -margin && label.y <= heightPx + margin
             return@mapNotNull if (kept) label else null
         }
         // What part of the zone is where a name can be: on the screen and under the strip.
@@ -120,8 +136,10 @@ internal object GeofenceLabels {
         val bottom = min(zone.bottom, heightPx)
         if (left > right || top > bottom) return@mapNotNull null
         val lowest = topPx + gapPx + nameHeightPx
-        val x = if (label.x >= -marginPx && label.x <= widthPx + marginPx) label.x else (left + right) / 2f
-        val y = label.y.coerceIn(lowest, max(lowest, heightPx))
+        // The room a name has runs down to the bar along the bottom (none when it is not a size), and never less than the strip leaves.
+        val bar = if (bottomPx.isFinite()) bottomPx.coerceAtLeast(0f) else 0f
+        val x = if (label.x >= -margin && label.x <= widthPx + margin) label.x else (left + right) / 2f
+        val y = label.y.coerceIn(lowest, max(lowest, heightPx - bar))
         if (x == label.x && y == label.y) label else label.copy(x = x, y = y)
     }
 
@@ -179,15 +197,18 @@ internal fun GeofenceLabelOverlay(
         halo.strokeWidth = size * 0.2f
         val gap = GeofenceLabels.GAP_DP * density
         val metrics = fill.fontMetrics
+        // Each name is as wide as its own text: measured with the paint it is drawn with, at the size it is drawn at.
+        val measured = projected.map { it.copy(halfWidthPx = fill.measureText(it.text) / 2f) }
         val visible = GeofenceLabels.placed(
-            projected,
+            measured,
             this.size.width,
             this.size.height,
-            marginPx = size * GeofenceLabels.MAX_CHARS / 2,
             // A name stays under the status bar and the status strip, whatever the zone's edge does.
             topPx = (MapOrnamentLayout.belowStripDp(safeArea, density) * density).toFloat(),
             nameHeightPx = metrics.descent - metrics.ascent,
             gapPx = gap,
+            // And above the gesture bar or the navigation buttons: the fade behind them (SystemBarScrims) is drawn over the names.
+            bottomPx = safeArea.bottom.toFloat(),
         )
         drawIntoCanvas { canvas ->
             val native = canvas.nativeCanvas

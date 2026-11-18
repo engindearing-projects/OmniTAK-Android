@@ -354,6 +354,19 @@ fun CesiumMapView(
         onDispose { }
     }
 
+    // How tall the bar along the bottom is (the gesture bar or the navigation buttons): a name kept at the bottom stays above it,
+    // as on the 2D map, and not under the fade behind it. Told at the same times as the top.
+    val nameBottomDp = MapOrnamentLayout.bottomInsetDp(frameSafeArea, density)
+    DisposableEffect(ready.value, nameBottomDp) {
+        if (ready.value) {
+            webViewRef.value?.evaluateJavascript(
+                "if(window.OmniBridge&&window.OmniBridge.setNameBottom)window.OmniBridge.setNameBottom($nameBottomDp);",
+                null,
+            )
+        }
+        onDispose { }
+    }
+
     // Issue #95 — north-up lock on the Cesium globe. When ready, push the
     // lock state to the JS bridge.  setNorthUpLocked(true) should disable
     // rotation gestures in the scene and fly to heading 0; false restores.
