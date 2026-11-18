@@ -38,24 +38,31 @@ internal object PageScript {
     }
 
     /** Runs [js] in node and returns what it printed (the last line is what tests parse). */
-    fun run(js: String): String {
+    fun run(js: String, timeoutSeconds: Long = 60): String {
         val exe = node
         if (exe == null) {
             if (System.getenv("CI") == "true") fail("node is not installed on CI: the page tests need it")
             assumeTrue("node is not installed", false)
         }
-        val builder = ProcessBuilder(exe, "-").redirectErrorStream(true)
-        // A node preload set up for another tool (NODE_OPTIONS) must not run in here.
-        builder.environment().remove("NODE_OPTIONS")
-        val process = builder.start()
-        process.outputStream.use { it.write(js.toByteArray()) }
-        val output = process.inputStream.bufferedReader().readText()
-        if (!process.waitFor(60, TimeUnit.SECONDS)) {
-            process.destroyForcibly()
-            fail("node did not finish: $output")
+        // The output goes to a file, not a pipe: reading a pipe to its end waits for the process to end, so a node that never
+        // finished held the test for ever and the time limit was never reached. A file also cannot fill up and block node.
+        val file = File.createTempFile("page-script-", ".out")
+        try {
+            val builder = ProcessBuilder(exe, "-").redirectErrorStream(true).redirectOutput(file)
+            // A node preload set up for another tool (NODE_OPTIONS) must not run in here.
+            builder.environment().remove("NODE_OPTIONS")
+            val process = builder.start()
+            process.outputStream.use { it.write(js.toByteArray()) }
+            if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
+                process.destroyForcibly()
+                fail("node did not finish in $timeoutSeconds s: ${file.readText()}")
+            }
+            val output = file.readText()
+            assertEquals("node failed:\n$output", 0, process.exitValue())
+            return output.trim()
+        } finally {
+            file.delete()
         }
-        assertEquals("node failed:\n$output", 0, process.exitValue())
-        return output.trim()
     }
 
     /** Runs [js], whose last line printed is JSON, and returns it as an object. */

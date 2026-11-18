@@ -116,6 +116,14 @@ class MapOrnamentLayoutTest {
         assertEquals(114 / density.toDouble() + 40 + 8, MapOrnamentLayout.belowStripDp(gestureSafeArea, density), 1e-9)
     }
 
+    @Test fun the_bar_along_the_bottom_is_told_to_the_globe_in_dp() {
+        // Three-button navigation: 126 px at 2.625x is 48 dp. The page works in dp (CSS px), as it does for the top.
+        assertEquals(48.0, MapOrnamentLayout.bottomInsetDp(EdgePx(bottom = 126), density), 1e-9)
+        assertEquals("gesture navigation: 63 px", 63 / density.toDouble(), MapOrnamentLayout.bottomInsetDp(gestureSafeArea, density), 1e-9)
+        assertEquals("no bar", 0.0, MapOrnamentLayout.bottomInsetDp(EdgePx(), density), 0.0)
+        assertEquals("a density that is not a size is 1", 63.0, MapOrnamentLayout.bottomInsetDp(gestureSafeArea, 0f), 0.0)
+    }
+
     @Test fun held_sideways_the_navigation_bar_on_the_side_is_kept_clear_too() {
         val room = MapOrnamentLayout.frameInsets(EdgePx(left = 0, top = 63, right = 126, bottom = 0), density)
         assertEquals(64.0 + 126 / density.toDouble(), room.rightDp, 1e-9)

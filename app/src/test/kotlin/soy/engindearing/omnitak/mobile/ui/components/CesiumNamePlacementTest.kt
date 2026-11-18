@@ -20,7 +20,7 @@ class CesiumNamePlacementTest {
     // ---- the rule: the same answer as the 2D map's, for the same zone on the same screen
 
     private data class Case(val w: Float, val h: Float, val top: Float, val nameH: Float, val gap: Float, val margin: Float,
-                            val x: Float, val y: Float, val box: FloatArray?)
+                            val x: Float, val y: Float, val box: FloatArray?, val bottom: Float)
 
     private fun cases(): List<Case> {
         val rnd = Random(155)
@@ -36,7 +36,8 @@ class CesiumNamePlacementTest {
             // The point a name is on: on the box when there is one (a circle's north edge, a polygon's middle), else anywhere.
             val x = if (box != null) step(r(box[0], box[2])) else step(r(-1500f, 3000f))
             val y = if (box != null) step(if (n % 3 == 0) box[1] else r(box[1], box[3])) else step(r(-1500f, 3000f))
-            Case(w, h, 300f, 40f, 5f, 200f, x, y, box)
+            // Each name has its own width, so its own margin (half of it); and the bar along the bottom is a different height on different phones.
+            Case(w, h, 300f, 40f, 5f, step(r(5f, 700f)), x, y, box, listOf(0f, 52f, 126f, 200f)[n % 4])
         }
     }
 
@@ -44,13 +45,13 @@ class CesiumNamePlacementTest {
         val all = cases()
         val js = all.joinToString(",", "[", "]") { c ->
             val box = c.box?.let { "{left:${it[0]},top:${it[1]},right:${it[2]},bottom:${it[3]}}" } ?: "null"
-            "{w:${c.w},h:${c.h},top:${c.top},nameH:${c.nameH},gap:${c.gap},margin:${c.margin},x:${c.x},y:${c.y},box:$box}"
+            "{w:${c.w},h:${c.h},top:${c.top},nameH:${c.nameH},gap:${c.gap},margin:${c.margin},x:${c.x},y:${c.y},box:$box,bottom:${c.bottom}}"
         }
         val answers = PageScript.jsonArray(
             """
             $names
             const cases = $js;
-            console.log(JSON.stringify(cases.map(c => _namePlace({ x: c.x, y: c.y }, c.box, c.w, c.h, c.top, c.nameH, c.gap, c.margin))));
+            console.log(JSON.stringify(cases.map(c => _namePlace({ x: c.x, y: c.y }, c.box, c.w, c.h, c.top, c.nameH, c.gap, c.margin, c.bottom))));
             """.trimIndent(),
         )
         assertEquals(all.size, answers.length())
@@ -59,8 +60,10 @@ class CesiumNamePlacementTest {
         var dropped = 0
         all.forEachIndexed { i, c ->
             val zone = c.box?.let { ScreenBox(it[0], it[1], it[2], it[3]) }
+            // The 2D map measures each name: the label carries its own half width, which decides, whatever margin is passed for a name of unknown width.
             val kotlin = GeofenceLabels.placed(
-                listOf(ScreenLabel("n", c.x, c.y, "#FFFFFF", zone)), c.w, c.h, c.margin, topPx = c.top, nameHeightPx = c.nameH, gapPx = c.gap,
+                listOf(ScreenLabel("n", c.x, c.y, "#FFFFFF", zone, halfWidthPx = c.margin)), c.w, c.h, 12_345f,
+                topPx = c.top, nameHeightPx = c.nameH, gapPx = c.gap, bottomPx = c.bottom,
             ).singleOrNull()
             val page = answers.getJSONObject(i)
             val what = "case $i ($c, box ${c.box?.toList()})"
@@ -79,6 +82,38 @@ class CesiumNamePlacementTest {
         assertTrue("some names are kept where they are: $shown shown, $moved moved, $dropped dropped", shown - moved > 20)
         assertTrue("some names are moved: $moved", moved > 20)
         assertTrue("some names are dropped: $dropped", dropped > 20)
+    }
+
+    @Test fun a_name_whose_text_does_not_reach_the_screen_is_moved_onto_its_zone_and_one_that_reaches_in_is_not() {
+        // The point is 150 px off the left edge and the zone is on the screen from 0 to 300. A name 180 px wide (margin 90) has none of its text
+        // on the screen, so it is moved to the middle of the zone on the screen (150, which is 300 from its point); a name 600 px wide (margin 300)
+        // reaches 150 px in and stays.
+        val r = PageScript.json(
+            """
+            $names
+            const box = { left: -800, top: 500, right: 300, bottom: 1300 };
+            const at = { x: -150, y: 900 };
+            console.log(JSON.stringify({ narrow: _namePlace(at, box, 1080, 2400, 300, 40, 5, 90, 0), wide: _namePlace(at, box, 1080, 2400, 300, 40, 5, 300, 0) }));
+            """.trimIndent(),
+        )
+        assertEquals(300.0, r.getJSONObject("narrow").getDouble("dx"), 0.0)
+        assertEquals(0.0, r.getJSONObject("wide").getDouble("dx"), 0.0)
+    }
+
+    @Test fun a_name_whose_middle_is_below_the_screen_is_kept_above_the_bar_along_the_bottom() {
+        val r = PageScript.json(
+            """
+            $names
+            const box = { left: 100, top: 1000, right: 980, bottom: 3500 };
+            const at = { x: 540, y: 3000 };
+            console.log(JSON.stringify({ none: _namePlace(at, box, 1080, 2400, 300, 40, 5, 200, 0), bar: _namePlace(at, box, 1080, 2400, 300, 40, 5, 200, 126),
+              unset: _namePlace(at, box, 1080, 2400, 300, 40, 5, 200), bad: _namePlace(at, box, 1080, 2400, 300, 40, 5, 200, NaN) }));
+            """.trimIndent(),
+        )
+        assertEquals("no bar: the bottom of the window", -600.0, r.getJSONObject("none").getDouble("dy"), 0.0)
+        assertEquals("a 126 px bar: above it, 2274", -726.0, r.getJSONObject("bar").getDouble("dy"), 0.0)
+        assertEquals("a page that was never told the bar is as it was", -600.0, r.getJSONObject("unset").getDouble("dy"), 0.0)
+        assertEquals("a bar that is not a size is no bar", -600.0, r.getJSONObject("bad").getDouble("dy"), 0.0)
     }
 
     @Test fun a_name_whose_point_cannot_be_placed_is_left_alone() {
@@ -152,7 +187,7 @@ class CesiumNamePlacementTest {
           Cartesian3: { fromRadians: (lon, lat, h) => ({ x: lon, y: lat, h }) },
           SceneTransforms: { worldToWindowCoordinates: (scene, p) => { projections++; return p.behind ? undefined : { x: p.x, y: p.y - (p.h || 0) * parallax }; } },
         };
-        const _state = { drawings: new Map(), nameTop: 300, nameKey: '', namesDirty: true };
+        const _state = { drawings: new Map(), nameTop: 300, nameBottom: 0, nameKey: '', namesDirty: true };
         const cam = { positionWC: { x: 1, y: 2, z: 3 }, directionWC: { x: 0, y: 0, z: -1 }, upWC: { x: 0, y: 1, z: 0 } };
         const v = { scene: { canvas: { clientWidth: 1080, clientHeight: 2400 }, globe: { getHeight: c => groundHeight(c) } }, camera: cam, clock: { currentTime: 0 } };
         function zone(name, at, ring) {
@@ -176,6 +211,21 @@ class CesiumNamePlacementTest {
         // with 20 px of name: 300 + 2 + 20 = 322, so it is moved 322 + 800 = 1122 px down, less the 2 px gap it always has.
         assertEquals(0.0, r.getJSONObject("offset").getDouble("x"), 0.0)
         assertEquals(-2.0 + 1122.0, r.getJSONObject("offset").getDouble("y"), 0.0)
+    }
+
+    @Test fun a_name_whose_zone_middle_is_below_the_screen_is_moved_up_to_the_bar_the_page_was_told() {
+        val r = globe(
+            """
+            _state.nameBottom = 126;
+            const e = zone('Below', { x: 540, y: 3000 }, [{ x: 100, y: 1000 }, { x: 980, y: 1000 }, { x: 540, y: 3500 }]);
+            _state.drawings.set('a', e);
+            _placeNames(v);
+            console.log(JSON.stringify({ show: e.nameShown, y: e.label.pixelOffset.y }));
+            """.trimIndent(),
+        )
+        assertTrue(r.getBoolean("show"))
+        // Its point is at y = 3000; the bar is the bottom 126 px of the 2400, so the name goes to 2274: 726 up, less the 2 px gap it always has.
+        assertEquals(-2.0 - 726.0, r.getDouble("y"), 0.0)
     }
 
     @Test fun the_name_is_placed_from_where_the_ground_is_not_from_the_ellipsoid_under_it() {
@@ -253,16 +303,19 @@ class CesiumNamePlacementTest {
             const moved = projections;
             _state.nameTop = 340; _placeNames(v);
             const topChanged = projections;
+            _state.nameBottom = 126; _placeNames(v);
+            const bottomChanged = projections;
             v.scene.canvas.clientHeight = 1080; _placeNames(v);
             const resized = projections;
-            console.log(JSON.stringify({ first, still, moved, topChanged, resized }));
+            console.log(JSON.stringify({ first, still, moved, topChanged, bottomChanged, resized }));
             """.trimIndent(),
         )
         assertTrue(r.getInt("first") > 0)
         assertEquals("a still view costs nothing", r.getInt("first"), r.getInt("still"))
         assertTrue("a camera that moved is worked out", r.getInt("moved") > r.getInt("still"))
         assertTrue("a new strip height is", r.getInt("topChanged") > r.getInt("moved"))
-        assertTrue("a window that changed size is", r.getInt("resized") > r.getInt("topChanged"))
+        assertTrue("a new bar along the bottom is", r.getInt("bottomChanged") > r.getInt("topChanged"))
+        assertTrue("a window that changed size is", r.getInt("resized") > r.getInt("bottomChanged"))
     }
 
     @Test fun a_shape_without_a_name_and_a_name_whose_point_is_behind_the_camera_are_left_alone() {

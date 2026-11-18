@@ -31,7 +31,7 @@
   // Injected at WebView load time by CesiumMapView from BuildConfig.CESIUM_ION_TOKEN
   // (fed by gitignored local.properties) — never commit a literal token here.
   Cesium.Ion.defaultAccessToken='__CESIUM_ION_TOKEN__';
-  const _state={ready:false,viewer:null,entities:new Map(),drawings:new Map(),billboardCache:new Map(),northLocked:false,northEnforcer:null,scaleAnchor:null,scaleFrame:0,scalePosted:null,scaleSoon:0,occluder:null,horizonCam:null,horizonDirty:true,nameTop:0,nameKey:'',namesDirty:true};
+  const _state={ready:false,viewer:null,entities:new Map(),drawings:new Map(),billboardCache:new Map(),northLocked:false,northEnforcer:null,scaleAnchor:null,scaleFrame:0,scalePosted:null,scaleSoon:0,occluder:null,horizonCam:null,horizonDirty:true,nameTop:0,nameBottom:0,nameKey:'',namesDirty:true};
   function _drawColor(hex,a){try{const c=Cesium.Color.fromCssColorString(hex||'#4ADE80');return a!==undefined?c.withAlpha(a):c}catch(e){return Cesium.Color.CYAN}}
   function _havDist(a,b){const R=6371000,lat1=a[1]*Math.PI/180,lat2=b[1]*Math.PI/180,dLat=(b[1]-a[1])*Math.PI/180,dLon=(b[0]-a[0])*Math.PI/180;const s=Math.sin(dLat/2)**2+Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2)**2;return 2*R*Math.asin(Math.min(1,Math.sqrt(s)))}
   function _fitViewport(){
@@ -196,21 +196,23 @@
   // A zone's name belongs to the zone: it is shown for as long as any of the zone is on the screen, even when the point it is
   // written on (the north edge of a circle, the middle of a polygon) is not. Above the top it is kept at the top, under the
   // first `top` px (the status bar and the status strip), the whole name clear of them: `nameH` tall, `gap` over its point.
-  // Below the bottom it is kept at the bottom, and past a side it is moved to the middle of the part of the zone that is on
-  // the screen. A point on the screen (or within `margin` px of a side: a name is wide) stays where it is, but is moved down
-  // off the strip. Returns whether to show the name and how far to move it from where its point puts it, in px. The same rule
-  // as the 2D map's (GeofenceLabels.placed), and a test runs the two against each other.
+  // Below the bottom it is kept at the bottom, above the `barH` px along it (the gesture bar or the navigation buttons, which
+  // the app fades over), and past a side it is moved to the middle of the part of the zone that is on the screen. A point on
+  // the screen (or within `margin` px of a side: half the name's own width, as it is centred on its point) stays where it is,
+  // but is moved down off the strip. Returns whether to show the name and how far to move it from where its point puts it,
+  // in px. The same rule as the 2D map's (GeofenceLabels.placed), and a test runs the two against each other.
   // NAMES-BEGIN
   const _NAME_H=20,_NAME_GAP=2,_NAME_CHAR_PX=7;
-  function _namePlace(at,box,w,h,top,nameH,gap,margin){
+  function _namePlace(at,box,w,h,top,nameH,gap,margin,barH){
     if(!at||!isFinite(at.x)||!isFinite(at.y))return{show:true,dx:0,dy:0};
     if(!box||!isFinite(box.left)||!isFinite(box.top)||!isFinite(box.right)||!isFinite(box.bottom)){
       return{show:at.x>=-margin&&at.x<=w+margin&&at.y>=-margin&&at.y<=h+margin,dx:0,dy:0}}
     const left=Math.max(box.left,0),right=Math.min(box.right,w),t=Math.max(box.top,top),bottom=Math.min(box.bottom,h);
     if(left>right||t>bottom)return{show:false,dx:0,dy:0};
     const lowest=top+gap+nameH;
+    const bar=(typeof barH==='number'&&isFinite(barH)&&barH>0)?barH:0;
     const x=(at.x>=-margin&&at.x<=w+margin)?at.x:(left+right)/2;
-    const y=Math.min(Math.max(at.y,lowest),Math.max(lowest,h));
+    const y=Math.min(Math.max(at.y,lowest),Math.max(lowest,h-bar));
     return{show:true,dx:x-at.x,dy:y-at.y}}
   // The box round the window points `pts` ({x,y}), or null when there are none.
   function _boxOf(pts){if(!pts.length)return null;let l=Infinity,t=Infinity,r=-Infinity,b=-Infinity;
@@ -230,8 +232,8 @@
   // again once a second, and the page asks for this to be worked out again then).
   function _placeNames(v){
     if(!_state.drawings.size)return;
-    const scene=v.scene,c=scene.canvas,cam=v.camera,w=c.clientWidth,h=c.clientHeight,top=_state.nameTop,p=cam.positionWC,d=cam.directionWC,u=cam.upWC;
-    const key=[p.x,p.y,p.z,d.x,d.y,d.z,u.x,u.y,u.z,w,h,top].join(',');
+    const scene=v.scene,c=scene.canvas,cam=v.camera,w=c.clientWidth,h=c.clientHeight,top=_state.nameTop,bar=_state.nameBottom,p=cam.positionWC,d=cam.directionWC,u=cam.upWC;
+    const key=[p.x,p.y,p.z,d.x,d.y,d.z,u.x,u.y,u.z,w,h,top,bar].join(',');
     if(key===_state.nameKey&&!_state.namesDirty)return;
     _state.nameKey=key;_state.namesDirty=false;
     const t=v.clock.currentTime;
@@ -242,7 +244,7 @@
       const at=Cesium.SceneTransforms.worldToWindowCoordinates(scene,e.onGround[0]),pts=[];
       for(let i=1;i<e.onGround.length;i++){const s=Cesium.SceneTransforms.worldToWindowCoordinates(scene,e.onGround[i]);if(s)pts.push(s)}
       if(at)pts.push(at);
-      const m=_namePlace(at,_boxOf(pts),w,h,top,_NAME_H,_NAME_GAP,_NAME_CHAR_PX*(e.zoneName||'').length/2);
+      const m=_namePlace(at,_boxOf(pts),w,h,top,_NAME_H,_NAME_GAP,_NAME_CHAR_PX*(e.zoneName||'').length/2,bar);
       const ox=Math.round(m.dx),oy=-_NAME_GAP+Math.round(m.dy);
       if(e.nameShown!==m.show){e.nameShown=m.show;e.label.show=m.show}
       if(!e.nameAt||e.nameAt.x!==ox||e.nameAt.y!==oy){e.nameAt={x:ox,y:oy};e.label.pixelOffset=new Cesium.Cartesian2(ox,oy)}})}
@@ -377,6 +379,7 @@
     },
     // Where the status bar and the status strip end, in CSS px from the top of the page: a zone's name is kept under it.
     setNameTop(px){if(typeof px!=='number'||!isFinite(px)||px<0)return;_state.nameTop=px;_state.namesDirty=true},
+    setNameBottom(px){if(typeof px!=='number'||!isFinite(px)||px<0)return;_state.nameBottom=px;_state.namesDirty=true},
     ping(){return _state.ready?'pong':'loading'},
     upsertDrawing(arg){const d=_parse(arg);if(!d||!d.uid||!d.kind||!Array.isArray(d.coords)||d.coords.length===0)return;const v=_state.viewer;if(!v)return;
       const color=_drawColor(d.color,0.85),fillC=_drawColor(d.color,typeof d.fillAlpha==='number'?d.fillAlpha:0.25),width=typeof d.width==='number'?d.width:3;
