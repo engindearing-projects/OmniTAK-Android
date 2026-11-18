@@ -120,6 +120,42 @@ class CaTrustTest {
 
     private data class IssuedCert(val cert: X509Certificate, val keyPair: KeyPair)
 
+    // Manual CA pin from the Add Server screen.
+
+    @Test fun parseCaFile_accepts_pem_ca() {
+        val ca = makeSelfSignedCa("CN=Manual Pin CA")
+        val parsed = CaTrust.parseCaFile(CaTrust.encodePemChain(listOf(ca.cert)))
+        assertEquals(1, parsed.size)
+        assertArrayEquals(ca.cert.encoded, parsed[0].encoded)
+    }
+
+    @Test fun parseCaFile_accepts_der_ca() {
+        val ca = makeSelfSignedCa("CN=Manual Pin CA DER")
+        val parsed = CaTrust.parseCaFile(ca.cert.encoded)
+        assertEquals(1, parsed.size)
+        assertArrayEquals(ca.cert.encoded, parsed[0].encoded)
+    }
+
+    @Test fun parseCaFile_drops_leaf_certs() {
+        val ca = makeSelfSignedCa("CN=Issuer")
+        val leaf = makeLeafCert("CN=server", ca)
+        assertEquals(0, CaTrust.parseCaFile(CaTrust.encodePemChain(listOf(leaf))).size)
+        val mixed = CaTrust.parseCaFile(CaTrust.encodePemChain(listOf(leaf, ca.cert)))
+        assertEquals(1, mixed.size)
+        assertArrayEquals(ca.cert.encoded, mixed[0].encoded)
+    }
+
+    @Test fun parseCaFile_rejects_garbage() {
+        assertEquals(0, CaTrust.parseCaFile("not a certificate".toByteArray()).size)
+        assertEquals(0, CaTrust.parseCaFile(ByteArray(0)).size)
+    }
+
+    @Test fun sha256Fingerprint_matches_openssl_format() {
+        val ca = makeSelfSignedCa("CN=Fingerprint CA")
+        val fp = CaTrust.sha256Fingerprint(ca.cert)
+        assertTrue(fp, Regex("^([0-9A-F]{2}:){31}[0-9A-F]{2}$").matches(fp))
+    }
+
     private fun makeSelfSignedCa(dn: String): IssuedCert {
         val kp = newKeyPair()
         val now = Date()
