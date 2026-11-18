@@ -3,10 +3,11 @@ package soy.engindearing.omnitak.mobile.data
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
-import java.security.InvalidKeyException
 import java.security.KeyStore
 import java.security.MessageDigest
-import java.security.SignatureException
+import java.security.NoSuchAlgorithmException
+import java.security.PublicKey
+import java.security.Signature
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.util.Base64
@@ -190,25 +191,36 @@ object CaTrust {
 
     /**
      * [issuer] is named as the issuer of [cert] and its key checks the
-     * signature. A signature that does not match (or a key of the wrong kind)
-     * means another CA used the name. A check that cannot be made at all, an
-     * algorithm this phone does not support for instance, counts as issued: a
-     * private CA refused by mistake costs a retry by QR code, a public one let
-     * through is the hole this check closes.
+     * signature. A signature that does not check means another CA used the
+     * name. Android reports that as a SignatureException, an InvalidKeyException
+     * or a plain CertificateException (a wrong RSA key of another size), so the
+     * kind of exception says nothing. What does matter is whether the phone
+     * knows the signature algorithm at all: if not, the check proves nothing and
+     * [cert] counts as issued. A private CA refused by mistake costs a retry by
+     * QR code, a public one let through is the hole this check closes.
+     * [verify] is the signature check, replaceable in tests.
      */
-    private fun isIssuedBy(cert: X509Certificate, issuer: X509Certificate): Boolean {
+    internal fun isIssuedBy(
+        cert: X509Certificate,
+        issuer: X509Certificate,
+        verify: (X509Certificate, PublicKey) -> Unit = { c, key -> c.verify(key) },
+    ): Boolean {
         if (cert.issuerX500Principal != issuer.subjectX500Principal) return false
         return try {
-            cert.verify(issuer.publicKey)
+            verify(cert, issuer.publicKey)
             true
-        } catch (e: SignatureException) {
-            false
-        } catch (e: InvalidKeyException) {
-            false
         } catch (e: Exception) {
-            true
+            !knowsSignatureAlgorithm(cert)
         }
     }
+
+    private fun knowsSignatureAlgorithm(cert: X509Certificate): Boolean =
+        try {
+            Signature.getInstance(cert.sigAlgName)
+            true
+        } catch (e: NoSuchAlgorithmException) {
+            false
+        }
 
     /**
      * Vault file name for a set of pinned CAs: `ca-manual-`, the first 16 hex

@@ -12,6 +12,7 @@ import org.bouncycastle.operator.ContentSigner
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -27,6 +28,8 @@ import java.io.OutputStream
 import java.math.BigInteger
 import java.security.KeyPair
 import java.security.KeyPairGenerator
+import java.security.NoSuchAlgorithmException
+import java.security.PublicKey
 import java.security.cert.CertPathValidatorException
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
@@ -304,6 +307,39 @@ class CaTrustTest {
         val result = evaluate(listOf(lookalike.cert), anchors = listOf(builtIn.cert))
 
         assertTrue("got $result", result is ManualPinResult.Ok)
+    }
+
+    @Test fun isIssuedBy_is_true_when_the_signature_checks() {
+        val root = makeSelfSignedCa("CN=Public Root")
+        val intermediate = makeIntermediateCa("CN=Public Intermediate", issuedBy = root)
+
+        assertTrue(CaTrust.isIssuedBy(intermediate.cert, root.cert))
+    }
+
+    @Test fun isIssuedBy_is_false_when_a_known_algorithm_fails_to_check_with_any_exception() {
+        val root = makeSelfSignedCa("CN=Public Root")
+        val lookalike = makeSelfSignedCa("CN=Public Root")
+        // Android reports a wrong RSA key of another size as a plain CertificateException, as it was seen on a phone.
+        val android: (X509Certificate, PublicKey) -> Unit = { _, _ ->
+            throw CertificateException("error:04000070:RSA routines:OPENSSL_internal:DATA_LEN_NOT_EQUAL_TO_MOD_LEN")
+        }
+
+        assertFalse(CaTrust.isIssuedBy(lookalike.cert, root.cert, android))
+    }
+
+    @Test fun isIssuedBy_is_true_when_the_check_fails_and_the_algorithm_is_unknown() {
+        val root = makeSelfSignedCa("CN=Public Root")
+        val odd = makeCaWithUnknownSignatureAlgorithm("CN=Odd CA", issuerDn = "CN=Public Root")
+        val unsupported: (X509Certificate, PublicKey) -> Unit = { _, _ -> throw NoSuchAlgorithmException("1.2.3.4.5") }
+
+        assertTrue(CaTrust.isIssuedBy(odd, root.cert, unsupported))
+    }
+
+    @Test fun isIssuedBy_is_false_when_the_name_differs() {
+        val root = makeSelfSignedCa("CN=Public Root")
+        val other = makeSelfSignedCa("CN=Another Name")
+
+        assertFalse(CaTrust.isIssuedBy(other.cert, root.cert))
     }
 
     @Test fun evaluateManualPin_does_not_accept_a_file_it_cannot_check() {
