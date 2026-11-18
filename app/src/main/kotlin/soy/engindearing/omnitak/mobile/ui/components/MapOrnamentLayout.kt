@@ -69,6 +69,12 @@ internal object MapOrnamentLayout {
         safe.top / densityOrOne(density) + STATUS_STRIP_DP + UNDER_STRIP_AIR_DP
 
     /**
+     * How tall the bottom system bar is, in dp: the gesture bar or the navigation buttons. A name written on the map
+     * is kept above it while its zone's point is below the screen, so the name is not under the fade behind the bar.
+     */
+    fun bottomInsetDp(safe: EdgePx, density: Float): Double = safe.bottom / densityOrOne(density)
+
+    /**
      * The room "Show on map" keeps clear of the window's edges, for a window whose safe area is [safe]: the
      * safe area itself, the padding around a zone, and at the top the status strip and the zone's name, so the
      * name is not hidden under the strip when the north edge is the closest to the top (held sideways).

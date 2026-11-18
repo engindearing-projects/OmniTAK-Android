@@ -78,8 +78,12 @@ class GeofenceLabelOverlayTest {
     private fun placed(vararg labels: ScreenLabel) =
         GeofenceLabels.placed(labels.toList(), view.first, view.second, view.third, topPx = 300f, nameHeightPx = 40f, gapPx = 5f)
 
-    private fun named(x: Float, y: Float, left: Float, top: Float, right: Float, bottom: Float) =
-        ScreenLabel("n", x, y, "#FFFFFF", ScreenBox(left, top, right, bottom))
+    /** [placed] with a bar [bottomPx] tall along the bottom of the window (the gesture bar or the navigation buttons). */
+    private fun placedAbove(bottomPx: Float, vararg labels: ScreenLabel) =
+        GeofenceLabels.placed(labels.toList(), view.first, view.second, view.third, topPx = 300f, nameHeightPx = 40f, gapPx = 5f, bottomPx = bottomPx)
+
+    private fun named(x: Float, y: Float, left: Float, top: Float, right: Float, bottom: Float, halfWidth: Float = Float.NaN) =
+        ScreenLabel("n", x, y, "#FFFFFF", ScreenBox(left, top, right, bottom), halfWidth)
 
     @Test fun a_name_whose_north_edge_is_above_the_screen_stays_at_the_top_while_the_zone_is_on_it() {
         val kept = placed(named(x = 540f, y = -800f, left = 100f, top = -800f, right = 980f, bottom = 1500f)).single()
@@ -118,9 +122,80 @@ class GeofenceLabelOverlayTest {
         assertEquals("from 800 to the right edge, 1080", 940f, right.x, 0f)
     }
 
-    @Test fun a_polygons_name_whose_middle_is_below_the_screen_stays_at_the_bottom_while_part_of_it_is_on_it() {
+    @Test fun a_polygons_name_whose_middle_is_below_the_screen_stays_at_the_bottom_edge_when_nothing_covers_it() {
         val kept = placed(named(x = 540f, y = 3000f, left = 100f, top = 1000f, right = 980f, bottom = 3500f)).single()
         assertEquals(2400f, kept.y, 0f)
+    }
+
+    @Test fun a_polygons_name_whose_middle_is_below_the_screen_stays_above_the_bar_along_the_bottom() {
+        // The map is drawn under the gesture bar or the navigation buttons and a fade covers them (SystemBarScrims): a name kept at the
+        // edge of the window was written on that fade. It is kept above the bar: 2400 - 126 (48 dp at 2.625x, three-button navigation).
+        val kept = placedAbove(126f, named(x = 540f, y = 3000f, left = 100f, top = 1000f, right = 980f, bottom = 3500f)).single()
+        assertEquals(2400f - 126f, kept.y, 0f)
+        assertEquals("over the same part of the zone", 540f, kept.x, 0f)
+    }
+
+    @Test fun a_name_that_is_clear_of_the_bar_along_the_bottom_stays_where_it_is() {
+        val label = named(x = 540f, y = 2200f, left = 100f, top = 1500f, right = 980f, bottom = 3000f)
+        assertEquals(listOf(label), placedAbove(126f, label))
+    }
+
+    @Test fun a_name_just_over_the_edge_of_the_bar_is_moved_up_to_the_top_of_it() {
+        val kept = placedAbove(126f, named(x = 540f, y = 2300f, left = 100f, top = 1500f, right = 980f, bottom = 3000f)).single()
+        assertEquals(2400f - 126f, kept.y, 0f)
+    }
+
+    @Test fun a_bar_taller_than_the_room_under_the_strip_does_not_push_a_name_up_into_the_strip() {
+        // 300 px of strip, 200 px of window, a 126 px bar: no room at all. The name stays at the first y that clears the strip.
+        val kept = GeofenceLabels.placed(
+            listOf(named(500f, 900f, 0f, 250f, 900f, 1500f)), 1000f, 600f, 100f, topPx = 300f, nameHeightPx = 40f, gapPx = 5f, bottomPx = 400f,
+        ).singleOrNull()
+        assertTrue(kept == null || kept.y >= 300f + 5f + 40f)
+    }
+
+    @Test fun a_bottom_bar_that_is_not_a_size_is_no_bar() {
+        val label = named(x = 540f, y = 3000f, left = 100f, top = 1000f, right = 980f, bottom = 3500f)
+        for (bad in listOf(Float.NaN, -50f, Float.NEGATIVE_INFINITY)) {
+            assertEquals("a bar of $bad", 2400f, placedAbove(bad, label).single().y, 0f)
+        }
+    }
+
+    // ---- a name is wide: it reaches in from past the side by half its own width, no more
+
+    @Test fun a_name_whose_text_does_not_reach_the_screen_is_moved_onto_the_part_of_its_zone_that_is_on_it() {
+        // "North gate" is about 180 px wide and centred on its point: 90 px to each side. The point is 150 px off the left edge, so all of the
+        // text is off the screen, while the zone is on it from 0 to 300 (a 5 km circle whose north point is just off the left edge).
+        val kept = placed(named(x = -150f, y = 900f, left = -800f, top = 500f, right = 300f, bottom = 1300f, halfWidth = 90f)).single()
+        assertEquals("the middle of the zone on the screen, 0 to 300", 150f, kept.x, 0f)
+        assertEquals(900f, kept.y, 0f)
+    }
+
+    @Test fun a_wide_name_whose_text_reaches_into_the_screen_stays_where_it_is() {
+        val kept = placed(named(x = -150f, y = 900f, left = -800f, top = 500f, right = 300f, bottom = 1300f, halfWidth = 300f)).single()
+        assertEquals("300 px of text each side: it reaches 150 px in", -150f, kept.x, 0f)
+    }
+
+    @Test fun a_name_keeps_its_place_up_to_half_its_own_width_past_a_side_and_moves_beyond_that() {
+        val half = 90f
+        fun x(at: Float) = placed(named(x = at, y = 900f, left = -2000f, top = 500f, right = 3000f, bottom = 1300f, halfWidth = half)).single().x
+        assertEquals("on the edge of reach, left", -half, x(-half), 0f)
+        assertTrue("a pixel short of reaching in, left: moved to the middle of the zone on the screen", x(-half - 1f) > 0f)
+        assertEquals("on the edge of reach, right", 1080f + half, x(1080f + half), 0f)
+        assertTrue("a pixel short of reaching in, right", x(1080f + half + 1f) < 1080f)
+    }
+
+    @Test fun the_width_of_each_name_is_its_own() {
+        val short = named(x = -150f, y = 900f, left = -800f, top = 500f, right = 300f, bottom = 1300f, halfWidth = 40f)
+        val long = named(x = -150f, y = 1000f, left = -800f, top = 500f, right = 300f, bottom = 1300f, halfWidth = 200f)
+        val (a, b) = placed(short, long)
+        assertEquals("the short one is moved", 150f, a.x, 0f)
+        assertEquals("the long one is not", -150f, b.x, 0f)
+    }
+
+    @Test fun a_name_with_no_zone_known_is_kept_by_its_own_width() {
+        fun label(half: Float) = ScreenLabel("n", -100f, 900f, "#FFFFFF", halfWidthPx = half)
+        assertTrue("90 px of text each side does not reach in from 100 px off", GeofenceLabels.placed(listOf(label(90f)), 1080f, 2400f, marginPx = 400f).isEmpty())
+        assertEquals("150 px does", 1, GeofenceLabels.placed(listOf(label(150f)), 1080f, 2400f, marginPx = 0f).size)
     }
 
     @Test fun a_name_is_never_moved_sideways_when_its_point_is_on_the_screen() {
