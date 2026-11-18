@@ -137,6 +137,17 @@ object CaTrust {
     }
 
     /**
+     * What the row under "Server CA certificate" shows for a pinned file: the
+     * common name of its first CA, and how many more the file holds. Empty
+     * when [fingerprints] is.
+     */
+    fun manualPinLabel(fingerprints: List<CaFingerprint>): String {
+        val first = fingerprints.firstOrNull() ?: return ""
+        val more = fingerprints.size - 1
+        return if (more == 0) first.commonName else "${first.commonName} and $more more"
+    }
+
+    /**
      * The certificates of [cas] that the phone already trusts publicly, in the
      * order of [cas]. A certificate is public when it is (a) a CA from
      * [anchors], (b) issued by one, or (c) issued by another certificate of

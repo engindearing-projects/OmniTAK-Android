@@ -445,7 +445,11 @@ fun AddServerScreen(onDone: () -> Unit) {
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            caName ?: "No CA selected (system trust)",
+                            if (caName != null) {
+                                CaTrust.manualPinLabel(caFingerprints)
+                            } else {
+                                "No CA selected (system trust)"
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                             color = if (caName != null) {
                                 TacticalAccent

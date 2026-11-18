@@ -304,6 +304,30 @@ class CaTrustTest {
         )
     }
 
+    @Test fun manualPinLabel_is_the_common_name_when_the_file_holds_one_ca() {
+        val a = makeSelfSignedCa("CN=Root A")
+
+        val ok = okOf(evaluate(listOf(a.cert)))
+
+        assertEquals("Root A", CaTrust.manualPinLabel(ok.fingerprints))
+    }
+
+    @Test fun manualPinLabel_adds_how_many_more_when_the_file_holds_several() {
+        val a = makeSelfSignedCa("CN=Root A")
+        val b = makeSelfSignedCa("CN=Root B")
+        val c = makeSelfSignedCa("CN=Root C")
+
+        val two = okOf(evaluate(listOf(a.cert, b.cert)))
+        val three = okOf(evaluate(listOf(b.cert, a.cert, c.cert)))
+
+        assertEquals("Root A and 1 more", CaTrust.manualPinLabel(two.fingerprints))
+        assertEquals("Root B and 2 more", CaTrust.manualPinLabel(three.fingerprints))
+    }
+
+    @Test fun manualPinLabel_is_empty_when_nothing_is_pinned() {
+        assertEquals("", CaTrust.manualPinLabel(emptyList()))
+    }
+
     @Test fun evaluateManualPin_reads_a_common_name_with_an_escaped_comma() {
         val ca = makeSelfSignedCa("CN=Acme\\, Inc Root,O=Acme,C=US")
 
