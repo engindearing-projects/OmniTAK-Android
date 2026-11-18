@@ -42,6 +42,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -59,8 +60,10 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.flow.flowOf
 import soy.engindearing.omnitak.mobile.OmniTAKApp
+import soy.engindearing.omnitak.mobile.data.CaFingerprint
 import soy.engindearing.omnitak.mobile.data.CaTrust
 import soy.engindearing.omnitak.mobile.data.ConnectionProtocol
+import soy.engindearing.omnitak.mobile.data.ManualPinResult
 import soy.engindearing.omnitak.mobile.data.TAKServer
 import soy.engindearing.omnitak.mobile.data.discovery.TakNsdDiscovery
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
@@ -87,9 +90,10 @@ fun AddServerScreen(onDone: () -> Unit) {
     var certError by remember { mutableStateOf<String?>(null) }
     // Manual CA pin for servers on a private CA without CSR enrollment.
     // Stored as a PEM chain in the vault and wired to caCertificateName,
-    // which TakTls already treats as the per-server root of trust.
+    // which TakTls already treats as the per-server root of trust. A CA the
+    // phone already trusts publicly is refused (CaTrust.evaluateManualPin).
     var caName by remember { mutableStateOf<String?>(null) }
-    var caFingerprint by remember { mutableStateOf<String?>(null) }
+    var caFingerprints by remember { mutableStateOf<List<CaFingerprint>>(emptyList()) }
     var caError by remember { mutableStateOf<String?>(null) }
     // BUG-A — visibility toggles so users can confirm what they typed.
     // Default to masked (dots) on both password fields.
@@ -117,19 +121,25 @@ fun AddServerScreen(onDone: () -> Unit) {
         val bytes = runCatching {
             context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
         }.getOrNull()
-        val cas = bytes?.let { CaTrust.parseCaFile(it) }.orEmpty()
-        if (cas.isEmpty()) {
-            caError = "No CA certificate found in that file. Pick the CA (.pem/.crt) your admin gave you."
-            return@rememberLauncherForActivityResult
-        }
-        val base = (queryDisplayName(context, uri) ?: "ca").substringBeforeLast('.')
-        val saved = certVault.importBytes("ca-manual-$base.pem", CaTrust.encodePemChain(cas))
-        if (saved != null) {
-            caName = saved
-            caFingerprint = CaTrust.sha256Fingerprint(cas.first())
-            caError = null
-        } else {
-            caError = "Couldn't save that CA certificate."
+        val pin = bytes?.let { CaTrust.evaluateManualPin(it, CaTrust.builtInCas) } ?: ManualPinResult.NoCa
+        when (pin) {
+            ManualPinResult.NoCa -> {
+                caError = "No CA certificate found in that file. Pick the CA (.pem/.crt) your admin gave you."
+            }
+            is ManualPinResult.PublicCa -> {
+                caError = "That is a public CA (${pin.commonName}). Leave this empty. " +
+                    "The app already checks public certificates and the server's name."
+            }
+            is ManualPinResult.Ok -> {
+                val saved = certVault.importBytes(pin.fileName, CaTrust.encodePemChain(pin.cas))
+                if (saved != null) {
+                    caName = saved
+                    caFingerprints = pin.fingerprints
+                    caError = null
+                } else {
+                    caError = "Couldn't save that CA certificate."
+                }
+            }
         }
     }
 
@@ -445,6 +455,17 @@ fun AddServerScreen(onDone: () -> Unit) {
                         )
                     }
                     Spacer(Modifier.width(12.dp))
+                    if (caName != null) {
+                        TextButton(
+                            onClick = {
+                                caName = null
+                                caFingerprints = emptyList()
+                                caError = null
+                            },
+                        ) {
+                            Text("Remove")
+                        }
+                    }
                     OutlinedButton(
                         onClick = {
                             caError = null
@@ -455,9 +476,9 @@ fun AddServerScreen(onDone: () -> Unit) {
                     }
                 }
 
-                if (caFingerprint != null) {
+                if (caFingerprints.isNotEmpty()) {
                     Text(
-                        "SHA-256: $caFingerprint\nCompare with the fingerprint your admin gave you.",
+                        caFingerprintText(caFingerprints),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
                     )
@@ -537,6 +558,18 @@ fun AddServerScreen(onDone: () -> Unit) {
         }
     }
 }
+
+/**
+ * One CA reads as it always did. With more than one, each gets its own entry
+ * (common name, then SHA-256), since all of them are pinned.
+ */
+private fun caFingerprintText(fingerprints: List<CaFingerprint>): String =
+    if (fingerprints.size == 1) {
+        "SHA-256: ${fingerprints.first().sha256}\nCompare with the fingerprint your admin gave you."
+    } else {
+        fingerprints.joinToString("\n\n") { "${it.commonName}\nSHA-256: ${it.sha256}" } +
+            "\n\nCompare with the fingerprints your admin gave you."
+    }
 
 private fun queryDisplayName(context: android.content.Context, uri: Uri): String? {
     val cursor = context.contentResolver.query(
