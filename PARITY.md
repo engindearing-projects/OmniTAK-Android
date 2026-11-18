@@ -46,7 +46,7 @@ Tracked as a single checklist; tick off when both platforms match. Each item sho
 
 ### P5: map controls
 - [ ] **GAP-040** Both: same overlay buttons in same positions
-- [ ] **GAP-041** Both: scale bar visible by default. iOS already has one; Android needs camera-change listener + meters/pixel calc: deferred.
+- [x] **GAP-041** Both: scale bar visible by default, measuring the ground it is drawn over, on the 2D map and on the globe: Android 0.46.0 (Android #295, #297), iOS 2.45.0 (iOS #179, #181; the old iOS readout was a rounded guess at the visible width).
 - [x] **GAP-042** Android: stacked zoom +/− FABs added at BottomStart, paired with locator. `MapControlFab` helper. TacticalMap accepts `zoomInTrigger` / `zoomOutTrigger` Int counters.
 - [ ] **GAP-043** Both: locator FAB returns to user position
 
@@ -77,7 +77,7 @@ Features iOS has that Android doesn't yet. Triage which need parity vs which can
 - [ ] **GAP-086** Routes + turn-by-turn navigation: iOS `Features/Navigation/` has planning, storage, map overlay, and voice guidance; Android has nothing. Android #192
 - [ ] **GAP-087** Breadcrumb trail / track recording: iOS `BreadcrumbTrailService.swift` + Settings toggle; Android has nothing. Android #193
 - [ ] **GAP-088** Elevation profile / LOS tool UI: core shipped in 0.42.1 (`data/terrain/ElevationProfile.kt`, PR #161) but no tool screen or map wiring reaches it. Android #153
-- [ ] **GAP-089** General geofence UI + alerts: core shipped in 0.42.1 (`data/geofence/Geofencing.kt`, PR #164) and `GeofenceOverlay` renders, but only the UAS home-ring uses it; no create-on-map flow and contact entry/exit alerts are not surfaced. Android #155
+- [x] **GAP-089** General geofence UI + alerts: a Geofences sheet makes a circle at the map center or a copy of a drawing; zones are drawn on both engines with their names; entry, exit and dwell alerts for the operator and teammates. Android 0.46.0 (Android #306, #307; closes Android #155), iOS 2.45.0 (iOS #182).
 
 ### P10: feature gaps (iOS-side)
 Features Android has that iOS may benefit from. Same triage.
