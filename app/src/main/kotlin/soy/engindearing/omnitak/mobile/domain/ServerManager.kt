@@ -431,13 +431,21 @@ class ServerManager(
 
     /**
      * [addServer] for the manual Add Server screen. When an entry for the same
-     * endpoint ([TAKServer.matchesEndpoint]) is already there, the settings just
-     * entered replace it: it keeps its id, so its place in the list and its part
-     * as the active server stay, and its live connection is dropped and dialed
-     * again with the new settings. [addServer] would hand the old entry back
-     * unchanged, so someone whose hand-added server was refused could not fix it
-     * by adding it again with its CA. The ports and the default flag, which that
-     * screen does not ask for, stay as they were. With no match this is
+     * endpoint ([TAKServer.matchesEndpoint]) is already there, what the person
+     * entered is merged into it: a field they filled in wins, a field they left
+     * empty keeps what the entry had. So a server enrolled by QR code (client
+     * certificate and CA pin) that is added again by hand with only a new name
+     * keeps its certificate and its pin. The name, host, port and protocol always
+     * come from the form. A client certificate (with its password), a CA, a user
+     * name and a password come from the form when given, and a CA picked now also
+     * turns an earlier trust-all choice off. The entry keeps its id, so its place
+     * in the list and its part as the active server stay, and so do the ports and
+     * the default flag, which that screen does not ask for.
+     *
+     * [addServer] would hand the old entry back unchanged, so someone whose
+     * hand-added server was refused could not fix it by adding it again with its
+     * CA. The live connection is dropped and dialed again when anything but the
+     * name changed; a rename alone leaves it running. With no match this is
      * [addServer]. QR scan, enrollment and data package imports keep using
      * [addServer].
      */
@@ -448,8 +456,14 @@ class ServerManager(
             isDefault = existing.isDefault,
             enrollmentPort = existing.enrollmentPort,
             secureApiPort = existing.secureApiPort,
+            certificateName = server.certificateName ?: existing.certificateName,
+            certificatePassword = if (server.certificateName != null) server.certificatePassword else existing.certificatePassword,
+            caCertificateName = server.caCertificateName ?: existing.caCertificateName,
+            username = server.username ?: existing.username,
+            password = server.password ?: existing.password,
+            allowUntrustedTls = if (server.caCertificateName != null) false else existing.allowUntrustedTls,
         )
-        // The same settings again: leave a live connection alone.
+        // The same settings again: nothing to do.
         if (replacement == existing) return existing
 
         updateServer(replacement)
@@ -458,9 +472,12 @@ class ServerManager(
             _activeServer.value = replacement
             persistActive(replacement.id)
         }
-        // The connection was built with the old settings: drop it, then dial with the new ones.
-        disconnect(existing.id)
-        reconcileConnections(_servers.value)
+        // The connection was built with the old settings: drop it and dial with the new ones,
+        // unless only the name changed.
+        if (replacement.copy(name = existing.name) != existing) {
+            disconnect(existing.id)
+            reconcileConnections(_servers.value)
+        }
         return replacement
     }
 
