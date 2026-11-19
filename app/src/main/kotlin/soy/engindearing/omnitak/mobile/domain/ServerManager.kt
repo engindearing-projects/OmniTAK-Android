@@ -25,7 +25,8 @@ import java.util.concurrent.ConcurrentHashMap
  * [activeServer] as StateFlows so Compose screens can observe reactively.
  *
  * Mirrors iOS ServerManager behavior:
- *  - addServer is idempotent on host + port + protocol (iOS #42)
+ *  - addServer is idempotent on host + port + protocol (iOS #42); the manual
+ *    Add Server screen uses addOrReplaceServer, which replaces that entry instead
  *  - toggling/disabling the active server hands off to the next enabled
  *    server so the UI doesn't keep pointing at a disabled one (iOS #41)
  *  - newly added enabled server becomes active when no enabled active exists
@@ -426,6 +427,41 @@ class ServerManager(
         // Users expect "I added a server, it works" — no manual play needed.
         reconcileConnections(updated)
         return server
+    }
+
+    /**
+     * [addServer] for the manual Add Server screen. When an entry for the same
+     * endpoint ([TAKServer.matchesEndpoint]) is already there, the settings just
+     * entered replace it: it keeps its id, so its place in the list and its part
+     * as the active server stay, and its live connection is dropped and dialed
+     * again with the new settings. [addServer] would hand the old entry back
+     * unchanged, so someone whose hand-added server was refused could not fix it
+     * by adding it again with its CA. The ports and the default flag, which that
+     * screen does not ask for, stay as they were. With no match this is
+     * [addServer]. QR scan, enrollment and data package imports keep using
+     * [addServer].
+     */
+    fun addOrReplaceServer(server: TAKServer): TAKServer {
+        val existing = _servers.value.firstOrNull { it.matchesEndpoint(server) } ?: return addServer(server)
+        val replacement = server.copy(
+            id = existing.id,
+            isDefault = existing.isDefault,
+            enrollmentPort = existing.enrollmentPort,
+            secureApiPort = existing.secureApiPort,
+        )
+        // The same settings again: leave a live connection alone.
+        if (replacement == existing) return existing
+
+        updateServer(replacement)
+        // Same rule as addServer: an enabled server is the default DM target when there is none.
+        if (replacement.enabled && _activeServer.value?.enabled != true) {
+            _activeServer.value = replacement
+            persistActive(replacement.id)
+        }
+        // The connection was built with the old settings: drop it, then dial with the new ones.
+        disconnect(existing.id)
+        reconcileConnections(_servers.value)
+        return replacement
     }
 
     fun updateServer(server: TAKServer) {

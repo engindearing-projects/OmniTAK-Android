@@ -211,7 +211,7 @@ fun AddServerScreen(onDone: () -> Unit) {
                 Button(
                     onClick = {
                         if (!canSave) return@Button
-                        manager.addServer(
+                        manager.addOrReplaceServer(
                             TAKServer(
                                 name = name.trim(),
                                 host = host,
